@@ -98,19 +98,20 @@ All collected chunk IDs SHALL be deduplicated and fetched in a single batch quer
 For source code and JSON content, the HierarchicalAssemblyStrategy SHALL reconstruct complete structural subtrees rather than using fixed-limit context expansion:
 
 **Single match in a document:**
-1. Find the nearest **structural ancestor** by walking up the parent chain looking for a chunk whose `metadata.types` array includes `"structural"`.
-2. If no structural ancestor is found, attempt **top-level promotion**: use the first element of the chunk's path to find a container chunk.
-3. Walk the promoted ancestor to the root, collecting the full parent chain (limited by `assembly.maxParentChainDepth`, default 10).
-4. Find the **full subtree** of the promoted ancestor via breadth-first traversal using `findChildChunks` with a limit of 1000.
+1. Find the nearest **structural ancestor**: the innermost scope around the match, the match's own path included, whose opening chunk has `"structural"` in its `metadata.types` array. Scopes open as described in step 4, so a field or statement between a declaration and the match SHALL NOT hide the declaration.
+2. If no structural ancestor is found in source code, attempt **top-level promotion**: use the first element of the chunk's path to find a container chunk. For JSON, the system SHALL NOT promote to the top level, which is the whole document; it SHALL use the object or array the match opens (a key whose value is an object or array, including an empty one, recognized by a chunk at the key's path that begins with the opening bracket: the bracket alone, or the whole value serialized as text past `splitter.json.maxNestingDepth`), otherwise the object or array that contains the match.
+3. Find the **full subtree** of the promoted ancestor: the ancestor, the chunks right before it that carry the same path (such as a JSON key and its bracket), and the chunks right after it whose path starts with the ancestor's path, up to the first chunk outside it. The subtree SHALL include the ancestor's closing chunk, which carries the ancestor's own path.
+4. For each scope that encloses the promoted ancestor (limited by `assembly.maxParentChainDepth`, default 10), add its **opening and closing chunks** (the chunks with its own path before its first and after its last nested member) but none of its other members. A scope SHALL open at the first chunk of the run of chunks inside its path that precedes the ancestor, so statements or members between the scope's declaration and the ancestor are not included. A scope with no chunk at its own path adds nothing.
+5. A match with an empty path (code at the page root) SHALL be returned on its own.
 
 **Multiple matches in the same document:**
-1. Find the **common ancestor path** (longest common prefix of all chunks' paths).
-2. Find container chunks for the common ancestor path.
-3. Reconstruct the full subtree under the common ancestor.
+1. Include each match's **full subtree** (as in single-match step 3) and the **opening and closing chunks** of every scope that encloses it (as in single-match step 4), but none of those scopes' other members. A match that opens nothing, such as a field or statement that follows other members of its scope, SHALL come back on its own inside its scope's opening and closing chunks.
+2. Find the **common ancestor path** (longest common prefix of the matches' paths). Within the scope at that path, include the chunks at the path itself, such as fields or statements.
+3. When the matches share no path, step 2 adds nothing; each match still comes back inside its own scopes' opening and closing chunks.
 
-**Gap-aware ancestor search**: When intermediate parent chunks are missing (merged or absent), the strategy SHALL progressively shorten the path prefix to find the nearest available ancestor.
+**Gap-aware ancestor search**: When a scope has no chunk at its own path (merged or absent), the strategy SHALL skip it and progressively shorten the path prefix to find the nearest available ancestor.
 
-**Fallback**: If any error occurs during hierarchical traversal, the strategy SHALL fall back to returning the initial chunks plus immediate parent and up to 3 children each.
+**Fallback**: If any error occurs while loading the page's chunks, the strategy SHALL fall back to returning the initial chunks plus immediate parent and up to 3 children each.
 
 **Code reference:** `src/store/assembly/strategies/HierarchicalAssemblyStrategy.ts:47-615`
 
@@ -119,17 +120,81 @@ For source code and JSON content, the HierarchicalAssemblyStrategy SHALL reconst
 - **THEN** the system SHALL find the function's structural ancestor
 - **AND** reconstruct the complete function including its signature and body
 
+#### Scenario: Match inside a class method
+- **WHEN** a search matches a single method of a class
+- **THEN** the system SHALL return the class's opening line, all its methods and its closing brace
+- **AND** SHALL NOT include code that follows the class
+
+#### Scenario: Class inside a namespace
+- **WHEN** a search matches a method of a class declared inside a namespace
+- **THEN** the system SHALL return the whole class and the namespace's opening and closing lines
+- **AND** SHALL NOT include the namespace's other members
+
+#### Scenario: Match on a class declaration inside a namespace
+- **WHEN** a search matches the declaration line of a class declared inside a namespace
+- **THEN** the system SHALL return the whole class and the namespace's opening and closing lines
+- **AND** SHALL NOT include the namespace's other members
+
+#### Scenario: Field between a class's methods
+- **WHEN** a class declares a method, then a field, then a second method, and a search matches the second method
+- **THEN** the system SHALL return the whole class
+- **AND** SHALL NOT include members of the namespace around the class
+
+#### Scenario: Statement between a scope's declaration and the match
+- **WHEN** a namespace declares a class, then a statement, then a second class, and a search matches a method of the second class
+- **THEN** the system SHALL return the namespace's declaration line, the whole second class and the namespace's closing brace
+- **AND** SHALL NOT include the statement or the first class
+
+#### Scenario: Match in code at the page root
+- **WHEN** a search matches a chunk with an empty path, such as a top-level statement
+- **THEN** the system SHALL return that chunk alone
+
+#### Scenario: Match on a JSON value
+- **WHEN** a search matches `"timeout": 30` inside the `server` object of a JSON document
+- **THEN** the system SHALL return the `server` key and the whole `server` object, inside the document's outer braces
+- **AND** SHALL NOT include the document's other properties
+
+#### Scenario: Match on a JSON key that opens an object
+- **WHEN** a search matches the `"server":` key whose value is an object
+- **THEN** the system SHALL return that key and its whole object
+- **AND** SHALL NOT include the document's other properties
+
+#### Scenario: Match on a JSON key past the nesting limit
+- **WHEN** a search matches a key nested deeper than `splitter.json.maxNestingDepth`, whose object value the splitter stored as text
+- **THEN** the system SHALL return that key and its value inside the keys and brackets of the enclosing objects
+- **AND** SHALL NOT include the key's sibling properties
+
+#### Scenario: Match on a JSON key whose value is empty
+- **WHEN** a search matches a key whose value is `{}` or `[]`
+- **THEN** the system SHALL return that key and its empty object or array
+- **AND** SHALL NOT include the document's other properties
+
 #### Scenario: Multiple matches in same code file
 - **WHEN** a search matches two chunks in different functions within the same class
-- **THEN** the system SHALL find the common ancestor (the class)
-- **AND** reconstruct the class subtree including both functions
+- **THEN** the system SHALL return both functions inside the class's opening and closing lines
+- **AND** SHALL NOT include the class's other methods
+
+#### Scenario: Multiple matches in a class inside a namespace
+- **WHEN** a search matches two methods of a class declared inside a namespace
+- **THEN** the system SHALL also return the namespace's opening and closing lines
+- **AND** SHALL NOT include the namespace's other members
+
+#### Scenario: A field matched together with a top-level function
+- **WHEN** a search matches a field between two methods of a class and a top-level function after the class
+- **THEN** the system SHALL return the field inside the class's opening and closing lines, and the function
+- **AND** SHALL NOT include the class's methods
+
+#### Scenario: Multiple matches without a common path
+- **WHEN** a search matches a method of one top-level class and a method of another
+- **THEN** the system SHALL return each method inside its own class's opening and closing lines
+- **AND** SHALL NOT include the code between the two classes
 
 #### Scenario: Missing intermediate parent
 - **WHEN** the chunk's direct parent is missing from the database (merged during splitting)
 - **THEN** the system SHALL use gap-aware ancestor search to find the nearest available ancestor by progressively shortening the path
 
 #### Scenario: Hierarchical traversal error fallback
-- **WHEN** an error occurs during structural ancestor detection or subtree reconstruction
+- **WHEN** an error occurs while loading the page's chunks for ancestor detection or subtree reconstruction
 - **THEN** the system SHALL fall back to returning the matched chunks with immediate parent and up to 3 children each
 
 ### Requirement: Content Joining

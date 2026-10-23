@@ -40,33 +40,3 @@ export interface ContentAssemblyStrategy {
    */
   assembleContent(chunks: DbPageChunk[]): string;
 }
-
-/**
- * Context information for strategy selection and execution.
- */
-export interface ContentAssemblyContext {
-  /** The chunks that matched the search query */
-  initialChunks: DbPageChunk[];
-  /** MIME type of the content (from first chunk metadata) */
-  mimeType?: string;
-  /** Document URL for grouping */
-  url: string;
-  /** Maximum score from the matched chunks */
-  maxScore: number;
-}
-
-/**
- * Result of chunk selection phase, before assembly.
- */
-export interface ChunkSelectionResult {
-  /** Selected chunks in proper order for assembly */
-  chunks: DbPageChunk[];
-  /** Strategy that was used for selection */
-  strategy: string;
-  /** Any warnings or notes about the selection process */
-  metadata?: {
-    warnings?: string[];
-    chunkCount?: number;
-    fallbackUsed?: boolean;
-  };
-}

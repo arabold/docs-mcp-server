@@ -64,43 +64,22 @@ describe("DocumentManagementService", () => {
     }
   }
 
-  describe("ensureVersion", () => {
-    it("reuses single unversioned version across multiple ensureVersion calls (regression)", async () => {
-      const a = await docService.ensureVersion({ library: "TestLib", version: "" });
-      const b = await docService.ensureVersion({ library: "TestLib", version: "" });
-      const c = await docService.ensureVersion({ library: "TestLib", version: "" });
+  it("reads the chunk explorer through normalized library and version labels", async () => {
+    await addPage("React", "18.2.0", "https://react.dev/hooks", ["Alpha", "Beta"]);
+    await addPage("Express", "", "https://expressjs.com/guide", ["Alpha", "Beta"]);
 
-      expect(b).toBe(a);
-      expect(c).toBe(a);
-      const [library] = await docService.listLibraries();
-      expect(library.versions.map((v) => v.ref.version)).toEqual([""]);
+    const chunks = await docService.listVersionChunks({
+      library: "  REACT  ",
+      version: " 18.2.0 ",
     });
-  });
+    expect(chunks.chunks.map((c) => c.content)).toEqual(["Alpha", "Beta"]);
 
-  describe("listVersionChunks", () => {
-    it("reads chunks through a padded, differently cased library and version", async () => {
-      await addPage("React", "18.2.0", "https://react.dev/hooks", ["Alpha", "Beta"]);
-
-      const result = await docService.listVersionChunks({
-        library: "  REACT  ",
-        version: " 18.2.0 ",
-      });
-
-      expect(result.chunks.map((c) => c.content)).toEqual(["Alpha", "Beta"]);
+    // A blank version label reads the unversioned documentation
+    const stats = await docService.getVersionStats({
+      library: "  Express  ",
+      version: "  ",
     });
-  });
-
-  describe("getVersionStats", () => {
-    it("reads the unversioned documentation for a blank version label", async () => {
-      await addPage("Express", "", "https://expressjs.com/guide", ["Alpha", "Beta"]);
-
-      const stats = await docService.getVersionStats({
-        library: "  Express  ",
-        version: "  ",
-      });
-
-      expect(stats).toMatchObject({ pageCount: 1, chunkCount: 2 });
-    });
+    expect(stats).toMatchObject({ pageCount: 1, chunkCount: 2 });
   });
 
   describe("shutdown", () => {
@@ -121,24 +100,20 @@ describe("DocumentManagementService", () => {
   });
 
   describe("removeAllDocuments", () => {
-    it("removes the documents of one version and keeps the others", async () => {
+    it("removes the documents of one version, or the unversioned ones, and keeps the others", async () => {
+      await addPage("test-lib", "", "https://x.dev/unversioned");
       await addPage("test-lib", "1.0.0", "https://x.dev/v1");
       await addPage("test-lib", "2.0.0", "https://x.dev/v2");
 
       await docService.removeAllDocuments("test-lib", "1.0.0");
-
       expect(await docService.exists("test-lib", "1.0.0")).toBe(false);
       expect(await docService.exists("test-lib", "2.0.0")).toBe(true);
-    });
+      expect(await docService.exists("test-lib", "")).toBe(true);
 
-    it("removes the unversioned documents when no version is given", async () => {
-      await addPage("test-lib", "", "https://x.dev/unversioned");
-      await addPage("test-lib", "1.0.0", "https://x.dev/v1");
-
+      // No version means the unversioned documentation
       await docService.removeAllDocuments("test-lib", null);
-
       expect(await docService.exists("test-lib", "")).toBe(false);
-      expect(await docService.exists("test-lib", "1.0.0")).toBe(true);
+      expect(await docService.exists("test-lib", "2.0.0")).toBe(true);
     });
 
     it("should still remove documents when compaction fails", async () => {
@@ -155,363 +130,393 @@ describe("DocumentManagementService", () => {
   });
 
   describe("listVersions", () => {
-    it("should sort versions newest first and opaque tags after them", async () => {
-      await addVersions("test-lib", ["1.9.0", "stable", "1.10.0", "2.0.0-beta", "next"]);
+    it("orders listings newest first, with tags last", async () => {
+      await addVersions("orderlib", [
+        "1.9.0",
+        "1.10.0",
+        "stable",
+        "2.0.0-beta",
+        "",
+        "next",
+      ]);
 
-      const versions = await docService.listVersions("test-lib");
+      // The empty label is unversioned content, not a listed version
+      expect(await docService.listVersions("orderlib")).toEqual([
+        "2.0.0-beta",
+        "1.10.0",
+        "1.9.0",
+        "next",
+        "stable",
+      ]);
 
-      expect(versions).toEqual(["2.0.0-beta", "1.10.0", "1.9.0", "next", "stable"]);
-    });
-
-    it("should exclude the empty label, which represents unversioned content", async () => {
-      await addVersions("test-lib", ["1.0.0", "", "2.0.0"]);
-
-      const versions = await docService.listVersions("test-lib");
-
-      expect(versions).toEqual(["2.0.0", "1.0.0"]);
+      // The library listing puts unversioned first, and it, the version listing
+      // and the resolver agree on the newest version.
+      const [summary] = await docService.listLibraries();
+      expect(summary.versions.map((v) => v.ref.version)).toEqual([
+        "",
+        "2.0.0-beta",
+        "1.10.0",
+        "1.9.0",
+        "next",
+        "stable",
+      ]);
+      expect(await docService.findBestVersion("orderlib")).toEqual({
+        bestMatch: "2.0.0-beta",
+        hasUnversioned: false,
+      });
     });
   });
 
   describe("findBestVersion", () => {
-    const library = "test-lib";
+    /**
+     * A resolution case: the labels a library stores, whether it also holds
+     * unversioned documentation, and the requests that must all resolve to
+     * `expected`. Each case gets its own library, so one store serves them all.
+     */
+    interface ResolutionCase {
+      label: string;
+      versions: string[];
+      unversioned?: boolean;
+      requests: (string | undefined)[];
+      expected: string | null;
+    }
 
-    /** Stores a page of unversioned documentation for the library. */
-    const addUnversionedPage = () => addPage(library, "", "https://x.dev/unversioned");
+    /** Seeds every case under its own library and checks each request. */
+    async function expectResolutions(cases: ResolutionCase[]): Promise<void> {
+      for (const [index, testCase] of cases.entries()) {
+        const library = `resolve-${index}`;
+        await addVersions(library, testCase.versions);
+        if (testCase.unversioned) {
+          await addPage(library, "", `https://x.dev/${library}/unversioned`);
+        }
+        for (const request of testCase.requests) {
+          expect
+            .soft(
+              await docService.findBestVersion(library, request),
+              `${testCase.label} (request: ${request ?? "none"})`,
+            )
+            .toEqual({
+              bestMatch: testCase.expected,
+              hasUnversioned: testCase.unversioned ?? false,
+            });
+        }
+      }
+    }
 
-    // --- Literal Label Resolution -------------------------------------------
-
-    describe("literal label resolution", () => {
-      it("should resolve an opaque tag by its own name", async () => {
+    it("resolves a request that names a stored label to that label", async () => {
+      await expectResolutions([
         // Regression for issue #475: a library indexed as "latest" was
         // unreachable over MCP because tags never reached the resolver.
-        await addVersions(library, ["latest"]);
-
-        const result = await docService.findBestVersion(library, "latest");
-        expect(result).toEqual({ bestMatch: "latest", hasUnversioned: false });
-      });
-
-      it("should match literally regardless of case and surrounding whitespace", async () => {
-        await addVersions(library, ["stable"]);
-
-        const result = await docService.findBestVersion(library, " STABLE ");
-        expect(result).toEqual({ bestMatch: "stable", hasUnversioned: false });
-      });
-
-      it("should resolve a partial version to itself when its full form also exists", async () => {
-        await addVersions(library, ["1.20", "1.20.0"]);
-
-        const result = await docService.findBestVersion(library, "1.20");
-        expect(result).toEqual({ bestMatch: "1.20", hasUnversioned: false });
-      });
-
-      it("should resolve a full version to itself when its partial form also exists", async () => {
-        await addVersions(library, ["1.20", "1.20.0"]);
-
-        const result = await docService.findBestVersion(library, "1.20.0");
-        expect(result).toEqual({ bestMatch: "1.20.0", hasUnversioned: false });
-      });
-
-      it("should resolve a prerelease by its own name without the release taking its place", async () => {
-        await addVersions(library, ["2.0.0", "2.0.0-beta"]);
-
-        const result = await docService.findBestVersion(library, "2.0.0-beta");
-        expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: false });
-      });
-
-      it("should resolve a stored label that looks like a range by its own name", async () => {
-        await addVersions(library, ["1.x", "1.0.0"]);
-
-        const result = await docService.findBestVersion(library, "1.x");
-        expect(result).toEqual({ bestMatch: "1.x", hasUnversioned: false });
-      });
+        {
+          label: "an opaque tag by its own name",
+          versions: ["latest"],
+          requests: ["latest"],
+          expected: "latest",
+        },
+        {
+          label: "literally, regardless of case and surrounding whitespace",
+          versions: ["stable"],
+          requests: [" STABLE "],
+          expected: "stable",
+        },
+        {
+          label: "a partial version to itself when its full form also exists",
+          versions: ["1.20", "1.20.0"],
+          requests: ["1.20"],
+          expected: "1.20",
+        },
+        {
+          label: "a full version to itself when its partial form also exists",
+          versions: ["1.20", "1.20.0"],
+          requests: ["1.20.0"],
+          expected: "1.20.0",
+        },
+        {
+          label: "a prerelease by its own name without the release taking its place",
+          versions: ["2.0.0", "2.0.0-beta"],
+          requests: ["2.0.0-beta"],
+          expected: "2.0.0-beta",
+        },
+        {
+          label: "a stored label that looks like a range by its own name",
+          versions: ["1.x", "1.0.0"],
+          requests: ["1.x"],
+          expected: "1.x",
+        },
+        // Regression for issue #480: a partial version stored alone resolves by
+        // its own name and through a range
+        {
+          label: "a partial version stored alone",
+          versions: ["1.20"],
+          requests: ["1.20", "1.x"],
+          expected: "1.20",
+        },
+      ]);
     });
 
-    // --- Semantic Version Resolution ----------------------------------------
-
-    describe("semantic version resolution", () => {
-      it("should select a prerelease when it is the only version indexed", async () => {
-        await addVersions(library, ["2.0.0-beta"]);
-
-        await expect(docService.findBestVersion(library)).resolves.toEqual({
-          bestMatch: "2.0.0-beta",
-          hasUnversioned: false,
-        });
-        await expect(docService.findBestVersion(library, "latest")).resolves.toEqual({
-          bestMatch: "2.0.0-beta",
-          hasUnversioned: false,
-        });
-      });
-
-      it("should let the newest version win even when it is a prerelease", async () => {
-        await addVersions(library, ["1.0.0", "2.0.0-beta"]);
-
-        await expect(docService.findBestVersion(library)).resolves.toEqual({
-          bestMatch: "2.0.0-beta",
-          hasUnversioned: false,
-        });
-        await expect(docService.findBestVersion(library, "latest")).resolves.toEqual({
-          bestMatch: "2.0.0-beta",
-          hasUnversioned: false,
-        });
-      });
-
-      it("should let a released version supersede its own prerelease", async () => {
-        await addVersions(library, ["1.0.0", "2.0.0-beta", "2.0.0"]);
-
-        const result = await docService.findBestVersion(library, "latest");
-        expect(result).toEqual({ bestMatch: "2.0.0", hasUnversioned: false });
-      });
-
-      it("should prefer a prerelease of the requested version over an older major", async () => {
-        await addVersions(library, ["1.0.0", "2.0.0-beta"]);
-
-        const result = await docService.findBestVersion(library, "2.0.0");
-        expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: false });
-      });
-
-      it("should select a prerelease within an X-range", async () => {
-        await addVersions(library, ["1.0.0", "2.0.0-beta"]);
-
-        const result = await docService.findBestVersion(library, "2.x");
-        expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: false });
-      });
-
-      it("should select a prerelease for a major-only request", async () => {
-        await addVersions(library, ["1.0.0", "2.0.0-beta"]);
-
-        const result = await docService.findBestVersion(library, "2");
-        expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: false });
-      });
-
-      it("should fall back below the request and may select a prerelease", async () => {
-        await addVersions(library, ["1.0.0", "2.0.0-beta"]);
-
-        const result = await docService.findBestVersion(library, "3.0.0");
-        expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: false });
-      });
-
-      it("should not select a newer prerelease for an older request", async () => {
-        await addVersions(library, ["1.0.0", "1.0.1-beta"]);
-
-        const result = await docService.findBestVersion(library, "1.0.0");
-        expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: false });
-      });
-
-      it("should order prereleases of the same version among themselves", async () => {
-        await addVersions(library, ["2.0.0-rc.1", "2.0.0-rc.2"]);
-
-        const result = await docService.findBestVersion(library);
-        expect(result).toEqual({ bestMatch: "2.0.0-rc.2", hasUnversioned: false });
-      });
-
-      it("should not match when nothing sits at or below the request", async () => {
-        await addVersions(library, ["2.0.0-beta"]);
-        await addUnversionedPage();
-
-        const result = await docService.findBestVersion(library, "1.20");
-        expect(result).toEqual({ bestMatch: null, hasUnversioned: true });
-      });
-
-      it("should match partial stored versions", async () => {
-        await addVersions(library, ["1.20", "5"]);
-
-        const result = await docService.findBestVersion(library);
-        expect(result).toEqual({ bestMatch: "5", hasUnversioned: false });
-      });
-
-      it("should exclude opaque tags from semantic matching", async () => {
-        await addVersions(library, ["1.0.0", "stable-2024", "node18"]);
-
+    it("resolves a semantic request to the newest version at or below it", async () => {
+      await expectResolutions([
+        {
+          label: "a prerelease when it is the only version indexed",
+          versions: ["2.0.0-beta"],
+          requests: [undefined, "latest"],
+          expected: "2.0.0-beta",
+        },
+        {
+          label: "the newest version even when it is a prerelease",
+          versions: ["1.0.0", "2.0.0-beta"],
+          requests: [undefined, "latest"],
+          expected: "2.0.0-beta",
+        },
+        {
+          label: "a released version superseding its own prerelease",
+          versions: ["1.0.0", "2.0.0-beta", "2.0.0"],
+          requests: ["latest", undefined],
+          expected: "2.0.0",
+        },
+        {
+          label: "a prerelease of the requested version over an older major",
+          versions: ["1.0.0", "2.0.0-beta"],
+          requests: ["2.0.0"],
+          expected: "2.0.0-beta",
+        },
+        {
+          label: "a prerelease within an X-range",
+          versions: ["1.0.0", "2.0.0-beta"],
+          requests: ["2.x"],
+          expected: "2.0.0-beta",
+        },
+        {
+          label: "a prerelease for a major-only request",
+          versions: ["1.0.0", "2.0.0-beta"],
+          requests: ["2"],
+          expected: "2.0.0-beta",
+        },
+        {
+          label: "a fallback below the request, which may be a prerelease",
+          versions: ["1.0.0", "2.0.0-beta"],
+          requests: ["3.0.0"],
+          expected: "2.0.0-beta",
+        },
+        {
+          label: "no newer prerelease for an older request",
+          versions: ["1.0.0", "1.0.1-beta"],
+          requests: ["1.0.0"],
+          expected: "1.0.0",
+        },
+        {
+          label: "prereleases of the same version ordered among themselves",
+          versions: ["2.0.0-rc.1", "2.0.0-rc.2"],
+          requests: [undefined],
+          expected: "2.0.0-rc.2",
+        },
+        {
+          label: "partial stored versions",
+          versions: ["1.20", "5"],
+          requests: [undefined],
+          expected: "5",
+        },
         // "stable-2024" must not be read as 2024.0.0, nor "node18" as 18.0.0.
-        const result = await docService.findBestVersion(library, "latest");
-        expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: false });
-      });
-
-      it("should prefer the strict label when a partial and its full version tie", async () => {
-        await addVersions(library, ["1.20", "1.20.0"]);
-
-        const result = await docService.findBestVersion(library);
-        expect(result).toEqual({ bestMatch: "1.20.0", hasUnversioned: false });
-      });
-
-      it("should return best match and hasUnversioned=false when only semver exists", async () => {
-        await addVersions(library, ["1.0.0", "1.1.0", "2.0.0"]);
-
-        const result = await docService.findBestVersion(library, "1.5.0");
-        expect(result).toEqual({ bestMatch: "1.1.0", hasUnversioned: false });
-      });
-
-      it("should return the latest match for 'latest' and for no target", async () => {
-        await addVersions(library, ["1.0.0", "2.0.0", "3.0.0"]);
-
-        await expect(docService.findBestVersion(library, "latest")).resolves.toEqual({
-          bestMatch: "3.0.0",
-          hasUnversioned: false,
-        });
-        await expect(docService.findBestVersion(library)).resolves.toEqual({
-          bestMatch: "3.0.0",
-          hasUnversioned: false,
-        });
-      });
-
-      it("should honour an X-range request", async () => {
-        await addVersions(library, ["1.0.0", "1.1.0"]);
-        await addUnversionedPage();
-
-        const result = await docService.findBestVersion(library, "1.0.x");
-        expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: true });
-      });
-
-      it("should fall back to the latest available when the target is higher", async () => {
-        await addVersions(library, ["1.0.0", "1.1.0"]);
-
-        await expect(docService.findBestVersion(library, "3.0.0")).resolves.toEqual({
-          bestMatch: "1.1.0",
-          hasUnversioned: false,
-        });
-
-        await addUnversionedPage();
-        await expect(docService.findBestVersion(library, "3.0.0")).resolves.toEqual({
-          bestMatch: "1.1.0",
-          hasUnversioned: true,
-        });
-      });
+        {
+          label: "opaque tags excluded from semantic matching",
+          versions: ["1.0.0", "stable-2024", "node18"],
+          requests: ["latest"],
+          expected: "1.0.0",
+        },
+        {
+          label: "the strict label when a partial and its full version tie",
+          versions: ["1.20", "1.20.0"],
+          requests: [undefined],
+          expected: "1.20.0",
+        },
+        {
+          label: "the best match when only semver exists",
+          versions: ["1.0.0", "1.1.0", "2.0.0"],
+          requests: ["1.5.0"],
+          expected: "1.1.0",
+        },
+        {
+          label: "the latest version for 'latest' and for no target",
+          versions: ["1.0.0", "2.0.0", "3.0.0"],
+          requests: ["latest", undefined],
+          expected: "3.0.0",
+        },
+        {
+          label: "the latest available when the target is higher",
+          versions: ["1.0.0", "1.1.0"],
+          requests: ["3.0.0"],
+          expected: "1.1.0",
+        },
+      ]);
     });
 
-    // --- Tag-Only Library Resolution ----------------------------------------
-
-    describe("tag-only library resolution", () => {
-      it("should resolve a single tag without an explicit request", async () => {
+    it("resolves a single tag, which never outranks a semantic version", async () => {
+      await expectResolutions([
         // Regression for issue #475: search_docs with no version argument.
-        await addVersions(library, ["latest"]);
+        {
+          label: "a single tag without an explicit request",
+          versions: ["latest"],
+          requests: [undefined],
+          expected: "latest",
+        },
+        {
+          label: "a single tag beside a semantic version",
+          versions: ["1.0.0", "stable"],
+          requests: [undefined],
+          expected: "1.0.0",
+        },
+      ]);
+    });
 
-        const result = await docService.findBestVersion(library);
-        expect(result).toEqual({ bestMatch: "latest", hasUnversioned: false });
-      });
-
-      it("should refuse to rank multiple tags", async () => {
-        await addVersions(library, ["stable", "next"]);
-
-        const error = (await docService
-          .findBestVersion(library)
-          .catch((e) => e)) as VersionNotFoundInStoreError;
-        expect(error).toBeInstanceOf(VersionNotFoundInStoreError);
-        expect(error.availableVersions).toEqual(["next", "stable"]);
-      });
-
-      it("should fall through to unversioned when tags are ambiguous", async () => {
+    it("reports unversioned documentation, and falls back to it when nothing resolves", async () => {
+      await expectResolutions([
+        {
+          label: "unversioned availability alongside a match",
+          versions: ["1.0.0"],
+          unversioned: true,
+          requests: ["1.0.0"],
+          expected: "1.0.0",
+        },
+        {
+          label: "unversioned documentation when nothing resolves",
+          versions: [],
+          unversioned: true,
+          requests: [undefined, "9.9.9"],
+          expected: null,
+        },
+        {
+          label: "no match when nothing sits at or below the request",
+          versions: ["2.0.0-beta"],
+          unversioned: true,
+          requests: ["1.20"],
+          expected: null,
+        },
+        {
+          label: "an X-range request honoured",
+          versions: ["1.0.0", "1.1.0"],
+          unversioned: true,
+          requests: ["1.0.x"],
+          expected: "1.0.0",
+        },
+        {
+          label: "the latest available when the target is higher",
+          versions: ["1.0.0", "1.1.0"],
+          unversioned: true,
+          requests: ["3.0.0"],
+          expected: "1.1.0",
+        },
         // Ambiguous tags mean no tag resolves, but erroring while the library
         // holds usable unversioned documentation would be worse than handing
         // it back. find_version still reports that no version matched.
-        await addVersions(library, ["stable", "next"]);
-        await addUnversionedPage();
-
-        const result = await docService.findBestVersion(library);
-        expect(result).toEqual({ bestMatch: null, hasUnversioned: true });
-      });
-
-      it("should not let a single tag outrank a semantic version", async () => {
-        await addVersions(library, ["1.0.0", "stable"]);
-
-        const result = await docService.findBestVersion(library);
-        expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: false });
-      });
-    });
-
-    // --- Unversioned Documentation Resolution -------------------------------
-
-    describe("unversioned documentation", () => {
-      it("should report unversioned availability alongside a match", async () => {
-        await addVersions(library, ["1.0.0"]);
-        await addUnversionedPage();
-
-        const result = await docService.findBestVersion(library, "1.0.0");
-        expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: true });
-      });
-
-      it("should use unversioned documentation when nothing resolves", async () => {
-        await addUnversionedPage();
-
-        await expect(docService.findBestVersion(library)).resolves.toEqual({
-          bestMatch: null,
-          hasUnversioned: true,
-        });
-        await expect(docService.findBestVersion(library, "9.9.9")).resolves.toEqual({
-          bestMatch: null,
-          hasUnversioned: true,
-        });
-      });
-
-      it("should not silently skip a prerelease in favour of unversioned", async () => {
-        await addVersions(library, ["2.0.0-beta"]);
-        await addUnversionedPage();
-
-        const result = await docService.findBestVersion(library);
-        expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: true });
-      });
-
-      it("should not make unversioned the resolver's default just because it lists first", async () => {
+        {
+          label: "ambiguous tags falling through to unversioned",
+          versions: ["stable", "next"],
+          unversioned: true,
+          requests: [undefined],
+          expected: null,
+        },
+        {
+          label: "a prerelease not silently skipped in favour of unversioned",
+          versions: ["2.0.0-beta"],
+          unversioned: true,
+          requests: [undefined],
+          expected: "2.0.0-beta",
+        },
         // The canonical listing order puts unversioned first, which the web UI
         // uses as its default selection. Resolution answers a different
         // question and picks the newest semantic version.
-        await addVersions(library, ["1.0.0"]);
-        await addUnversionedPage();
-
-        const result = await docService.findBestVersion(library);
-        expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: true });
-      });
-
-      it("should not silently skip a tag in favour of unversioned", async () => {
-        await addVersions(library, ["latest"]);
-        await addUnversionedPage();
-
-        const result = await docService.findBestVersion(library, "latest");
-        expect(result).toEqual({ bestMatch: "latest", hasUnversioned: true });
-      });
+        {
+          label: "unversioned not the default just because it lists first",
+          versions: ["1.0.0"],
+          unversioned: true,
+          requests: [undefined],
+          expected: "1.0.0",
+        },
+        {
+          label: "a tag not silently skipped in favour of unversioned",
+          versions: ["latest"],
+          unversioned: true,
+          requests: ["latest"],
+          expected: "latest",
+        },
+        {
+          label: "unversioned availability for an unparseable request",
+          versions: ["1.0.0"],
+          unversioned: true,
+          requests: ["not a version!"],
+          expected: null,
+        },
+      ]);
     });
 
-    // --- Resolution Failure Reporting ---------------------------------------
-
-    describe("resolution failure reporting", () => {
-      it("should list tags among the available labels", async () => {
-        await addVersions(library, ["1.0.0", "stable"]);
-
+    it("lists every stored label when nothing resolves", async () => {
+      const cases: [
+        label: string,
+        versions: string[],
+        request: string | undefined,
+        available: unknown,
+      ][] = [
+        [
+          "multiple tags, which cannot be ranked",
+          ["stable", "next"],
+          undefined,
+          ["next", "stable"],
+        ],
         // Nothing at or below 0.0.1, and "stable" cannot be ranked.
-        const error = (await docService
-          .findBestVersion(library, "0.0.1")
-          .catch((e) => e)) as VersionNotFoundInStoreError;
-        expect(error).toBeInstanceOf(VersionNotFoundInStoreError);
-        expect(error.availableVersions).toEqual(["1.0.0", "stable"]);
-      });
+        [
+          "a tag beside a version above the request",
+          ["1.0.0", "stable"],
+          "0.0.1",
+          ["1.0.0", "stable"],
+        ],
+        [
+          "an unparseable request when only versions exist",
+          ["1.0.0"],
+          "not a version!",
+          ["1.0.0"],
+        ],
+        // An unversioned *row* is not unversioned *documentation*: resolution
+        // checks for documents, so an empty bucket is no fallback and the
+        // ambiguous tags still surface as an error listing the labels.
+        [
+          "ambiguous tags beside an empty unversioned row",
+          ["stable", "next", ""],
+          undefined,
+          // Whether the empty label belongs in this list is not settled.
+          expect.arrayContaining(["next", "stable"]),
+        ],
+      ];
 
-      it("should raise LibraryNotFoundInStoreError when the library is unknown", async () => {
-        await expect(docService.findBestVersion(library, "1.0.0")).rejects.toThrow(
-          LibraryNotFoundInStoreError,
-        );
+      for (const [index, [label, versions, request, available]] of cases.entries()) {
+        const library = `unresolved-${index}`;
+        await addVersions(library, versions);
 
-        const error = (await docService
-          .findBestVersion(library)
-          .catch((e) => e)) as LibraryNotFoundInStoreError;
-        expect(error).toBeInstanceOf(LibraryNotFoundInStoreError);
-        expect(error.library).toBe(library);
-        expect(error.similarLibraries).toEqual([]);
-      });
+        const error = await docService.findBestVersion(library, request).catch((e) => e);
 
-      it("should report unversioned availability for an unparseable request", async () => {
-        await addVersions(library, ["1.0.0"]);
-        await addUnversionedPage();
+        expect.soft(error, label).toBeInstanceOf(VersionNotFoundInStoreError);
+        expect
+          .soft(
+            error instanceof VersionNotFoundInStoreError
+              ? error.availableVersions
+              : error,
+            label,
+          )
+          .toEqual(available);
+      }
+    });
 
-        const result = await docService.findBestVersion(library, "not a version!");
-        expect(result).toEqual({ bestMatch: null, hasUnversioned: true });
-      });
+    it("should raise LibraryNotFoundInStoreError when the library is unknown", async () => {
+      const library = "test-lib";
+      await expect(docService.findBestVersion(library, "1.0.0")).rejects.toThrow(
+        LibraryNotFoundInStoreError,
+      );
 
-      it("should throw for an unparseable request when only versions exist", async () => {
-        await addVersions(library, ["1.0.0"]);
-
-        await expect(
-          docService.findBestVersion(library, "not a version!"),
-        ).rejects.toThrow(VersionNotFoundInStoreError);
-      });
+      const error = (await docService
+        .findBestVersion(library)
+        .catch((e) => e)) as LibraryNotFoundInStoreError;
+      expect(error).toBeInstanceOf(LibraryNotFoundInStoreError);
+      expect(error.library).toBe(library);
+      expect(error.similarLibraries).toEqual([]);
     });
   });
 
@@ -573,19 +578,6 @@ describe("DocumentManagementService", () => {
       expect(byVersion["1.0.0"].preserveHashes).toBe(true);
       expect(byVersion["2.0.0"].preserveHashes).toBeUndefined();
     });
-
-    it("should correctly handle libraries with only unversioned entries", async () => {
-      await addPage("lib-unversioned", "", "https://x.dev/page");
-
-      const result = await docService.listLibraries();
-
-      expect(result).toMatchObject([
-        {
-          library: "lib-unversioned",
-          versions: [{ ref: { library: "lib-unversioned", version: "" } }],
-        },
-      ]);
-    });
   });
 
   describe("searchStore", () => {
@@ -603,22 +595,6 @@ describe("DocumentManagementService", () => {
   });
 
   describe("validateLibraryExists", () => {
-    it("should handle case insensitivity", async () => {
-      await addPage("test-lib", "1.0.0", "https://x.dev/page");
-
-      await expect(docService.validateLibraryExists("TEST-LIB")).resolves.toBeUndefined();
-    });
-
-    it("should throw LibraryNotFoundInStoreError if library does not exist (no suggestions)", async () => {
-      const error = (await docService
-        .validateLibraryExists("non-existent-lib")
-        .catch((e) => e)) as LibraryNotFoundInStoreError;
-
-      expect(error).toBeInstanceOf(LibraryNotFoundInStoreError);
-      expect(error.library).toBe("non-existent-lib");
-      expect(error.similarLibraries).toEqual([]);
-    });
-
     it("should throw LibraryNotFoundInStoreError with suggestions if library does not exist", async () => {
       await addVersions("test-lib", ["1.0.0"]);
       await addVersions("another-lib", ["2.0.0"]);

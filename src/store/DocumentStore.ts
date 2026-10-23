@@ -523,8 +523,12 @@ export class DocumentStore {
         WHERE l.name = ?
         AND COALESCE(v.name, '') = COALESCE(?, '')
         AND p.url = ?
+        -- A child's path is the parent's path plus one element. Compare the path
+        -- without its last element as JSON instead of using LIKE, so ["AB","X"]
+        -- is never a child of ["A"] and % or _ in a segment stay literal.
+        -- The length check keeps an empty-path chunk from matching an empty parent.
         AND json_array_length(json_extract(d.metadata, '$.path')) = ?
-        AND json_extract(d.metadata, '$.path') LIKE ? || '%'
+        AND json_remove(json_extract(d.metadata, '$.path'), '$[#-1]') = json(?)
         AND d.sort_order > (SELECT sort_order FROM documents WHERE id = ?)
         ORDER BY d.sort_order
         LIMIT ?
@@ -2849,7 +2853,14 @@ export class DocumentStore {
   }
 
   /**
-   * Finds child chunks of a given document based on path hierarchy.
+   * Finds the child chunks of a chunk: the chunks on the same page, after it in
+   * document order, whose path extends its path by exactly one element.
+   *
+   * @param library Library name.
+   * @param version Version label.
+   * @param id ID of the parent chunk.
+   * @param limit Maximum number of children to return.
+   * @returns The children in document order, or an empty array if the parent does not exist.
    */
   async findChildChunks(
     library: string,

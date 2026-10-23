@@ -80,40 +80,67 @@ describe("DocumentRetrieverService", () => {
     expect(await service.search(LIBRARY, VERSION, "zebra")).toEqual([]);
   });
 
-  it("assembles a hit with its parent and neighbouring chunks in page order", async () => {
+  it("assembles hits with their parent and neighbouring chunks in page order, each chunk once", async () => {
     const install = ["Guide", "Install"];
     await addPage("https://example.com/guide", [
       { content: "# Guide", path: ["Guide"] },
+      { content: "Read this first", path: install },
       { content: "Check the requirements", path: install },
       { content: "Install the zebra package", path: install },
-      { content: "Configure it afterwards", path: install },
+      { content: "Configure the zebra package", path: install },
       { content: "Verify the setup", path: install },
       { content: "Troubleshooting tips", path: install },
+      { content: "Known issues", path: install },
       { content: "# Reference", path: ["Reference"] },
     ]);
 
     const results = await service.search(LIBRARY, VERSION, "zebra");
 
-    // One preceding and two subsequent siblings by default; the parent leads
-    // even though the store returns it after the hit.
+    // One preceding and two subsequent siblings per hit by default; the shared
+    // parent leads once even though the store returns it after the hits.
     expect(results.map((r) => r.content)).toEqual([
-      "# Guide\n\nCheck the requirements\n\nInstall the zebra package\n\nConfigure it afterwards\n\nVerify the setup",
+      "# Guide\n\nCheck the requirements\n\nInstall the zebra package\n\nConfigure the zebra package\n\nVerify the setup\n\nTroubleshooting tips",
     ]);
   });
 
-  it.each([
-    [
-      "source code",
-      "text/x-typescript",
-      "class Greeter {\n",
-      "  greet() { return 'zebra'; }\n",
-    ],
-    ["JSON", "application/json", "{\n", '  "greeting": "zebra"\n'],
-  ])(
-    "rebuilds %s from its enclosing structure without separators",
-    async (_kind, contentType, container, member) => {
+  it("includes up to childLimit child chunks of a hit", async () => {
+    await addPage("https://example.com/guide", [
+      { content: "# Zebra guide", path: ["Guide"] },
+      { content: "Install", path: ["Guide", "Install"] },
+      { content: "Nested detail", path: ["Guide", "Install", "Detail"] },
+      { content: "Configure", path: ["Guide", "Configure"] },
+      { content: "Deploy", path: ["Guide", "Deploy"] },
+      { content: "Upgrade", path: ["Guide", "Upgrade"] },
+    ]);
+
+    const results = await service.search(LIBRARY, VERSION, "zebra");
+
+    // Three children by default; a grandchild is not a child
+    expect(results.map((r) => r.content)).toEqual([
+      "# Zebra guide\n\nInstall\n\nConfigure\n\nDeploy",
+    ]);
+  });
+
+  it("rebuilds structured content from its enclosing structure without separators", async () => {
+    const cases: [
+      label: string,
+      contentType: string,
+      container: string,
+      member: string,
+    ][] = [
+      [
+        "source code",
+        "text/x-typescript",
+        "class Greeter {\n",
+        "  greet() { return 'zebra'; }\n",
+      ],
+      ["JSON", "application/json", "{\n", '  "greeting": "zebra"\n'],
+    ];
+
+    for (const [label, contentType, container, member] of cases) {
+      const url = `https://example.com/greeter-${contentType}`;
       await addPage(
-        "https://example.com/greeter",
+        url,
         [
           { content: container, path: ["Greeter"], types: ["structural"] },
           { content: member, path: ["Greeter", "greet"], types: ["code"] },
@@ -123,52 +150,40 @@ describe("DocumentRetrieverService", () => {
 
       const results = await service.search(LIBRARY, VERSION, "zebra");
 
-      expect(results.map((r) => r.content)).toEqual([`${container}${member}`]);
-    },
-  );
+      expect
+        .soft(
+          results.filter((r) => r.url === url).map((r) => r.content),
+          label,
+        )
+        .toEqual([`${container}${member}`]);
+    }
+  });
 
-  it("reports the page URL with its processed and source content types", async () => {
+  it("reports the page URL, where its content was fetched from, and its content types", async () => {
     await addPage(
       "https://example.com/converted",
       [{ content: "Zebra crossing", path: ["Roads"] }],
-      { contentType: "text/markdown", sourceContentType: "text/html" },
-    );
-
-    const [result] = await service.search(LIBRARY, VERSION, "zebra");
-
-    expect(result).toMatchObject({
-      url: "https://example.com/converted",
-      mimeType: "text/markdown",
-      sourceMimeType: "text/html",
-    });
-  });
-
-  it("reports where the content was fetched from when it differs from the page URL", async () => {
-    await addPage(
-      "https://example.com/guide",
-      [{ content: "Zebra guide", path: ["Guide"] }],
       {
-        contentUrl: "https://example.com/guide.md",
+        contentType: "text/markdown",
+        sourceContentType: "text/html",
+        contentUrl: "https://example.com/converted.md",
       },
     );
 
     const [result] = await service.search(LIBRARY, VERSION, "zebra");
 
     expect(result).toMatchObject({
-      url: "https://example.com/guide",
-      contentUrl: "https://example.com/guide.md",
+      url: "https://example.com/converted",
+      contentUrl: "https://example.com/converted.md",
+      mimeType: "text/markdown",
+      sourceMimeType: "text/html",
     });
   });
 
-  it("returns at most ten results by default", async () => {
+  it("returns at most ten results by default, or the requested number", async () => {
     await addMatchingPages(11);
 
     expect(await service.search(LIBRARY, VERSION, "zebra")).toHaveLength(10);
-  });
-
-  it("returns at most the requested number of results", async () => {
-    await addMatchingPages(4);
-
     expect(await service.search(LIBRARY, VERSION, "zebra", 3)).toHaveLength(3);
   });
 
@@ -220,31 +235,18 @@ describe("DocumentRetrieverService", () => {
         .sort((a, b) => b.score - a.score);
     }
 
-    it("should split distant chunks from the same URL into separate results", async () => {
-      // Distance 8 > maxChunkDistance (3)
+    it("merges hits on one page that lie within maxChunkDistance and splits the others", async () => {
+      // maxChunkDistance is 3: Section 0 and 2 are 2 apart, Section 2 and 8 are 6 apart
       vi.spyOn(store, "findByContent").mockResolvedValue(
-        await hits({ "Section 0": 0.9, "Section 8": 0.8 }),
+        await hits({ "Section 0": 0.8, "Section 2": 0.9, "Section 8": 0.7 }),
       );
 
       const results = await service.search(LIBRARY, VERSION, "section");
 
-      expect(results.map((r) => [r.content, r.score])).toEqual([
-        ["Section 0", 0.9],
-        ["Section 8", 0.8],
-      ]);
-    });
-
-    it("should merge close chunks from the same URL", async () => {
-      // Distance 2 <= maxChunkDistance (3)
-      vi.spyOn(store, "findByContent").mockResolvedValue(
-        await hits({ "Section 0": 0.8, "Section 2": 0.9 }),
-      );
-
-      const results = await service.search(LIBRARY, VERSION, "section");
-
-      // Page order, with the best score of the merged hits
+      // Page order within a result, with the best score of its merged hits
       expect(results.map((r) => [r.content, r.score])).toEqual([
         ["Section 0\n\nSection 2", 0.9],
+        ["Section 8", 0.7],
       ]);
     });
 

@@ -46,29 +46,32 @@ describe("library identity errors", () => {
   const NAME = "a\nb\t\u001bc\u007fd\u0085e";
   const ESCAPED = String.raw`a\nb\t\u001bc\u007fd\u0085e`;
 
-  it.each([
-    ["LibraryAlreadyExistsError", new LibraryAlreadyExistsError(NAME)],
-    ["VersionAlreadyExistsError", new VersionAlreadyExistsError(NAME, "1\u00850")],
-    [
-      "InvalidLibraryNameError",
-      new InvalidLibraryNameError(NAME, "contains a control character"),
-    ],
-    ["LibraryNotFoundInStoreError", new LibraryNotFoundInStoreError(NAME, [NAME])],
-    [
-      "VersionNotFoundInStoreError",
-      new VersionNotFoundInStoreError(NAME, "1\u00850", [NAME]),
-    ],
-    [
-      "PageNotFoundInStoreError",
-      new PageNotFoundInStoreError(NAME, "1\u00850", NAME, [NAME]),
-    ],
-    [
-      "AmbiguousPageInStoreError",
-      new AmbiguousPageInStoreError(NAME, "1\u00850", NAME, [NAME]),
-    ],
-  ])("%s escapes every control character in names", (_label, error) => {
-    expect(error.message).toContain(ESCAPED);
-    expect(error.message).not.toMatch(/\p{Cc}/u);
+  it("escapes every control character in names in every error", () => {
+    const cases: [label: string, error: Error][] = [
+      ["LibraryAlreadyExistsError", new LibraryAlreadyExistsError(NAME)],
+      ["VersionAlreadyExistsError", new VersionAlreadyExistsError(NAME, "1\u00850")],
+      [
+        "InvalidLibraryNameError",
+        new InvalidLibraryNameError(NAME, "contains a control character"),
+      ],
+      ["LibraryNotFoundInStoreError", new LibraryNotFoundInStoreError(NAME, [NAME])],
+      [
+        "VersionNotFoundInStoreError",
+        new VersionNotFoundInStoreError(NAME, "1\u00850", [NAME]),
+      ],
+      [
+        "PageNotFoundInStoreError",
+        new PageNotFoundInStoreError(NAME, "1\u00850", NAME, [NAME]),
+      ],
+      [
+        "AmbiguousPageInStoreError",
+        new AmbiguousPageInStoreError(NAME, "1\u00850", NAME, [NAME]),
+      ],
+    ];
+    for (const [label, error] of cases) {
+      expect.soft(error.message, label).toContain(ESCAPED);
+      expect.soft(error.message, label).not.toMatch(/\p{Cc}/u);
+    }
   });
 
   it("escapes both the library and the version in a version label", () => {

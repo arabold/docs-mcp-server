@@ -2,8 +2,9 @@
  * End-to-end tests for version label normalization and resolution.
  *
  * These run against a real SQLite store rather than a mocked one, so they cover
- * the links a unit test cannot: that every write path lands in the same version
- * row, and that the label a caller gets back is the one actually in the store.
+ * the link a unit test cannot: that every write path lands in the same version
+ * row. How a request resolves against the stored labels is tested in
+ * src/store/DocumentManagementService.test.ts.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -17,7 +18,6 @@ import { appRouter, createAppRouterContext } from "../src/services/appRouter";
 import { buildSystemInfo } from "../src/services/systemInfo";
 import { DocumentManagementService } from "../src/store/DocumentManagementService";
 import { normalizeVersionLabel } from "../src/store/types";
-import { VersionNotFoundInStoreError } from "../src/store/errors";
 import { RefreshVersionTool } from "../src/tools/RefreshVersionTool";
 import { ScrapeTool } from "../src/tools/ScrapeTool";
 import { SearchTool } from "../src/tools/SearchTool";
@@ -187,116 +187,6 @@ describe("Version resolution end-to-end", () => {
       // ScrapeTool used to coerce "1.20" to "1.20.0", merging the two buckets.
       expect(partial).not.toBe(full);
       expect(await docService.listVersions(library)).toEqual(["1.20.0", "1.20"]);
-    });
-  });
-
-  describe("resolution against a real store", () => {
-    it("resolves an opaque tag by its own name and with no target", async () => {
-      // Regression for issue #475.
-      const library = "medusa";
-      await docService.ensureVersion({ library, version: "latest" });
-
-      await expect(docService.findBestVersion(library, "latest")).resolves.toEqual({
-        bestMatch: "latest",
-        hasUnversioned: false,
-      });
-      await expect(docService.findBestVersion(library)).resolves.toEqual({
-        bestMatch: "latest",
-        hasUnversioned: false,
-      });
-    });
-
-    it("resolves a partial version by its own name", async () => {
-      // Regression for issue #480.
-      const library = "cilium";
-      await docService.ensureVersion({ library, version: "1.20" });
-
-      await expect(docService.findBestVersion(library, "1.20")).resolves.toEqual({
-        bestMatch: "1.20",
-        hasUnversioned: false,
-      });
-      await expect(docService.findBestVersion(library, "1.x")).resolves.toEqual({
-        bestMatch: "1.20",
-        hasUnversioned: false,
-      });
-    });
-
-    it("prefers a prerelease over an older major for the requested version", async () => {
-      const library = "prelib";
-      await docService.ensureVersion({ library, version: "1.0.0" });
-      await docService.ensureVersion({ library, version: "2.0.0-beta" });
-
-      await expect(docService.findBestVersion(library, "2.0.0")).resolves.toEqual({
-        bestMatch: "2.0.0-beta",
-        hasUnversioned: false,
-      });
-      await expect(docService.findBestVersion(library)).resolves.toEqual({
-        bestMatch: "2.0.0-beta",
-        hasUnversioned: false,
-      });
-    });
-
-    it("lets a released version supersede its own prerelease", async () => {
-      const library = "prelib2";
-      await docService.ensureVersion({ library, version: "1.0.0" });
-      await docService.ensureVersion({ library, version: "2.0.0-beta" });
-      await docService.ensureVersion({ library, version: "2.0.0" });
-
-      await expect(docService.findBestVersion(library)).resolves.toEqual({
-        bestMatch: "2.0.0",
-        hasUnversioned: false,
-      });
-    });
-
-    it("refuses to rank multiple tags and lists them in the error", async () => {
-      const library = "multitag";
-      await docService.ensureVersion({ library, version: "stable" });
-      await docService.ensureVersion({ library, version: "next" });
-
-      const error = (await docService
-        .findBestVersion(library)
-        .catch((e) => e)) as VersionNotFoundInStoreError;
-
-      expect(error).toBeInstanceOf(VersionNotFoundInStoreError);
-      expect(error.availableVersions).toEqual(
-        expect.arrayContaining(["stable", "next"]),
-      );
-    });
-
-    it("errors on ambiguous tags when an empty version row holds no documents", async () => {
-      // An unversioned *row* is not unversioned *documentation*: resolution
-      // checks for documents, so an empty bucket is no fallback and the
-      // ambiguous tags still surface as an error listing the labels.
-      const library = "multitag-unversioned";
-      for (const version of ["stable", "next", ""]) {
-        await docService.ensureVersion({ library, version });
-      }
-
-      await expect(docService.findBestVersion(library)).rejects.toThrow(
-        VersionNotFoundInStoreError,
-      );
-    });
-
-    it("orders listings newest first, with tags last", async () => {
-      const library = "orderlib";
-      for (const version of ["1.9.0", "1.10.0", "stable", "2.0.0-beta"]) {
-        await docService.ensureVersion({ library, version });
-      }
-
-      expect(await docService.listVersions(library)).toEqual([
-        "2.0.0-beta",
-        "1.10.0",
-        "1.9.0",
-        "stable",
-      ]);
-
-      // The listing surface and the resolver agree on the newest version.
-      const [summary] = (await docService.listLibraries()).filter(
-        (l) => l.library === library,
-      );
-      expect(summary.versions[0].ref.version).toBe("2.0.0-beta");
-      const { bestMatch } = await docService.findBestVersion(library);
-      expect(bestMatch).toBe("2.0.0-beta");
     });
   });
 

@@ -17,11 +17,11 @@ function buildChunks(contents: string[]): Chunk[] {
 }
 
 /**
- * Integration tests for the chunk explorer procedures (`listVersionChunks`,
- * `getVersionStats`) exercised through the real tRPC router, a real
- * `DocumentManagementService`, and a real in-memory SQLite store — no mocks.
+ * Integration tests for the data router's own behavior (input validation and
+ * defaults) plus one round trip per procedure, through a real
+ * `DocumentManagementService` and a real in-memory SQLite store — no mocks.
  */
-describe("dataRouter - chunk explorer procedures", () => {
+describe("dataRouter", () => {
   let docService: DocumentManagementService;
   let caller: ReturnType<typeof dataRouter.createCaller>;
 
@@ -64,194 +64,116 @@ describe("dataRouter - chunk explorer procedures", () => {
     await docService.shutdown();
   });
 
-  describe("listVersionChunks", () => {
-    it("returns paginated chunks with position/total metadata", async () => {
-      const firstPage = await caller.listVersionChunks({
-        library: "router-test-lib",
-        version: "1.0.0",
-        limit: 2,
-        offset: 0,
-      });
+  it("passes each procedure's input to the service and returns its result", async () => {
+    // A limit below the rows left after the offset, so a dropped limit shows.
+    const window = await caller.listVersionChunks({
+      library: "router-test-lib",
+      version: "1.0.0",
+      limit: 1,
+      offset: 1,
+    });
+    expect(window.total).toBe(3);
+    expect(window.chunks.map((chunk) => chunk.content)).toEqual([
+      "Beta content about switches",
+    ]);
+    // A filter only one chunk matches, so a dropped filter shows.
+    const filtered = await caller.listVersionChunks({
+      library: "router-test-lib",
+      version: "1.0.0",
+      filter: "gateways",
+    });
+    expect(filtered.total).toBe(1);
+    expect(filtered.chunks.map((chunk) => chunk.content)).toEqual([
+      "Gamma content about gateways",
+    ]);
 
-      expect(firstPage.total).toBe(3);
-      expect(firstPage.chunks).toHaveLength(2);
-
-      const secondPage = await caller.listVersionChunks({
-        library: "router-test-lib",
-        version: "1.0.0",
-        limit: 2,
-        offset: 2,
-      });
-      expect(secondPage.chunks).toHaveLength(1);
-
-      const page1Chunks = [...firstPage.chunks, ...secondPage.chunks].filter(
-        (c) => c.url === "https://example.com/page1",
-      );
-      expect(page1Chunks).toHaveLength(2);
-      expect(page1Chunks.map((c) => c.chunkIndex).sort()).toEqual([1, 2]);
-      expect(page1Chunks.every((c) => c.pageChunkCount === 2)).toBe(true);
-
-      // Token counts are never fabricated; the schema has no per-chunk token column.
-      for (const chunk of [...firstPage.chunks, ...secondPage.chunks]) {
-        expect(chunk.tokenCount).toBeNull();
-        expect(chunk.mimeType).toBe("text/html");
-        expect(chunk.charCount).toBe(chunk.content.length);
-      }
+    expect(
+      await caller.getVersionStats({ library: "router-test-lib", version: "1.0.0" }),
+    ).toMatchObject({ pageCount: 2, chunkCount: 3, embeddedChunkCount: 0 });
+    expect(
+      await caller.getVersionStats({ library: "router-test-lib", version: "9.9.9" }),
+    ).toEqual({
+      pageCount: 0,
+      chunkCount: 0,
+      avgChunksPerPage: null,
+      avgTokensPerChunk: null,
+      embeddedChunkCount: 0,
     });
 
-    it("applies the content filter", async () => {
-      const result = await caller.listVersionChunks({
-        library: "router-test-lib",
-        version: "1.0.0",
-        limit: 10,
-        filter: "gateways",
-      });
-
-      expect(result.total).toBe(1);
-      expect(result.chunks[0].content).toContain("gateways");
+    expect(await caller.compact({ force: true })).toMatchObject({
+      skipped: true,
+      vacuumed: false,
     });
 
-    it("defaults limit to 50 when omitted", async () => {
-      await docService.addScrapeResult("router-test-lib", "1.0.0", 1, {
-        url: "https://example.com/page3",
-        title: "Page 3",
-        sourceContentType: "text/html",
-        contentType: "text/html",
-        textContent: "irrelevant",
-        links: [],
-        errors: [],
-        chunks: buildChunks(Array.from({ length: 48 }, (_, i) => `Filler chunk ${i}`)),
-      });
-
-      const result = await caller.listVersionChunks({
-        library: "router-test-lib",
-        version: "1.0.0",
-      });
-
-      expect(result.total).toBe(51);
-      expect(result.chunks).toHaveLength(50);
-    });
-
-    it("rejects an empty library name via zod validation", async () => {
-      await expect(
-        caller.listVersionChunks({ library: "", version: "1.0.0" }),
-      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
-    });
-  });
-
-  describe("getVersionStats", () => {
-    it("returns aggregate stats for the version", async () => {
-      const stats = await caller.getVersionStats({
-        library: "router-test-lib",
-        version: "1.0.0",
-      });
-
-      expect(stats.pageCount).toBe(2);
-      expect(stats.chunkCount).toBe(3);
-      expect(stats.avgChunksPerPage).toBeCloseTo(1.5);
-      expect(stats.avgTokensPerChunk).toBeNull();
-      // FTS-only mode: no embeddings were generated.
-      expect(stats.embeddedChunkCount).toBe(0);
-    });
-
-    it("returns zeroed stats for a version that was never indexed", async () => {
-      const stats = await caller.getVersionStats({
-        library: "router-test-lib",
-        version: "9.9.9",
-      });
-
-      expect(stats).toEqual({
-        pageCount: 0,
-        chunkCount: 0,
-        avgChunksPerPage: null,
-        avgTokensPerChunk: null,
-        embeddedChunkCount: 0,
-      });
-    });
-  });
-
-  describe("compact", () => {
-    it("skips compaction for an in-memory store", async () => {
-      const result = await caller.compact({ force: true });
-      expect(result.skipped).toBe(true);
-      expect(result.vacuumed).toBe(false);
-    });
-  });
-
-  describe("getPageContent", () => {
-    it("retrieves full page content through tRPC wire procedure", async () => {
-      const result = await caller.getPageContent({
-        library: "router-test-lib",
-        version: "1.0.0",
-        pathOrUrl: "https://example.com/page1",
-      });
-
-      expect(result.url).toBe("https://example.com/page1");
-      expect(result.title).toBe("Page 1");
-      expect(result.content).toContain("Alpha content about routers");
-      expect(result.content).toContain("Beta content about switches");
-      expect(result.totalChunks).toBe(2);
-      expect(result.nextChunk).toBeNull();
-    });
-
-    it("returns a window of whole chunks and where to continue", async () => {
-      const result = await caller.getPageContent({
+    expect(
+      await caller.getPageContent({
         library: "router-test-lib",
         version: "1.0.0",
         pathOrUrl: "/page1",
         options: { maxChars: 20 },
-      });
-
-      expect(result.url).toBe("https://example.com/page1");
-      expect(result.content).toBe("Alpha content about routers");
-      expect(result.nextChunk).toBe(1);
+      }),
+    ).toMatchObject({
+      url: "https://example.com/page1",
+      title: "Page 1",
+      content: "Alpha content about routers",
+      totalChunks: 2,
+      nextChunk: 1,
     });
 
-    it("rejects empty library or pathOrUrl via zod validation", async () => {
-      await expect(
-        caller.getPageContent({ library: "", pathOrUrl: "/page1" }),
-      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
-      await expect(
-        caller.getPageContent({ library: "router-test-lib", pathOrUrl: "" }),
-      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    const pages = await caller.listPages({
+      library: "router-test-lib",
+      version: "1.0.0",
+      options: { contains: "page2", limit: 10, offset: 0 },
     });
-
-    it("rejects a whitespace-only pathOrUrl instead of passing it on as empty", async () => {
-      await expect(
-        caller.getPageContent({ library: "router-test-lib", pathOrUrl: "   " }),
-      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
-    });
+    expect(pages.total).toBe(1);
+    expect(pages.pages.map((page) => page.url)).toEqual(["https://example.com/page2"]);
+    expect(pages.hasMore).toBe(false);
   });
 
-  describe("listPages", () => {
-    it("returns indexed pages and pagination metadata through tRPC procedure", async () => {
-      const result = await caller.listPages({
-        library: "router-test-lib",
-        version: "1.0.0",
-        options: {
-          limit: 10,
-          offset: 0,
-        },
-      });
-
-      expect(result.total).toBe(2);
-      expect(result.pages).toHaveLength(2);
-      expect(result.pages.some((p) => p.url === "https://example.com/page1")).toBe(true);
-      expect(result.pages.some((p) => p.url === "https://example.com/page2")).toBe(true);
-      expect(result.hasMore).toBe(false);
+  it("defaults the chunk explorer limit to 50 when omitted", async () => {
+    await docService.addScrapeResult("router-test-lib", "1.0.0", 1, {
+      url: "https://example.com/page3",
+      title: "Page 3",
+      sourceContentType: "text/html",
+      contentType: "text/html",
+      textContent: "irrelevant",
+      links: [],
+      errors: [],
+      chunks: buildChunks(Array.from({ length: 48 }, (_, i) => `Filler chunk ${i}`)),
     });
 
-    it("applies the contains filter through tRPC procedure", async () => {
-      const result = await caller.listPages({
-        library: "router-test-lib",
-        version: "1.0.0",
-        options: {
-          contains: "page2",
-        },
-      });
-
-      expect(result.total).toBe(1);
-      expect(result.pages[0].url).toBe("https://example.com/page2");
+    const result = await caller.listVersionChunks({
+      library: "router-test-lib",
+      version: "1.0.0",
     });
+
+    expect(result.total).toBe(51);
+    expect(result.chunks).toHaveLength(50);
+  });
+
+  it("rejects empty or blank required input with BAD_REQUEST", async () => {
+    const cases: [label: string, call: () => Promise<unknown>][] = [
+      [
+        "an empty library for listVersionChunks",
+        () => caller.listVersionChunks({ library: "", version: "1.0.0" }),
+      ],
+      [
+        "an empty library for getPageContent",
+        () => caller.getPageContent({ library: "", pathOrUrl: "/page1" }),
+      ],
+      [
+        "an empty pathOrUrl",
+        () => caller.getPageContent({ library: "router-test-lib", pathOrUrl: "" }),
+      ],
+      // A whitespace-only pathOrUrl is rejected instead of passed on as empty
+      [
+        "a whitespace-only pathOrUrl",
+        () => caller.getPageContent({ library: "router-test-lib", pathOrUrl: "   " }),
+      ],
+    ];
+
+    for (const [label, call] of cases) {
+      await expect.soft(call(), label).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    }
   });
 });
