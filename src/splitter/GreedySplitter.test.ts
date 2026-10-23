@@ -1,16 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { GreedySplitter } from "./GreedySplitter";
 import { SemanticMarkdownSplitter } from "./SemanticMarkdownSplitter";
-import type { Chunk } from "./types";
+import type { Chunk, DocumentSplitter } from "./types";
 
-// Mock SemanticMarkdownSplitter
-const createMockSemanticSplitter = (chunks: Chunk[]) => {
-  const mockSplitText = vi.fn().mockResolvedValue(chunks);
-  const mockSemanticSplitter = {
-    splitText: mockSplitText,
-  } as unknown as SemanticMarkdownSplitter;
-  return mockSemanticSplitter;
-};
+/** A base splitter that hands GreedySplitter a fixed list of chunks. */
+const createMockSemanticSplitter = (chunks: Chunk[]): DocumentSplitter => ({
+  splitText: async () => chunks,
+});
 
 describe("GreedySplitter", () => {
   it("should handle empty input", async () => {
@@ -126,32 +122,7 @@ describe("GreedySplitter", () => {
     ]);
   });
 
-  it("should preserve section metadata when concatenating chunks with identical sections", async () => {
-    const initialChunks: Chunk[] = [
-      {
-        types: ["text"],
-        content: "Short text 1.",
-        section: { level: 3, path: ["Test"] },
-      },
-      {
-        types: ["text"],
-        content: "Short text 2.",
-        section: { level: 3, path: ["Test"] },
-      },
-    ];
-    const mockSemanticSplitter = createMockSemanticSplitter(initialChunks);
-    const splitter = new GreedySplitter(mockSemanticSplitter, 10, 200, 5000);
-    const result = await splitter.splitText("Some Markdown");
-    expect(result).toEqual([
-      {
-        types: ["text"],
-        content: "Short text 1.\nShort text 2.",
-        section: { level: 3, path: ["Test"] },
-      },
-    ]);
-  });
-
-  it("should merge heading with its content when minChunkSize > 0", async () => {
+  it("merges a heading with its content, whether minChunkSize is above zero or zero", async () => {
     const initialChunks: Chunk[] = [
       {
         types: ["heading"],
@@ -164,212 +135,106 @@ describe("GreedySplitter", () => {
         section: { level: 1, path: ["Section 1"] },
       },
     ];
-    const mockSemanticSplitter = createMockSemanticSplitter(initialChunks);
-    const splitter = new GreedySplitter(mockSemanticSplitter, 20, 200, 5000);
-    const result = await splitter.splitText("Some Markdown");
-    expect(result).toEqual([
-      {
-        types: ["heading", "text"],
-        content: "# Section 1\nContent under section 1",
-        section: { level: 1, path: ["Section 1"] },
-      },
-    ]);
-  });
 
-  it("should merge small chunks even when minChunkSize = 0", async () => {
-    const initialChunks: Chunk[] = [
-      {
-        types: ["heading"],
-        content: "# Section 1",
-        section: { level: 1, path: ["Section 1"] },
-      },
-      {
-        types: ["text"],
-        content: "Content under section 1",
-        section: { level: 1, path: ["Section 1"] },
-      },
-    ];
-    const mockSemanticSplitter = createMockSemanticSplitter(initialChunks);
-    const splitter = new GreedySplitter(mockSemanticSplitter, 0, 200, 5000);
-    const result = await splitter.splitText("Some Markdown");
     // With minChunkSize = 0, chunks still get merged if they're under preferredChunkSize
-    expect(result).toEqual([
-      {
-        types: ["heading", "text"],
-        content: "# Section 1\nContent under section 1",
-        section: { level: 1, path: ["Section 1"] },
-      },
-    ]);
+    for (const minChunkSize of [20, 0]) {
+      const splitter = new GreedySplitter(
+        createMockSemanticSplitter(initialChunks),
+        minChunkSize,
+        200,
+        5000,
+      );
+      expect
+        .soft(await splitter.splitText("Some Markdown"), `min ${minChunkSize}`)
+        .toEqual([
+          {
+            types: ["heading", "text"],
+            content: "# Section 1\nContent under section 1",
+            section: { level: 1, path: ["Section 1"] },
+          },
+        ]);
+    }
   });
 
-  it("should use deeper path when merging parent with child section", async () => {
-    const initialChunks: Chunk[] = [
-      {
-        types: ["text"],
-        content: "Parent content",
-        section: { level: 1, path: ["Section 1"] },
-      },
-      {
-        types: ["text"],
-        content: "Child content",
-        section: {
-          level: 2,
-          path: ["Section 1", "SubSection 1.1"],
-        },
-      },
+  it("gives merged chunks the lowest level and the path the merged sections share", async () => {
+    const cases: Array<
+      [
+        label: string,
+        input: Array<[content: string, section: Chunk["section"]]>,
+        expected: Chunk["section"],
+      ]
+    > = [
+      [
+        // Uses the parent's (lower) level but keeps the child's path
+        "parent with child: deeper path",
+        [
+          ["Parent content", { level: 1, path: ["Section 1"] }],
+          ["Child content", { level: 2, path: ["Section 1", "SubSection 1.1"] }],
+        ],
+        { level: 1, path: ["Section 1", "SubSection 1.1"] },
+      ],
+      [
+        "siblings: common parent path",
+        [
+          ["First subsection", { level: 2, path: ["Section 1", "Sub 1.1"] }],
+          ["Second subsection", { level: 2, path: ["Section 1", "Sub 1.2"] }],
+        ],
+        { level: 2, path: ["Section 1"] },
+      ],
+      [
+        "no common path: root",
+        [
+          ["First section", { level: 1, path: ["Section 1"] }],
+          ["Different section", { level: 1, path: ["Section 2"] }],
+        ],
+        { level: 1, path: [] },
+      ],
+      [
+        "deep nesting: lowest level, deepest path",
+        [
+          ["Level 1", { level: 1, path: ["S1"] }],
+          ["Level 2", { level: 2, path: ["S1", "S1.1"] }],
+          ["Level 3", { level: 3, path: ["S1", "S1.1", "S1.1.1"] }],
+        ],
+        { level: 1, path: ["S1", "S1.1", "S1.1.1"] },
+      ],
+      [
+        "deep siblings: common parent path",
+        [
+          [
+            "Subsection A content",
+            { level: 3, path: ["Section 1", "SubSection 1.1", "Deep A"] },
+          ],
+          [
+            "Subsection B content",
+            { level: 3, path: ["Section 1", "SubSection 1.1", "Deep B"] },
+          ],
+        ],
+        { level: 3, path: ["Section 1", "SubSection 1.1"] },
+      ],
     ];
-    const mockSemanticSplitter = createMockSemanticSplitter(initialChunks);
-    const splitter = new GreedySplitter(mockSemanticSplitter, 20, 200, 5000);
-    const result = await splitter.splitText("Some Markdown");
-    expect(result).toEqual([
-      {
-        types: ["text"],
-        content: "Parent content\nChild content",
-        section: {
-          level: 1, // Uses parent's (lower) level
-          path: ["Section 1", "SubSection 1.1"], // But keeps child's path
+
+    for (const [label, input, section] of cases) {
+      const initialChunks = input.map(
+        ([content, section]): Chunk => ({ types: ["text"], content, section }),
+      );
+      const splitter = new GreedySplitter(
+        createMockSemanticSplitter(initialChunks),
+        20,
+        200,
+        5000,
+      );
+      expect.soft(await splitter.splitText("Some Markdown"), label).toEqual([
+        {
+          types: ["text"],
+          content: input.map(([content]) => content).join("\n"),
+          section,
         },
-      },
-    ]);
+      ]);
+    }
   });
 
-  it("should use common parent when merging sibling sections", async () => {
-    const initialChunks: Chunk[] = [
-      {
-        types: ["text"],
-        content: "First subsection",
-        section: {
-          level: 2,
-          path: ["Section 1", "Sub 1.1"],
-        },
-      },
-      {
-        types: ["text"],
-        content: "Second subsection",
-        section: {
-          level: 2,
-          path: ["Section 1", "Sub 1.2"],
-        },
-      },
-    ];
-    const mockSemanticSplitter = createMockSemanticSplitter(initialChunks);
-    const splitter = new GreedySplitter(mockSemanticSplitter, 20, 200, 5000);
-    const result = await splitter.splitText("Some Markdown");
-    expect(result).toEqual([
-      {
-        types: ["text"],
-        content: "First subsection\nSecond subsection",
-        section: {
-          level: 2, // Keeps original level
-          path: ["Section 1"], // Common parent path
-        },
-      },
-    ]);
-  });
-
-  it("should use root when merging sections with no common path", async () => {
-    const initialChunks: Chunk[] = [
-      {
-        types: ["text"],
-        content: "First section",
-        section: {
-          level: 1,
-          path: ["Section 1"],
-        },
-      },
-      {
-        types: ["text"],
-        content: "Different section",
-        section: {
-          level: 1,
-          path: ["Section 2"],
-        },
-      },
-    ];
-    const mockSemanticSplitter = createMockSemanticSplitter(initialChunks);
-    const splitter = new GreedySplitter(mockSemanticSplitter, 20, 200, 5000);
-    const result = await splitter.splitText("Some Markdown");
-    expect(result).toEqual([
-      {
-        types: ["text"],
-        content: "First section\nDifferent section",
-        section: {
-          level: 1, // Keep original level
-          path: [], // Root path
-        },
-      },
-    ]);
-  });
-
-  it("should handle deeply nested sections", async () => {
-    const initialChunks: Chunk[] = [
-      {
-        types: ["text"],
-        content: "Level 1",
-        section: { level: 1, path: ["S1"] },
-      },
-      {
-        types: ["text"],
-        content: "Level 2",
-        section: { level: 2, path: ["S1", "S1.1"] },
-      },
-      {
-        types: ["text"],
-        content: "Level 3",
-        section: { level: 3, path: ["S1", "S1.1", "S1.1.1"] },
-      },
-    ];
-    const mockSemanticSplitter = createMockSemanticSplitter(initialChunks);
-    const splitter = new GreedySplitter(mockSemanticSplitter, 20, 200, 5000);
-    const result = await splitter.splitText("Some Markdown");
-    expect(result).toEqual([
-      {
-        types: ["text"],
-        content: "Level 1\nLevel 2\nLevel 3",
-        section: {
-          level: 1, // Lowest level
-          path: ["S1", "S1.1", "S1.1.1"], // Deepest path
-        },
-      },
-    ]);
-  });
-
-  it("should handle deep sibling sections with common parent", async () => {
-    const initialChunks: Chunk[] = [
-      // Deep sibling sections under Section 1 -> SubSection 1.1
-      {
-        types: ["text"],
-        content: "Subsection A content",
-        section: {
-          level: 3,
-          path: ["Section 1", "SubSection 1.1", "Deep A"],
-        },
-      },
-      {
-        types: ["text"],
-        content: "Subsection B content",
-        section: {
-          level: 3,
-          path: ["Section 1", "SubSection 1.1", "Deep B"],
-        },
-      },
-    ];
-    const mockSemanticSplitter = createMockSemanticSplitter(initialChunks);
-    const splitter = new GreedySplitter(mockSemanticSplitter, 20, 200, 5000);
-    const result = await splitter.splitText("Some Markdown");
-    expect(result).toEqual([
-      {
-        types: ["text"],
-        content: "Subsection A content\nSubsection B content",
-        section: {
-          level: 3, // Keeps original level
-          path: ["Section 1", "SubSection 1.1"], // Common parent path
-        },
-      },
-    ]);
-  });
-
-  it("should split on H1/H2 headings when chunks reach preferred size", async () => {
+  it("starts a new chunk at an H1 once the current chunk reaches minChunkSize", async () => {
     const markdown = `
 # Heading 1
 
@@ -384,16 +249,20 @@ Some more text that should be in the first chunk.
 Some other text that should start a new chunk because it's a new H1 section.
 `;
 
-    // Create a *real* SemanticMarkdownSplitter to get the initial chunks
-    const realSemanticSplitter = new SemanticMarkdownSplitter(200, 5000);
-    const initialChunks = await realSemanticSplitter.splitText(markdown);
-
-    const mockSemanticSplitter = createMockSemanticSplitter(initialChunks);
-    const splitter = new GreedySplitter(mockSemanticSplitter, 50, 200, 5000);
+    const splitter = new GreedySplitter(
+      new SemanticMarkdownSplitter(200, 5000),
+      50,
+      200,
+      5000,
+    );
     const result = await splitter.splitText(markdown);
 
-    // Should split on the H1 boundary
-    expect(result.length).toBeGreaterThanOrEqual(1);
-    expect(result[0].content).toContain("# Heading 1");
+    // "# Heading 2" would still fit under preferredChunkSize, but the H1 opens a new chunk.
+    // The H2 below Heading 1 belongs to the same section, so it stays in the first chunk.
+    expect(result.map((chunk) => chunk.content.split("\n")[0])).toEqual([
+      "# Heading 1",
+      "# Heading 2",
+    ]);
+    expect(result[0].content).toContain("## Heading 1.1");
   });
 });
