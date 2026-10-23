@@ -141,7 +141,12 @@ export class PipelineWorker {
     progress: ScraperProgressEvent,
   ): Promise<void> {
     const { emptyPage } = progress;
-    if (!emptyPage) return; // A container, not a page — nothing to record.
+    if (!emptyPage) {
+      // A container, not a page: nothing to record, and a row stored for it
+      // by an older version is deleted.
+      await this.removeDeletedPage(job, callbacks, progress);
+      return;
+    }
 
     if (emptyPage.pipelineFailed) {
       logger.debug(

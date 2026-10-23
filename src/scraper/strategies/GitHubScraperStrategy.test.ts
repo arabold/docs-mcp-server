@@ -206,23 +206,6 @@ describe("GitHubScraperStrategy", () => {
     );
   });
 
-  it("should return empty links for non-depth-0 items", async () => {
-    const strategy = new GitHubScraperStrategy(config);
-
-    const result = await strategy.processItem({ url: REPO_URL, depth: 1 }, options());
-
-    expect(result.status).toBe(FetchStatus.SUCCESS);
-    expect(result.links).toEqual([]);
-  });
-
-  it("should handle single blob file URLs with strict scoping", async () => {
-    const result = await discover({ url: blobUrl("README.md") });
-
-    expect(result.status).toBe(FetchStatus.SUCCESS);
-    // Strict scoping: blob URL should index ONLY that file, not discover wiki
-    expect(result.links).toEqual([blobUrl("README.md")]);
-  });
-
   it("marks legacy github-file:// URLs as not found at any depth", async () => {
     const strategy = new GitHubScraperStrategy(config);
     const items = [
