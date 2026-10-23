@@ -58,7 +58,7 @@ On first startup, or when upgrading from a database that does not yet contain em
 ### Requirement: Model Change Detection
 The system SHALL compare the stored embedding model metadata against the current configured model specification and any explicit vector dimension override during startup. The comparison SHALL happen after database migrations but before vector table creation, vector table mutation, prepared statement initialization, provider startup probing, or vector search use.
 
-If the stored model specification differs from the current configured model, or if an explicitly configured vector dimension differs from the stored dimension, the system SHALL throw `EmbeddingModelChangedError`. The error SHALL include the stored model, current model, stored dimension, and current resolved dimension. If the stored model specification matches and no explicit dimension override changed, the system SHALL use the stored dimension as the current resolved dimension and SHALL NOT probe the provider during startup.
+If the stored model specification differs from the current configured model, or if an explicitly configured vector dimension differs from the stored dimension, the system SHALL throw `EmbeddingModelChangedError`. The error SHALL include the stored model, current model, stored dimension, and current resolved dimension. When the model changed and its dimension is neither known from the known-model table nor explicitly configured, the system SHALL report the current dimension as unknown instead of the configured default, because startup does not probe a changed model before confirmation. If the stored model specification matches and no explicit dimension override changed, the system SHALL use the stored dimension as the current resolved dimension and SHALL NOT probe the provider during startup.
 
 #### Scenario: Model name change is detected
 - **WHEN** stored metadata contains `embedding_model = "openai:text-embedding-3-small"`
@@ -80,6 +80,13 @@ If the stored model specification differs from the current configured model, or 
 - **AND** current configuration uses `openai:NovaSearch/stella_en_400M_v5`
 - **THEN** startup SHALL proceed without model-change confirmation
 - **AND** the system SHALL NOT probe the provider during startup
+
+#### Scenario: Changed model with a dimension not known yet
+- **WHEN** stored metadata contains `embedding_model = "openai:text-embedding-3-small"` with `embedding_dimension = "1536"`
+- **AND** current configuration uses `openai:custom-embedding-model`, which is not in the known-model table
+- **AND** no explicit dimension override is configured
+- **THEN** the system SHALL throw `EmbeddingModelChangedError` without probing the provider
+- **AND** the error SHALL report the current dimension as unknown, not the configured default
 
 #### Scenario: Model changed, same dimension
 - **WHEN** the stored `embedding_model` is `openai:text-embedding-3-small`
@@ -108,12 +115,33 @@ If the stored model specification differs from the current configured model, or 
 - **THEN** the system SHALL NOT treat this as a change
 - **AND** startup SHALL proceed normally (silent initialization applies)
 
+### Requirement: Explicit Acceptance Without a Prompt
+The default command, `mcp` and `worker` SHALL accept a `--accept-model-change` flag and the `DOCS_MCP_ACCEPT_MODEL_CHANGE` environment variable. When either accepts the change, the system SHALL invalidate vectors and continue startup as after an interactive confirmation, without prompting, in interactive and non-interactive mode alike. The flag SHALL win over the environment variable, so `--no-accept-model-change` rejects the opt-in from the environment. The opt-in SHALL NOT be a config file setting.
+
+#### Scenario: Accepted by flag without a TTY
+- **WHEN** a model change is detected
+- **AND** `process.stdout.isTTY` is falsy
+- **AND** the server was started with `--accept-model-change`
+- **THEN** the system SHALL invalidate all existing vectors and update the metadata
+- **AND** startup SHALL proceed
+
+#### Scenario: Accepted by environment variable
+- **WHEN** a model change is detected
+- **AND** `DOCS_MCP_ACCEPT_MODEL_CHANGE=true` is set and the flag is omitted
+- **THEN** the system SHALL accept the change without prompting
+
+#### Scenario: Flag overrides the environment
+- **WHEN** a model change is detected without a TTY
+- **AND** `DOCS_MCP_ACCEPT_MODEL_CHANGE=true` is set
+- **AND** the server was started with `--no-accept-model-change`
+- **THEN** the system SHALL fail startup without invalidating vectors
+
 ### Requirement: Non-Interactive Startup Failure
-When an `EmbeddingModelChangedError` is thrown and `process.stdout.isTTY` is falsy (non-interactive mode, e.g., MCP/stdio), the system SHALL fail startup entirely with a descriptive error message. The error message SHALL include:
+When an `EmbeddingModelChangedError` is thrown, the change is not accepted explicitly, and `process.stdout.isTTY` is falsy (non-interactive mode, e.g., MCP/stdio or a container), the system SHALL fail startup entirely with a descriptive error message. The error message SHALL include:
 
 - The previous model and dimension
-- The current model and dimension
-- Instructions to start the server interactively (with a TTY) to confirm the change
+- The current model and dimension, when known
+- Instructions to confirm the change with `--accept-model-change` or `DOCS_MCP_ACCEPT_MODEL_CHANGE=true`, or by starting the server in a terminal
 
 The system SHALL NOT fall back to FTS-only mode, SHALL NOT silently proceed, and SHALL NOT invalidate vectors without explicit confirmation.
 
@@ -122,7 +150,7 @@ The system SHALL NOT fall back to FTS-only mode, SHALL NOT silently proceed, and
 - **AND** `process.stdout.isTTY` is falsy
 - **THEN** the system SHALL terminate startup with an error
 - **AND** the error message SHALL include the previous and current model/dimension values
-- **AND** the error message SHALL instruct the user to start interactively
+- **AND** the error message SHALL name `--accept-model-change` and `DOCS_MCP_ACCEPT_MODEL_CHANGE`
 
 #### Scenario: Model change in piped output
 - **WHEN** a model change is detected
@@ -130,7 +158,7 @@ The system SHALL NOT fall back to FTS-only mode, SHALL NOT silently proceed, and
 - **THEN** the system SHALL treat this as non-interactive and fail startup
 
 ### Requirement: Interactive Confirmation Flow
-When an `EmbeddingModelChangedError` is thrown and `process.stdout.isTTY` is truthy (interactive mode), the CLI layer SHALL display a warning and prompt for explicit user confirmation before proceeding.
+When an `EmbeddingModelChangedError` is thrown, the change is not accepted explicitly, and `process.stdout.isTTY` is truthy (interactive mode), the CLI layer SHALL display a warning and prompt for explicit user confirmation before proceeding.
 
 The prompt flow SHALL be:
 1. Display the previous and current model/dimension values
@@ -160,7 +188,7 @@ On confirmation, the system SHALL invoke vector invalidation and update the meta
 - **THEN** the system SHALL treat the response as a rejection (same as `N`)
 
 ### Requirement: Vector Invalidation on Confirmed Change
-When a model or dimension change is confirmed (either via interactive prompt or future escape mechanisms), the system SHALL invalidate all existing embedding vectors:
+When a model or dimension change is confirmed (via the interactive prompt or explicit acceptance), the system SHALL invalidate all existing embedding vectors:
 
 1. Execute `UPDATE documents SET embedding = NULL` to clear all stored embedding blobs
 2. Drop and recreate the `documents_vec` virtual table as empty (no backfill)

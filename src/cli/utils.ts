@@ -9,10 +9,13 @@ import { chromium } from "playwright";
 import type { AppServerConfig } from "../app";
 import type { AuthConfig } from "../auth/types";
 import type { EventBusService } from "../events";
+import type { DocumentManagementService } from "../store/DocumentManagementService";
 import {
   EmbeddingConfig,
   type EmbeddingModelConfig,
 } from "../store/embeddings/EmbeddingConfig";
+import { describeEmbeddingModel, type EmbeddingModelChangedError } from "../store/errors";
+import { parseEnvBoolean } from "../utils/config";
 import { logger } from "../utils/logger";
 import { getProjectRoot } from "../utils/paths";
 import type { GlobalOptions } from "./types";
@@ -338,16 +341,13 @@ export function resolveEmbeddingContext(
  * Returns true if the user confirms (y/Y), false otherwise.
  */
 function promptModelChangeConfirmation(
-  previousModel: string,
-  previousDimension: string,
-  currentModel: string,
-  currentDimension: string,
+  change: EmbeddingModelChangedError,
 ): Promise<boolean> {
   return new Promise((resolve) => {
     console.error(
       `\n⚠️  Embedding model change detected:\n` +
-        `   Previous: ${previousModel} (${previousDimension} dimensions)\n` +
-        `   Current:  ${currentModel} (${currentDimension} dimensions)\n\n` +
+        `   Previous: ${describeEmbeddingModel(change.previousModel, change.previousDimension)}\n` +
+        `   Current:  ${describeEmbeddingModel(change.currentModel, change.currentDimension)}\n\n` +
         `   All existing embedding vectors will be invalidated.\n` +
         `   Libraries must be re-scraped to restore vector search.\n` +
         `   Full-text search will continue working for all existing documents.\n`,
@@ -369,30 +369,42 @@ function promptModelChangeConfirmation(
 /**
  * Handles EmbeddingModelChangedError during service initialization.
  *
+ * - When accepted (`--accept-model-change` or `DOCS_MCP_ACCEPT_MODEL_CHANGE`):
+ *   resolves the model change (invalidates vectors) without asking.
  * - In non-interactive mode (no TTY): re-throws the error to fail startup.
  * - In interactive mode (TTY): prompts the user for confirmation, then either
- *   resolves the model change (invalidates vectors) or exits.
+ *   resolves the model change or exits.
  *
  * @param error The EmbeddingModelChangedError thrown by DocumentStore.initialize()
  * @param service The DocumentManagementService instance (already partially initialized)
+ * @param acceptFlag The value of `--accept-model-change`; when omitted,
+ *   `DOCS_MCP_ACCEPT_MODEL_CHANGE` decides
  * @throws Re-throws the error in non-interactive mode or if the user rejects the change
  */
 export async function handleEmbeddingModelChange(
-  error: import("../store/errors").EmbeddingModelChangedError,
-  service: import("../store/DocumentManagementService").DocumentManagementService,
+  error: EmbeddingModelChangedError,
+  service: Pick<DocumentManagementService, "resolveModelChange">,
+  acceptFlag?: boolean,
 ): Promise<void> {
+  const accepted =
+    acceptFlag ?? parseEnvBoolean(process.env.DOCS_MCP_ACCEPT_MODEL_CHANGE) ?? false;
+  if (accepted) {
+    logger.warn(
+      `⚠️  Accepting embedding model change without a prompt: ` +
+        `${describeEmbeddingModel(error.previousModel, error.previousDimension)} → ` +
+        `${describeEmbeddingModel(error.currentModel, error.currentDimension)}`,
+    );
+    await service.resolveModelChange();
+    return;
+  }
+
   // Non-interactive: fail startup entirely
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw error;
   }
 
   // Interactive: prompt user for confirmation
-  const confirmed = await promptModelChangeConfirmation(
-    error.previousModel,
-    error.previousDimension,
-    error.currentModel,
-    error.currentDimension,
-  );
+  const confirmed = await promptModelChangeConfirmation(error);
 
   if (!confirmed) {
     throw new Error(

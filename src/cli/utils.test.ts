@@ -1,5 +1,57 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { checkAuthForProtocol } from "./utils";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EmbeddingModelChangedError } from "../store/errors";
+import { checkAuthForProtocol, handleEmbeddingModelChange } from "./utils";
+
+describe("handleEmbeddingModelChange without a terminal", () => {
+  const change = new EmbeddingModelChangedError(
+    "openai:embeddinggemma-2:270m",
+    "768",
+    "openai:nomic-embed-text:latest",
+    null,
+  );
+  const savedTty = { stdin: process.stdin.isTTY, stdout: process.stdout.isTTY };
+  const savedEnv = process.env.DOCS_MCP_ACCEPT_MODEL_CHANGE;
+  const service = { resolveModelChange: vi.fn(async () => undefined) };
+
+  beforeEach(() => {
+    process.stdin.isTTY = false;
+    process.stdout.isTTY = false;
+    delete process.env.DOCS_MCP_ACCEPT_MODEL_CHANGE;
+    service.resolveModelChange.mockClear();
+  });
+
+  afterEach(() => {
+    process.stdin.isTTY = savedTty.stdin;
+    process.stdout.isTTY = savedTty.stdout;
+    if (savedEnv === undefined) {
+      delete process.env.DOCS_MCP_ACCEPT_MODEL_CHANGE;
+    } else {
+      process.env.DOCS_MCP_ACCEPT_MODEL_CHANGE = savedEnv;
+    }
+  });
+
+  it("fails startup when the change is not accepted", async () => {
+    await expect(handleEmbeddingModelChange(change, service)).rejects.toBe(change);
+    expect(service.resolveModelChange).not.toHaveBeenCalled();
+  });
+
+  it("accepts the change with --accept-model-change", async () => {
+    await handleEmbeddingModelChange(change, service, true);
+    expect(service.resolveModelChange).toHaveBeenCalledOnce();
+  });
+
+  it("accepts the change with DOCS_MCP_ACCEPT_MODEL_CHANGE when the flag is omitted", async () => {
+    process.env.DOCS_MCP_ACCEPT_MODEL_CHANGE = "true";
+    await handleEmbeddingModelChange(change, service);
+    expect(service.resolveModelChange).toHaveBeenCalledOnce();
+  });
+
+  it("lets --no-accept-model-change override the environment", async () => {
+    process.env.DOCS_MCP_ACCEPT_MODEL_CHANGE = "true";
+    await expect(handleEmbeddingModelChange(change, service, false)).rejects.toBe(change);
+    expect(service.resolveModelChange).not.toHaveBeenCalled();
+  });
+});
 
 describe("checkAuthForProtocol", () => {
   afterEach(() => {
