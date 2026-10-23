@@ -13,21 +13,19 @@ import { isLoopbackHost, mayPassThrough, server } from "./mock-server";
 
 /**
  * The host name an `http.request()` or `http.get()` call connects to, in the
- * form `URL.hostname` gives it. As in Node, options override the URL, and a
- * call that names neither a host nor a URL connects to `localhost`.
+ * form `URL.hostname` gives it. As in Node, the options are merged over the
+ * URL's, then `hostname` wins over `host`, and `localhost` is the default.
  */
 function requestHostname(args: unknown[]): string {
   const [first, second] = args;
-  const url = typeof first === "string" || first instanceof URL ? first : undefined;
+  const url = typeof first === "string" || first instanceof URL ? new URL(first) : undefined;
   const options = url === undefined ? first : second;
-  const { hostname, host } = (
-    typeof options === "object" && options !== null ? options : {}
-  ) as http.RequestOptions;
-  const name = hostname ?? host;
-  if (name) {
-    return isIPv6(name) ? `[${name}]` : name;
-  }
-  return url === undefined ? "localhost" : new URL(url).hostname;
+  const { hostname, host } = {
+    ...(url && { hostname: url.hostname }),
+    ...(typeof options === "object" && options !== null ? options : {}),
+  } as http.RequestOptions;
+  const name = hostname || host || "localhost";
+  return isIPv6(name) ? `[${name}]` : name;
 }
 
 /**
