@@ -144,6 +144,11 @@ describe("BrowserFetcher with private networks blocked", () => {
         res.end("document.body.dataset.ran = 'yes';");
         return;
       }
+      if (path === "/openapi.yaml") {
+        res.writeHead(200, { "content-type": "application/x-yaml" });
+        res.end("openapi: 3.1.0\n");
+        return;
+      }
       if (path === "/moved") {
         res.writeHead(302, { location: `${internalUrl}/latest/meta-data/` });
         res.end();
@@ -207,6 +212,13 @@ describe("BrowserFetcher with private networks blocked", () => {
     // The page's own script still ran: only the blocked address was cut off.
     expect(result.content.toString()).toContain('data-ran="yes"');
     expect(internalRequests).toEqual([]);
+  });
+
+  it("fetches a file the browser would download from an allowed host name", async () => {
+    const result = await fetcher.fetch(`${docsUrl}/openapi.yaml`);
+
+    expect(result.status).toBe(FetchStatus.SUCCESS);
+    expect(result.content.toString()).toBe("openapi: 3.1.0\n");
   });
 
   it("refuses a redirect to a blocked address without following it", async () => {
