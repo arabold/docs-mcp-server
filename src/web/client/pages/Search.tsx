@@ -1,6 +1,6 @@
 /**
  * Search Playground page. Lets the user pick an indexed library + version,
- * run a query against the same store the MCP `search` tool reads from, and
+ * run a query through the same tool MCP clients call (`search_docs`), and
  * preview the exact full-context Markdown sections it would return.
  */
 import { useState } from "react";
@@ -26,7 +26,11 @@ interface SubmittedSearch {
 /** Results longer than this (chars) are clipped behind a "Show full result" toggle. */
 const CLIP_THRESHOLD = 1200;
 
-/** Labels the empty-string version (unversioned content) as "Latest", per the mockup. */
+/**
+ * Labels the empty version "Latest": like an omitted `search_docs` version, it
+ * resolves to the newest stored version, or to unversioned content when the
+ * library has no versions.
+ */
 function versionLabel(version: string): string {
   return version === "" ? "Latest" : version;
 }
@@ -46,14 +50,12 @@ export default function Search() {
     ? { library: submitted.library, version: submitted.version, query: submitted.query }
     : { library: "", version: "", query: "" };
 
-  const {
-    data: results,
-    isLoading,
-    isError,
-    error,
-  } = useSearch(searchInput, submitted !== null);
+  const { data, isLoading, isError, error } = useSearch(searchInput, submitted !== null);
+  const results = data?.results;
 
   const selectedLibrary = (libraries ?? []).find((lib) => lib.library === library);
+  // Unversioned content has no option of its own: as with `search_docs`,
+  // "Latest" reaches it only when the library has no versions.
   const versionOptions = selectedLibrary
     ? Array.from(new Set(["", ...selectedLibrary.versions.map((v) => v.ref.version)]))
     : [""];

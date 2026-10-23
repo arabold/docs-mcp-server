@@ -21,6 +21,7 @@ import {
   optionalVersion,
 } from "../store/trpc/router";
 import { RemoveTool } from "../tools/RemoveTool";
+import { SearchTool } from "../tools/SearchTool";
 import {
   createSystemHealthRouter,
   type SystemHealthTrpcContext,
@@ -84,11 +85,39 @@ export function buildAppRouter() {
       ),
   });
 
+  // Runs the MCP search tool, so the web UI gets what an MCP client gets
+  const searchRouter = t.router({
+    /**
+     * Searches a library as `search_docs` does: the version resolves to the
+     * best stored match first, and an omitted or empty one to the newest. The
+     * data router's `search` stays literal, since remote clients send it a
+     * version the tool has already resolved.
+     */
+    searchDocs: t.procedure
+      .input(
+        z.object({
+          library: nonEmpty,
+          version: optionalVersion,
+          query: nonEmpty,
+          limit: z.number().int().positive().max(50).optional(),
+        }),
+      )
+      .query(({ ctx, input }) =>
+        new SearchTool(ctx.docService).execute({
+          library: input.library,
+          version: input.version ?? undefined,
+          query: input.query,
+          limit: input.limit,
+        }),
+      ),
+  });
+
   return t.router({
     ...healthRouter._def.procedures,
     ...createPipelineRouter(t)._def.procedures,
     ...createDataRouter(t)._def.procedures,
     ...removalRouter._def.procedures,
+    ...searchRouter._def.procedures,
     ...createSystemHealthRouter(t)._def.procedures,
     events: createEventsRouter(t),
   });
