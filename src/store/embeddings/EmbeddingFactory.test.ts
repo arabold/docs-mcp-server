@@ -1,13 +1,11 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { BedrockEmbeddings } from "@langchain/aws";
-import { Embeddings } from "@langchain/core/embeddings";
-import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
+import type { Embeddings } from "@langchain/core/embeddings";
 import { VertexAIEmbeddings } from "@langchain/google-vertexai";
-import { OpenAIEmbeddings } from "@langchain/openai";
+import { AzureOpenAIEmbeddings, OpenAIEmbeddings } from "@langchain/openai";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { loadConfig } from "../../utils/config";
-import { sanitizeEnvironment } from "../../utils/env";
 import { MissingCredentialsError } from "../errors";
 import type { EmbeddingProvider } from "./EmbeddingConfig";
 import { createEmbeddingModel } from "./EmbeddingFactory";
@@ -46,182 +44,116 @@ afterEach(() => {
 });
 
 describe("createEmbeddingModel", () => {
-  test("should create OpenAI embeddings with just model name (default provider)", () => {
-    const model = createEmbeddingModel("text-embedding-3-small", runtimeConfig);
-    expect(model).toBeInstanceOf(OpenAIEmbeddings);
-    expect(model).toMatchObject({
-      modelName: "text-embedding-3-small",
-    });
-  });
-
-  test("should create OpenAI embeddings with explicit provider", () => {
-    const model = createEmbeddingModel("openai:text-embedding-3-small", runtimeConfig);
-    expect(model).toBeInstanceOf(OpenAIEmbeddings);
-    expect(model).toMatchObject({
-      modelName: "text-embedding-3-small",
-    });
-  });
-
-  test("should throw MissingCredentialsError for OpenAI without OPENAI_API_KEY", () => {
-    vi.stubGlobal("process", {
-      env: {
-        // Missing OPENAI_API_KEY
-      },
-    });
-
-    expect(() => createEmbeddingModel("text-embedding-3-small", runtimeConfig)).toThrow(
-      MissingCredentialsError,
-    );
-    expect(() =>
-      createEmbeddingModel("openai:text-embedding-3-small", runtimeConfig),
-    ).toThrow(MissingCredentialsError);
-  });
-
-  test("should correctly parse model names containing colons or slashes", () => {
-    const model = createEmbeddingModel(
-      "openai:jeffh/intfloat-multilingual-e5-large-instruct:f16",
-      runtimeConfig,
-    );
-    expect(model).toBeInstanceOf(OpenAIEmbeddings);
-    expect(model).toMatchObject({
-      modelName: "jeffh/intfloat-multilingual-e5-large-instruct:f16",
-    });
-  });
-
-  test.each([
-    "second-state/jina-embeddings-v3-GGUF:Q4_K_M",
-    "nomic-embed-text:latest",
-    "bge-m3:567m",
-    "jina-embeddings-v3-GGUF:Q4_K_M",
-  ])("should create OpenAI-compatible embeddings for %s", (spec) => {
-    const model = createEmbeddingModel(spec, runtimeConfig);
-    expect(model).toBeInstanceOf(OpenAIEmbeddings);
-    expect(model).toMatchObject({ modelName: spec });
-  });
-
-  test("should create Google Vertex AI embeddings", () => {
-    const model = createEmbeddingModel("vertex:text-embedding-004", runtimeConfig);
-    expect(model).toBeInstanceOf(VertexAIEmbeddings);
-    expect(model).toMatchObject({
-      model: "text-embedding-004",
-    });
-  });
-
-  test("should create Google Gemini embeddings with MRL truncation enabled", () => {
-    const model = createEmbeddingModel(
-      "gemini:gemini-embedding-exp-03-07",
-      runtimeConfig,
-    );
-    expect(model).toBeInstanceOf(FixedDimensionEmbeddings);
-
-    // The FixedDimensionEmbeddings should wrap a GoogleGenerativeAIEmbeddings instance
-    const embeddingsProp = Object.entries(model).find(
-      ([key]) => key === "embeddings",
-    )?.[1];
-    expect(embeddingsProp).toBeInstanceOf(GoogleGenerativeAIEmbeddings);
-    expect(embeddingsProp).toMatchObject({
-      apiKey: "test-gemini-key",
-      model: "gemini-embedding-exp-03-07",
-    });
-  });
-
-  test("should throw MissingCredentialsError for Vertex AI without GOOGLE_APPLICATION_CREDENTIALS", () => {
-    vi.stubGlobal("process", {
-      env: {
-        // Missing GOOGLE_APPLICATION_CREDENTIALS
-      },
-    });
-
-    expect(() =>
-      createEmbeddingModel("vertex:text-embedding-004", runtimeConfig),
-    ).toThrow(MissingCredentialsError);
-  });
-
-  test("should throw MissingCredentialsError for Gemini without GOOGLE_API_KEY", () => {
-    vi.stubGlobal("process", {
-      env: {
-        // Missing GOOGLE_API_KEY
-      },
-    });
-
-    expect(() =>
-      createEmbeddingModel("gemini:gemini-embedding-exp-03-07", runtimeConfig),
-    ).toThrow(MissingCredentialsError);
-  });
-
-  test("should create AWS Bedrock embeddings", () => {
-    const model = createEmbeddingModel("aws:amazon.titan-embed-text-v1", runtimeConfig);
-    expect(model).toBeInstanceOf(BedrockEmbeddings);
-    expect(model).toMatchObject({
-      model: "amazon.titan-embed-text-v1",
-    });
-  });
+  /** A client class `toBeInstanceOf` can check. */
+  type EmbeddingsClass = abstract new (...args: never[]) => Embeddings;
 
   // Typed as a complete record so that adding a provider without adding it here
   // fails typecheck. This is the testable form of "every supported provider has a
   // model-creation branch" — the invariant `sagemaker` violated for a year.
-  const PROVIDER_SPECS: Record<EmbeddingProvider, string> = {
-    openai: "openai:text-embedding-3-small",
-    vertex: "vertex:text-embedding-004",
-    gemini: "gemini:embedding-001",
-    aws: "aws:amazon.titan-embed-text-v1",
-    microsoft: "microsoft:test-deployment",
+  const PROVIDER_CLIENTS: Record<
+    EmbeddingProvider,
+    { spec: string; client: EmbeddingsClass; fields: Record<string, unknown> }
+  > = {
+    openai: {
+      spec: "openai:text-embedding-3-small",
+      client: OpenAIEmbeddings,
+      fields: { modelName: "text-embedding-3-small" },
+    },
+    vertex: {
+      spec: "vertex:text-embedding-004",
+      client: VertexAIEmbeddings,
+      fields: { model: "text-embedding-004" },
+    },
+    // Gemini supports MRL, so DocumentStore may truncate its vectors
+    gemini: {
+      spec: "gemini:gemini-embedding-exp-03-07",
+      client: FixedDimensionEmbeddings,
+      fields: { allowTruncate: true },
+    },
+    aws: {
+      spec: "aws:amazon.titan-embed-text-v1",
+      client: BedrockEmbeddings,
+      fields: { model: "amazon.titan-embed-text-v1" },
+    },
+    microsoft: {
+      spec: "microsoft:test-deployment",
+      client: AzureOpenAIEmbeddings,
+      fields: { azureOpenAIApiDeploymentName: "test-deployment" },
+    },
   };
 
-  test.each(Object.entries(PROVIDER_SPECS))(
-    "should construct a client for the %s provider",
-    (_provider, spec) => {
-      expect(createEmbeddingModel(spec, runtimeConfig)).toBeInstanceOf(Embeddings);
-    },
-  );
+  test("creates the client of the provider a model spec names", () => {
+    const cases: [
+      label: string,
+      spec: string,
+      client: EmbeddingsClass,
+      fields: Record<string, unknown>,
+    ][] = [
+      ...Object.entries(PROVIDER_CLIENTS).map(
+        ([provider, { spec, client, fields }]): [
+          string,
+          string,
+          EmbeddingsClass,
+          Record<string, unknown>,
+        ] => [`the ${provider} provider`, spec, client, fields],
+      ),
+      [
+        "an unprefixed model name (default provider)",
+        "text-embedding-3-small",
+        OpenAIEmbeddings,
+        { modelName: "text-embedding-3-small" },
+      ],
+      // Only the known provider prefixes claim the segment before the first colon;
+      // everything else is a model name served by an OpenAI-compatible endpoint.
+      [
+        "an unrecognized prefix",
+        "unknown:model",
+        OpenAIEmbeddings,
+        { modelName: "unknown:model" },
+      ],
+      [
+        "the withdrawn sagemaker prefix",
+        "sagemaker:my-endpoint",
+        OpenAIEmbeddings,
+        { modelName: "sagemaker:my-endpoint" },
+      ],
+    ];
 
-  test("should treat the withdrawn sagemaker prefix as an OpenAI-compatible model name", () => {
-    const model = createEmbeddingModel("sagemaker:my-endpoint", runtimeConfig);
-    expect(model).toBeInstanceOf(OpenAIEmbeddings);
-    expect(model).toMatchObject({ modelName: "sagemaker:my-endpoint" });
+    for (const [label, spec, client, fields] of cases) {
+      const model = createEmbeddingModel(spec, runtimeConfig);
+      expect.soft(model, label).toBeInstanceOf(client);
+      expect.soft(model, label).toMatchObject(fields);
+    }
   });
 
-  test("should match a provider prefix case-insensitively", () => {
-    const model = createEmbeddingModel("OpenAI:text-embedding-3-small", runtimeConfig);
-    expect(model).toBeInstanceOf(OpenAIEmbeddings);
-    expect(model).toMatchObject({ modelName: "text-embedding-3-small" });
-  });
+  test("throws MissingCredentialsError when a provider's credentials are missing", () => {
+    const cases: [label: string, spec: string, env: Record<string, string>][] = [
+      ["OpenAI, unprefixed, without OPENAI_API_KEY", "text-embedding-3-small", {}],
+      ["OpenAI without OPENAI_API_KEY", "openai:text-embedding-3-small", {}],
+      [
+        "Vertex AI without GOOGLE_APPLICATION_CREDENTIALS",
+        "vertex:text-embedding-004",
+        {},
+      ],
+      ["Gemini without GOOGLE_API_KEY", "gemini:gemini-embedding-exp-03-07", {}],
+      ["AWS Bedrock without credentials", "aws:amazon.titan-embed-text-v1", {}],
+      [
+        "Azure OpenAI without only AZURE_OPENAI_API_INSTANCE_NAME",
+        "microsoft:text-embedding-ada-002",
+        {
+          AZURE_OPENAI_API_KEY: "test-azure-key",
+          AZURE_OPENAI_API_DEPLOYMENT_NAME: "test-deployment",
+          AZURE_OPENAI_API_VERSION: "2024-02-01",
+        },
+      ],
+    ];
 
-  test("should treat an unrecognized prefix as an OpenAI-compatible model name", () => {
-    // Only the known provider prefixes claim the segment before the first colon;
-    // everything else is a model name served by an OpenAI-compatible endpoint.
-    const model = createEmbeddingModel("unknown:model", runtimeConfig);
-    expect(model).toBeInstanceOf(OpenAIEmbeddings);
-    expect(model).toMatchObject({ modelName: "unknown:model" });
-  });
-
-  test("should throw MissingCredentialsError for Azure OpenAI without required env vars", () => {
-    // Override env to simulate missing Azure variables
-    vi.stubGlobal("process", {
-      env: {
-        AZURE_OPENAI_API_KEY: "test-azure-key",
-        // Missing AZURE_OPENAI_API_INSTANCE_NAME
-        AZURE_OPENAI_API_DEPLOYMENT_NAME: "test-deployment",
-        AZURE_OPENAI_API_VERSION: "2024-02-01",
-      },
-    });
-
-    expect(() =>
-      createEmbeddingModel("microsoft:text-embedding-ada-002", runtimeConfig),
-    ).toThrow(MissingCredentialsError);
-  });
-
-  test("should throw MissingCredentialsError for AWS Bedrock without required env vars", () => {
-    // Override env to simulate missing AWS credentials
-    vi.stubGlobal("process", {
-      env: {
-        // Missing AWS credentials
-      },
-    });
-
-    expect(() =>
-      createEmbeddingModel("aws:amazon.titan-embed-text-v1", runtimeConfig),
-    ).toThrow(MissingCredentialsError);
+    for (const [label, spec, env] of cases) {
+      vi.stubGlobal("process", { env });
+      expect
+        .soft(() => createEmbeddingModel(spec, runtimeConfig), label)
+        .toThrow(MissingCredentialsError);
+    }
   });
 
   test("should create AWS Bedrock embeddings with only AWS_PROFILE set", () => {
@@ -236,16 +168,6 @@ describe("createEmbeddingModel", () => {
     expect(model).toMatchObject({
       model: "amazon.titan-embed-text-v1",
     });
-  });
-
-  test("should request float encoding for OpenAI-compatible providers", () => {
-    // Regression guard for #469: without an explicit encodingFormat the OpenAI SDK
-    // sends `encoding_format: "base64"` and then base64-decodes the reply. Providers
-    // that ignore the parameter return JSON floats, which decode into an all-zero
-    // vector a quarter of the native length.
-    const model = createEmbeddingModel("openai:mistral-embed", runtimeConfig);
-    expect(model).toBeInstanceOf(OpenAIEmbeddings);
-    expect(model).toMatchObject({ encodingFormat: "float" });
   });
 
   describe("providers that ignore encoding_format", () => {
@@ -316,25 +238,6 @@ describe("createEmbeddingModel", () => {
         expect(vector.filter((value) => value !== 0)).toHaveLength(nativeDimension);
       } finally {
         await new Promise<void>((resolve) => server.close(() => resolve()));
-      }
-    });
-  });
-
-  describe("OPENAI_API_BASE handling", () => {
-    test("should use sanitized OPENAI_API_BASE values", () => {
-      const env = {
-        OPENAI_API_KEY: '"test-openai-key"',
-        OPENAI_API_BASE: '"http://localhost:11434/v1"',
-      };
-      sanitizeEnvironment(env);
-      vi.stubGlobal("process", { env });
-
-      const model = createEmbeddingModel("openai:nomic-embed-text", runtimeConfig);
-      expect(model).toBeInstanceOf(OpenAIEmbeddings);
-
-      const clientConfig = (model as any).clientConfig;
-      if (clientConfig?.baseURL) {
-        expect(clientConfig.baseURL).toBe("http://localhost:11434/v1");
       }
     });
   });

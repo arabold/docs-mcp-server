@@ -4,55 +4,44 @@ import { createContentAssemblyStrategy } from "./ContentAssemblyStrategyFactory"
 import { HierarchicalAssemblyStrategy } from "./strategies/HierarchicalAssemblyStrategy";
 import { MarkdownAssemblyStrategy } from "./strategies/MarkdownAssemblyStrategy";
 
-describe("ContentAssemblyStrategyFactory", () => {
+describe("createContentAssemblyStrategy", () => {
   const config = loadConfig();
 
-  describe("createContentAssemblyStrategy", () => {
-    it("returns MarkdownAssemblyStrategy for undefined MIME type", () => {
-      const strategy = createContentAssemblyStrategy(undefined, config);
-      expect(strategy).toBeInstanceOf(MarkdownAssemblyStrategy);
-    });
+  it("assembles structured content hierarchically and everything else as Markdown", () => {
+    const hierarchical = HierarchicalAssemblyStrategy;
+    const markdown = MarkdownAssemblyStrategy;
+    const cases: [
+      mimeType: string | null | undefined,
+      expected: typeof hierarchical | typeof markdown,
+    ][] = [
+      [undefined, markdown],
+      [null, markdown],
+      ["text/markdown", markdown],
+      ["text/x-markdown", markdown],
+      ["text/html", markdown],
+      ["application/xhtml+xml", markdown],
+      ["text/plain", markdown],
+      ["text/csv", markdown],
+      ["text/typescript", hierarchical],
+      ["text/x-typescript", hierarchical],
+      ["text/javascript", hierarchical],
+      ["text/x-python", hierarchical],
+      ["text/x-go", hierarchical],
+      ["text/x-rust", hierarchical],
+      ["text/css", hierarchical],
+      ["application/json", hierarchical],
+      ["text/json", hierarchical],
+      ["text/x-json", hierarchical],
+      // Unknown types fall back to Markdown
+      ["application/octet-stream", markdown],
+      ["image/png", markdown],
+      ["application/unknown", markdown],
+    ];
 
-    it("returns MarkdownAssemblyStrategy for markdown MIME types", () => {
-      const strategy1 = createContentAssemblyStrategy("text/markdown", config);
-      const strategy2 = createContentAssemblyStrategy("text/x-markdown", config);
-      expect(strategy1).toBeInstanceOf(MarkdownAssemblyStrategy);
-      expect(strategy2).toBeInstanceOf(MarkdownAssemblyStrategy);
-    });
-
-    it("returns MarkdownAssemblyStrategy for HTML MIME types", () => {
-      const strategy1 = createContentAssemblyStrategy("text/html", config);
-      const strategy2 = createContentAssemblyStrategy("application/xhtml+xml", config);
-      expect(strategy1).toBeInstanceOf(MarkdownAssemblyStrategy);
-      expect(strategy2).toBeInstanceOf(MarkdownAssemblyStrategy);
-    });
-
-    it("returns MarkdownAssemblyStrategy for plain text MIME types", () => {
-      const strategy = createContentAssemblyStrategy("text/plain", config);
-      expect(strategy).toBeInstanceOf(MarkdownAssemblyStrategy);
-    });
-
-    it("returns HierarchicalAssemblyStrategy for source code MIME types", () => {
-      const strategy1 = createContentAssemblyStrategy("text/x-typescript", config);
-      const strategy2 = createContentAssemblyStrategy("text/javascript", config);
-      const strategy3 = createContentAssemblyStrategy("text/x-python", config);
-
-      expect(strategy1).toBeInstanceOf(HierarchicalAssemblyStrategy);
-      expect(strategy2).toBeInstanceOf(HierarchicalAssemblyStrategy);
-      expect(strategy3).toBeInstanceOf(HierarchicalAssemblyStrategy);
-    });
-
-    it("returns HierarchicalAssemblyStrategy for JSON MIME types", () => {
-      const strategy1 = createContentAssemblyStrategy("application/json", config);
-      const strategy2 = createContentAssemblyStrategy("text/json", config);
-
-      expect(strategy1).toBeInstanceOf(HierarchicalAssemblyStrategy);
-      expect(strategy2).toBeInstanceOf(HierarchicalAssemblyStrategy);
-    });
-
-    it("returns MarkdownAssemblyStrategy for unknown MIME types", () => {
-      const strategy = createContentAssemblyStrategy("application/octet-stream", config);
-      expect(strategy).toBeInstanceOf(MarkdownAssemblyStrategy);
-    });
+    for (const [mimeType, expected] of cases) {
+      expect
+        .soft(createContentAssemblyStrategy(mimeType, config), String(mimeType))
+        .toBeInstanceOf(expected);
+    }
   });
 });
