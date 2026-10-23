@@ -1,494 +1,193 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { JsonDocumentSplitter } from "../../../splitter/JsonDocumentSplitter";
+import { TreesitterSourceCodeSplitter } from "../../../splitter/treesitter/TreesitterSourceCodeSplitter";
 import type { Chunk } from "../../../splitter/types";
 import { type AppConfig, loadConfig } from "../../../utils/config";
 import { DocumentStore } from "../../DocumentStore";
 import type { DbPageChunk } from "../../types";
 import { HierarchicalAssemblyStrategy } from "./HierarchicalAssemblyStrategy";
 
+const LIBRARY = "hierarchical-lib";
+const VERSION = "1.0.0";
+
+/** Collapses whitespace, so expectations do not depend on which chunk carries a line break. */
+function squash(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/** Builds a source code chunk for a layout the splitter only produces for large files. */
+function chunk(content: string, path: string[], structural = false): Chunk {
+  return {
+    content,
+    section: { path, level: path.length },
+    types: structural ? ["code", "structural"] : ["code"],
+  };
+}
+
+/**
+ * Integration tests for selecting the chunks around matches in source code and JSON,
+ * run on real splitter output in a real in-memory store.
+ */
 describe("HierarchicalAssemblyStrategy", () => {
+  let config: AppConfig;
+  let store: DocumentStore;
   let strategy: HierarchicalAssemblyStrategy;
-  let documentStore: DocumentStore;
-  let appConfig: AppConfig;
 
   beforeEach(async () => {
-    appConfig = loadConfig();
-
-    // Disable embeddings for this strategy test
-    appConfig.app.embeddingModel = "";
-
-    // Use real DocumentStore initialization but disable embeddings (pass null)
-    documentStore = new DocumentStore(":memory:", appConfig);
-    await documentStore.initialize();
-    strategy = new HierarchicalAssemblyStrategy(appConfig);
+    config = loadConfig();
+    config.app.embeddingModel = ""; // FTS-only: no external credentials required
+    store = new DocumentStore(":memory:", config);
+    await store.initialize();
+    strategy = new HierarchicalAssemblyStrategy(config);
   });
 
   afterEach(async () => {
-    if (documentStore) {
-      await documentStore.shutdown();
+    await store.shutdown();
+  });
+
+  /** Stores one page of chunks and returns them as stored, in document order. */
+  async function storePage(
+    url: string,
+    contentType: string,
+    chunks: Chunk[],
+  ): Promise<DbPageChunk[]> {
+    await store.addDocuments(LIBRARY, VERSION, 0, {
+      url,
+      title: url,
+      sourceContentType: contentType,
+      contentType,
+      textContent: "",
+      chunks,
+      links: [],
+      errors: [],
+    });
+    return store.findChunksByUrl(LIBRARY, VERSION, url);
+  }
+
+  /** Returns the text reassembled around the chunks that contain the given texts. */
+  async function assemble(chunks: DbPageChunk[], texts: string[]): Promise<string> {
+    const matches = texts.map((text) => {
+      const match = chunks.find((stored) => stored.content.includes(text));
+      if (!match) throw new Error(`No chunk contains ${text}`);
+      return match;
+    });
+    const result = await strategy.selectChunks(LIBRARY, VERSION, matches, store);
+    return squash(strategy.assembleContent(result));
+  }
+
+  it("rebuilds the structures around matches in source code", async () => {
+    const source = `export namespace Accounts {
+  export class First {
+    a() {}
+  }
+
+  console.log("between");
+
+  export class UserService {
+    getUser() {}
+    createUser() {}
+    private cache = new Map();
+    deleteUser() {}
+  }
+
+  export const other = 1;
+}
+
+export function migrate() {}
+
+console.log("done");
+`;
+    const splitter = new TreesitterSourceCodeSplitter(config.splitter);
+    const chunks = await storePage(
+      "Accounts.ts",
+      "text/typescript",
+      await splitter.splitText(source, "text/typescript"),
+    );
+    const userService =
+      "export namespace Accounts { export class UserService { getUser() {} createUser() {} private cache = new Map(); deleteUser() {} } }";
+
+    const cases: [label: string, matches: string[], expected: string][] = [
+      // The field between the methods carries the class path, and the statement
+      // and class before it share the namespace path; neither may hide the class
+      [
+        "a method brings its whole class and the namespace boundaries",
+        ["deleteUser"],
+        userService,
+      ],
+      ["a class declaration brings the same class", ["class UserService"], userService],
+      ["code at the page root comes back alone", ['"done"'], 'console.log("done");'],
+      [
+        "several matches in a class leave out its other methods",
+        ["getUser", "deleteUser"],
+        "export namespace Accounts { export class UserService { getUser() {} private cache = new Map(); deleteUser() {} } }",
+      ],
+      [
+        "matches without a common path each keep their own scopes",
+        ["a() {}", '"done"'],
+        'export namespace Accounts { export class First { a() {} } } console.log("done");',
+      ],
+    ];
+
+    for (const [label, matches, expected] of cases) {
+      expect.soft(await assemble(chunks, matches), label).toBe(expected);
     }
   });
 
-  describe("selectChunks", () => {
-    it("should reconstruct complete hierarchy for single match", async () => {
-      // Use the public API to add documents
-      await documentStore.addDocuments("test-hierarchy", "1.0", 0, {
-        url: "Deep.ts",
-        title: "Deep TypeScript File",
-        sourceContentType: "text/typescript",
-        contentType: "text/typescript",
-        textContent: "",
-        chunks: [
-          {
-            content: "namespace UserManagement {",
-            section: {
-              path: ["UserManagement"],
-              level: 0,
-            },
-            types: ["structural"],
-          },
-          {
-            content: "  export class UserService {",
-            section: {
-              path: ["UserManagement", "UserService"],
-              level: 1,
-            },
-            types: ["structural"],
-          },
-          {
-            content: "    getUserById(id: string) { return db.find(id); }",
-            section: {
-              path: ["UserManagement", "UserService", "getUserById"],
-              level: 2,
-            },
-            types: ["text"],
-          },
-        ],
-        links: [],
-        errors: [],
-      });
-
-      // Query the database to get the actual document IDs
-      const allChunks = await documentStore.findChunksByUrl(
-        "test-hierarchy",
-        "1.0",
-        "Deep.ts",
-      );
-      expect(allChunks.length).toBe(3);
-
-      const namespaceId = allChunks[0].id;
-      const classId = allChunks[1].id;
-      const methodId = allChunks[2].id;
-
-      // Input: just the deeply nested method
-      const inputDoc = allChunks[2];
-
-      const result = await strategy.selectChunks(
-        "test-hierarchy",
-        "1.0",
-        [inputDoc],
-        documentStore,
-      );
-
-      const resultContent = result.map((doc) => doc.content);
-      const resultIds = result.map((doc) => doc.id);
-
-      // Should include the complete hierarchy: method + class + namespace
-      expect(resultContent).toContain(
-        "    getUserById(id: string) { return db.find(id); }",
-      );
-      expect(resultContent).toContain("  export class UserService {");
-      expect(resultContent).toContain("namespace UserManagement {");
-
-      expect(resultIds).toContain(methodId);
-      expect(resultIds).toContain(classId);
-      expect(resultIds).toContain(namespaceId);
-
-      expect(result.length).toBeGreaterThanOrEqual(3);
+  it("rebuilds the object or array around matches in JSON instead of the whole document", async () => {
+    const document = {
+      name: "demo",
+      server: { host: "localhost", timeout: 30 },
+      users: [{ name: "Alice" }],
+      target: {},
+      list: [],
+    };
+    const splitter = new JsonDocumentSplitter(config.splitter, {
+      preserveFormatting: true,
     });
+    const chunks = await storePage(
+      "config.json",
+      "application/json",
+      await splitter.splitText(JSON.stringify(document, null, 2)),
+    );
+    const server = '{ "server": { "host": "localhost", "timeout": 30 },}';
 
-    describe("matches in splitter output", () => {
-      /** Builds a chunk the way the source code splitter emits it. */
-      function chunk(content: string, path: string[], structural = false): Chunk {
-        return {
-          content,
-          section: { path, level: path.length },
-          types: structural ? ["code", "structural"] : ["code"],
-        };
-      }
+    // A comma that separated the selection from a left-out sibling stays in place
+    const cases: [label: string, match: string, expected: string][] = [
+      ["a value brings the object that contains it", '"timeout"', server],
+      ["a key brings the object it opens", '"server"', server],
+      ["a key brings an empty object", '"target"', '{ "target": { },}'],
+      ["a key brings an empty array", '"list"', '{ "list": [ ]}'],
+    ];
 
-      /** Stores one page of chunks and returns them as stored, in document order. */
-      async function storePage(
-        url: string,
-        contentType: string,
-        chunks: Chunk[],
-      ): Promise<DbPageChunk[]> {
-        await documentStore.addDocuments("test-single", "1.0", 0, {
-          url,
-          title: url,
-          sourceContentType: contentType,
-          contentType,
-          textContent: "",
-          chunks,
-          links: [],
-          errors: [],
-        });
-        return documentStore.findChunksByUrl("test-single", "1.0", url);
-      }
+    for (const [label, match, expected] of cases) {
+      expect.soft(await assemble(chunks, [match]), label).toBe(expected);
+    }
+  });
 
-      /** Returns the text reassembled for the given matches. */
-      async function assemble(...matches: DbPageChunk[]): Promise<string> {
-        const result = await strategy.selectChunks(
-          "test-single",
-          "1.0",
-          matches,
-          documentStore,
-        );
-        return strategy.assembleContent(result);
-      }
+  it("skips a level that has no chunk of its own", async () => {
+    const chunks = await storePage("Gap.ts", "text/typescript", [
+      chunk("namespace UserManagement {\n", ["UserManagement"], true),
+      // No chunk carries ["UserManagement", "UserService"]
+      chunk("  getUserById() {}\n", ["UserManagement", "UserService", "getUserById"]),
+      chunk("}\n", ["UserManagement"]),
+    ]);
 
-      it("returns the enclosing class with all its methods for a hit inside one method", async () => {
-        const chunks = await storePage("UserService.ts", "text/typescript", [
-          chunk("export class UserService {\n", ["UserService"], true),
-          chunk("  getUser(id: string) {\n    return db.find(id);\n  }\n", [
-            "UserService",
-            "getUser",
-          ]),
-          chunk("  deleteUser(id: string) {\n    return db.delete(id);\n  }\n", [
-            "UserService",
-            "deleteUser",
-          ]),
-          chunk("}\n", ["UserService"]),
-          chunk("export function helper() {\n  return 1;\n}\n", ["helper"]),
-        ]);
+    expect(await assemble(chunks, ["getUserById"])).toBe(
+      "namespace UserManagement { getUserById() {} }",
+    );
+  });
 
-        expect(await assemble(chunks[2])).toBe(
-          "export class UserService {\n" +
-            "  getUser(id: string) {\n    return db.find(id);\n  }\n" +
-            "  deleteUser(id: string) {\n    return db.delete(id);\n  }\n" +
-            "}\n",
-        );
-      });
+  it("promotes a match with no structural ancestor to its top-level element", async () => {
+    // How the splitter breaks up a top-level function too large for one chunk
+    const chunks = await storePage("migrate.ts", "text/typescript", [
+      chunk("export function applyMigrations() {\n", ["applyMigrations"]),
+      chunk("  run(() => migrate());\n", ["applyMigrations", "<anonymous_arrow>"]),
+      chunk("}\n", ["applyMigrations"]),
+      chunk("export const after = 1;\n", ["after"]),
+    ]);
 
-      it.each([
-        ["inside a method", 2],
-        ["on the class declaration", 1],
-      ])(
-        "returns a namespaced class and the namespace boundaries for a match %s",
-        async (_where, index) => {
-          const chunks = await storePage("Accounts.ts", "text/typescript", [
-            chunk("export namespace Accounts {\n", ["Accounts"], true),
-            chunk("  export class UserService {\n", ["Accounts", "UserService"], true),
-            chunk("    getUser(id: string) {\n      return id;\n    }\n", [
-              "Accounts",
-              "UserService",
-              "getUser",
-            ]),
-            chunk("  }\n", ["Accounts", "UserService"]),
-            chunk("  export const limit = 5;\n", ["Accounts", "limit"]),
-            chunk("}\n", ["Accounts"]),
-            chunk("const after = 1;\n", ["after"]),
-          ]);
-
-          expect(await assemble(chunks[index])).toBe(
-            "export namespace Accounts {\n" +
-              "  export class UserService {\n" +
-              "    getUser(id: string) {\n      return id;\n    }\n" +
-              "  }\n" +
-              "}\n",
-          );
-        },
-      );
-
-      it("finds the class around a match when a field sits between its methods", async () => {
-        const chunks = await storePage("Accounts.ts", "text/typescript", [
-          chunk("export namespace Accounts {\n", ["Accounts"], true),
-          chunk("  export class UserService {\n", ["Accounts", "UserService"], true),
-          chunk("    getUser() {}\n", ["Accounts", "UserService", "getUser"]),
-          chunk("    private cache = new Map();\n", ["Accounts", "UserService"]),
-          chunk("    deleteUser() {}\n", ["Accounts", "UserService", "deleteUser"]),
-          chunk("  }\n", ["Accounts", "UserService"]),
-          chunk("  export const other = 1;\n", ["Accounts", "other"]),
-          chunk("}\n", ["Accounts"]),
-        ]);
-
-        expect(await assemble(chunks[4])).toBe(
-          "export namespace Accounts {\n" +
-            "  export class UserService {\n" +
-            "    getUser() {}\n" +
-            "    private cache = new Map();\n" +
-            "    deleteUser() {}\n" +
-            "  }\n" +
-            "}\n",
-        );
-      });
-
-      it("opens an enclosing scope at its declaration, skipping the members before the match", async () => {
-        const chunks = await storePage("Accounts.ts", "text/typescript", [
-          chunk("export namespace Accounts {\n", ["Accounts"], true),
-          chunk("  export class First {\n", ["Accounts", "First"], true),
-          chunk("    a() { return 1; }\n", ["Accounts", "First", "a"]),
-          chunk("  }\n", ["Accounts", "First"]),
-          chunk('  console.log("between");\n', ["Accounts"]),
-          chunk("  export class Second {\n", ["Accounts", "Second"], true),
-          chunk("    b() { return 2; }\n", ["Accounts", "Second", "b"]),
-          chunk("  }\n", ["Accounts", "Second"]),
-          chunk("}\n", ["Accounts"]),
-        ]);
-
-        expect(await assemble(chunks[6])).toBe(
-          "export namespace Accounts {\n" +
-            "  export class Second {\n" +
-            "    b() { return 2; }\n" +
-            "  }\n" +
-            "}\n",
-        );
-      });
-
-      it("returns only the matched chunk for a hit in global code", async () => {
-        const chunks = await storePage("main.ts", "text/typescript", [
-          chunk("console.log(start);\n", []),
-          chunk("export class Worker {\n", ["Worker"], true),
-          chunk("  run() {}\n", ["Worker", "run"]),
-          chunk("}\n", ["Worker"]),
-        ]);
-
-        expect(await assemble(chunks[0])).toBe("console.log(start);\n");
-      });
-
-      it("closes every scope around several matches in one class", async () => {
-        const chunks = await storePage("Accounts.ts", "text/typescript", [
-          chunk("export namespace Accounts {\n", ["Accounts"], true),
-          chunk("  export class UserService {\n", ["Accounts", "UserService"], true),
-          chunk("    getUser() {}\n", ["Accounts", "UserService", "getUser"]),
-          chunk("    createUser() {}\n", ["Accounts", "UserService", "createUser"]),
-          chunk("    deleteUser() {}\n", ["Accounts", "UserService", "deleteUser"]),
-          chunk("  }\n", ["Accounts", "UserService"]),
-          chunk("  export const limit = 5;\n", ["Accounts", "limit"]),
-          chunk("}\n", ["Accounts"]),
-        ]);
-
-        expect(await assemble(chunks[2], chunks[4])).toBe(
-          "export namespace Accounts {\n" +
-            "  export class UserService {\n" +
-            "    getUser() {}\n" +
-            "    deleteUser() {}\n" +
-            "  }\n" +
-            "}\n",
-        );
-      });
-
-      it("closes each match's own scopes when the matches share no path", async () => {
-        const chunks = await storePage("services.ts", "text/typescript", [
-          chunk("class First {\n", ["First"], true),
-          chunk("  a() {}\n", ["First", "a"]),
-          chunk("  b() {}\n", ["First", "b"]),
-          chunk("}\n", ["First"]),
-          chunk("function helper() {}\n", ["helper"]),
-          chunk("class Second {\n", ["Second"], true),
-          chunk("  c() {}\n", ["Second", "c"]),
-          chunk("  d() {}\n", ["Second", "d"]),
-          chunk("}\n", ["Second"]),
-        ]);
-
-        expect(await assemble(chunks[2], chunks[6])).toBe(
-          "class First {\n" +
-            "  b() {}\n" +
-            "}\n" +
-            "class Second {\n" +
-            "  c() {}\n" +
-            "}\n",
-        );
-      });
-
-      describe("JSON", () => {
-        /** Stores a document as the JSON splitter chunks it and returns the chunk holding `text`. */
-        async function storeJsonAndFind(
-          document: object,
-          text: string,
-        ): Promise<DbPageChunk> {
-          const splitter = new JsonDocumentSplitter(appConfig.splitter, {
-            preserveFormatting: true,
-          });
-          const chunks = await storePage(
-            "config.json",
-            "application/json",
-            await splitter.splitText(JSON.stringify(document, null, 2)),
-          );
-          const match = chunks.find((stored) => stored.content.includes(text));
-          if (!match) throw new Error(`No chunk contains ${text}`);
-          return match;
-        }
-
-        it.each([
-          ["a value inside it", '"timeout"'],
-          ["its key", '"server"'],
-        ])(
-          "returns the object for a match on %s instead of the whole document",
-          async (_what, text) => {
-            const match = await storeJsonAndFind(
-              {
-                name: "demo",
-                server: { host: "localhost", timeout: 30 },
-                users: [{ name: "Alice" }],
-              },
-              text,
-            );
-
-            const assembled = await assemble(match);
-            expect(assembled).toContain('"server": ');
-            expect(assembled).toContain('"host": "localhost"');
-            expect(assembled).toContain('"timeout": 30');
-            expect(assembled).not.toContain("demo");
-            expect(assembled).not.toContain("Alice");
-          },
-        );
-
-        it.each([
-          ["object", {}],
-          ["array", []],
-        ])("returns an empty %s a matched key opens", async (_kind, empty) => {
-          const match = await storeJsonAndFind(
-            { name: "unrelated", target: empty, other: 1 },
-            '"target"',
-          );
-
-          const assembled = await assemble(match);
-          expect(assembled).toContain('"target": ');
-          expect(assembled).not.toContain("unrelated");
-          expect(assembled).not.toContain("other");
-        });
-      });
-    });
-
-    it("should handle hierarchical gaps in parent chain", async () => {
-      // Use the public API to add documents with a gap in the hierarchy
-      await documentStore.addDocuments("test-gaps", "1.0", 0, {
-        url: "GapTest.ts",
-        title: "Gap Test TypeScript File",
-        sourceContentType: "text/typescript",
-        contentType: "text/typescript",
-        textContent: "",
-        chunks: [
-          {
-            content: "namespace UserManagement {",
-            section: {
-              path: ["UserManagement"],
-              level: 0,
-            },
-            types: ["structural"],
-          },
-          // Intermediate class is missing (gap in hierarchy)
-          // No chunk with path: ["UserManagement", "UserService"]
-          {
-            content: "    getUserById(id: string) { return db.find(id); }",
-            section: {
-              path: ["UserManagement", "UserService", "getUserById"],
-              level: 2,
-            },
-            types: ["text"],
-          },
-        ],
-        links: [],
-        errors: [],
-      });
-
-      // Query the database to get the actual document IDs
-      const allChunks = await documentStore.findChunksByUrl(
-        "test-gaps",
-        "1.0",
-        "GapTest.ts",
-      );
-      expect(allChunks.length).toBe(2);
-
-      const namespaceId = allChunks[0].id;
-      const methodId = allChunks[1].id;
-
-      // Input: just the deeply nested method (with missing intermediate parent)
-      const inputDoc = allChunks[1];
-
-      const result = await strategy.selectChunks(
-        "test-gaps",
-        "1.0",
-        [inputDoc],
-        documentStore,
-      );
-
-      const resultContent = result.map((doc) => doc.content);
-      const resultIds = result.map((doc) => doc.id);
-
-      // Should include the matched method and find the root namespace despite the gap
-      expect(resultContent).toContain(
-        "    getUserById(id: string) { return db.find(id); }",
-      );
-      expect(resultContent).toContain("namespace UserManagement {");
-      expect(resultIds).toContain(methodId);
-      expect(resultIds).toContain(namespaceId);
-      expect(result.length).toBeGreaterThanOrEqual(2);
-    });
-
-    it("should promote deeply nested anonymous functions to their top-level container", async () => {
-      // Use the public API to add documents with nested anonymous function
-      await documentStore.addDocuments("test-promotion", "1.0", 0, {
-        url: "applyMigrations.ts",
-        title: "Apply Migrations TypeScript File",
-        sourceContentType: "text/typescript",
-        contentType: "text/typescript",
-        textContent: "",
-        chunks: [
-          {
-            content:
-              "export async function applyMigrations(db: Database): Promise<void> {\n  const overallTransaction = db.transaction(() => {\n    console.log('migrating');\n  });\n}",
-            section: {
-              path: ["applyMigrations"],
-              level: 1,
-            },
-            types: ["code"],
-          },
-          {
-            content: "    console.log('migrating');",
-            section: {
-              path: ["applyMigrations", "<anonymous_arrow>"],
-              level: 2,
-            },
-            types: ["code"],
-          },
-        ],
-        links: [],
-        errors: [],
-      });
-
-      // Query the database to get the actual document IDs
-      const allChunks = await documentStore.findChunksByUrl(
-        "test-promotion",
-        "1.0",
-        "applyMigrations.ts",
-      );
-      expect(allChunks.length).toBe(2);
-
-      const topFunctionId = allChunks[0].id;
-      const nestedArrowId = allChunks[1].id;
-
-      // Input: search hit on the nested anonymous arrow function
-      const inputDoc = allChunks[1];
-
-      const result = await strategy.selectChunks(
-        "test-promotion",
-        "1.0",
-        [inputDoc],
-        documentStore,
-      );
-
-      const _resultContent = result.map((doc) => doc.content);
-      const resultIds = result.map((doc) => doc.id);
-
-      // Should promote to include the entire top-level function that contains the anonymous function
-      expect(resultIds).toContain(topFunctionId);
-      expect(resultIds).toContain(nestedArrowId);
-
-      const assembled = strategy.assembleContent(result);
-      expect(assembled).toMatch(/applyMigrations/);
-      expect(assembled).toMatch(/migrating/);
-    });
+    expect(await assemble(chunks, ["migrate()"])).toBe(
+      "export function applyMigrations() { run(() => migrate()); }",
+    );
   });
 });
