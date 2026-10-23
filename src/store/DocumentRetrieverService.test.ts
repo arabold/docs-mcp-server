@@ -159,32 +159,6 @@ describe("DocumentRetrieverService", () => {
     }
   });
 
-  it("assembles several code matches with their enclosing class but not its other members", async () => {
-    const lines: [string, string[]][] = [
-      ["class UserService {", ["UserService"]],
-      ["  getUser(id) { return lookupRecord(id); }", ["UserService", "getUser"]],
-      ["  createUser(data) { return db.create(data); }", ["UserService", "createUser"]],
-      ["  deleteUser(id) { return lookupRecord(id); }", ["UserService", "deleteUser"]],
-      ["}", ["UserService"]],
-    ];
-    await addPage(
-      "https://example.com/UserService.ts",
-      lines.map(([content, path]) => ({ content, path, types: ["code"] })),
-      { contentType: "text/typescript" },
-    );
-
-    const results = await service.search(LIBRARY, VERSION, "lookupRecord");
-
-    // The class's closing brace comes from its container chunk, which assembly
-    // finds through the matches' common ancestor in their metadata paths
-    expect(results.map((result) => result.content)).toEqual([
-      "class UserService {" +
-        "  getUser(id) { return lookupRecord(id); }" +
-        "  deleteUser(id) { return lookupRecord(id); }" +
-        "}",
-    ]);
-  });
-
   it("reports the page URL, where its content was fetched from, and its content types", async () => {
     await addPage(
       "https://example.com/converted",

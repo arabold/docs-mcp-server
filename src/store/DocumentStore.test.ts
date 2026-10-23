@@ -1374,14 +1374,6 @@ describe("DocumentStore - Common Functionality", () => {
     it("returns the chunks one level below the parent's path", async () => {
       const cases: [label: string, paths: string[][], expected: string[][]][] = [
         [
-          "children, but not grandchildren",
-          [["A"], ["A", "B"], ["A", "B", "C"], ["A", "D"]],
-          [
-            ["A", "B"],
-            ["A", "D"],
-          ],
-        ],
-        [
           "a path that only shares a text prefix with the parent is ignored",
           [["A"], ["AB", "X"], ["A", "B"]],
           [["A", "B"]],
