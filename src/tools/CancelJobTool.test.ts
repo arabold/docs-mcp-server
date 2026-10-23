@@ -65,75 +65,67 @@ describe("CancelJobTool", () => {
     cancelJobTool = new CancelJobTool(mockManagerInstance as PipelineManager);
   });
 
-  it("should call manager.getJob with the provided jobId", async () => {
-    await cancelJobTool.execute({ jobId: MOCK_JOB_ID_QUEUED });
-    expect(mockManagerInstance.getJob).toHaveBeenCalledWith(MOCK_JOB_ID_QUEUED);
-  });
-
   it("should throw ToolError if job is not found", async () => {
     await expect(cancelJobTool.execute({ jobId: MOCK_JOB_ID_NOT_FOUND })).rejects.toThrow(
-      ToolError,
+      new ToolError(
+        `Failed to cancel job ${MOCK_JOB_ID_NOT_FOUND}: Job with ID ${MOCK_JOB_ID_NOT_FOUND} not found.`,
+        "CancelJobTool",
+      ),
     );
-    await expect(cancelJobTool.execute({ jobId: MOCK_JOB_ID_NOT_FOUND })).rejects.toThrow(
-      "not found",
-    );
-    expect(mockManagerInstance.getJob).toHaveBeenCalledWith(MOCK_JOB_ID_NOT_FOUND);
     expect(mockManagerInstance.cancelJob).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { id: MOCK_JOB_ID_COMPLETED, status: PipelineJobStatus.COMPLETED },
-    { id: MOCK_JOB_ID_FAILED, status: PipelineJobStatus.FAILED },
-    { id: MOCK_JOB_ID_CANCELLED, status: PipelineJobStatus.CANCELLED },
-  ])(
-    "should return success data and not call cancelJob if job is already $status",
-    async ({ id, status }) => {
-      const result = await cancelJobTool.execute({ jobId: id });
-      expect(mockManagerInstance.getJob).toHaveBeenCalledWith(id);
-      expect(mockManagerInstance.cancelJob).not.toHaveBeenCalled();
-      expect(result.message).toContain(`already ${status}`);
-      expect(result.finalStatus).toBe(status);
-    },
-  );
+  it("leaves a job that has already ended alone and reports its status", async () => {
+    const ended = [
+      { id: MOCK_JOB_ID_COMPLETED, status: PipelineJobStatus.COMPLETED },
+      { id: MOCK_JOB_ID_FAILED, status: PipelineJobStatus.FAILED },
+      { id: MOCK_JOB_ID_CANCELLED, status: PipelineJobStatus.CANCELLED },
+    ];
 
-  it.each([
-    { id: MOCK_JOB_ID_QUEUED, status: PipelineJobStatus.QUEUED },
-    { id: MOCK_JOB_ID_RUNNING, status: PipelineJobStatus.RUNNING },
-  ])(
-    "should call cancelJob and return success data if job is $status",
-    async ({ id }) => {
-      // Mock getJob to return the job again after cancellation attempt for status check
+    for (const { id, status } of ended) {
+      const result = await cancelJobTool.execute({ jobId: id });
+      expect.soft(result, status).toEqual({
+        message: `Job ${id} is already ${status}. No action taken.`,
+        finalStatus: status,
+      });
+    }
+    expect(mockManagerInstance.cancelJob).not.toHaveBeenCalled();
+  });
+
+  it("cancels a queued or running job and reports the status it moved to", async () => {
+    const active = [
+      { id: MOCK_JOB_ID_QUEUED, status: PipelineJobStatus.QUEUED },
+      { id: MOCK_JOB_ID_RUNNING, status: PipelineJobStatus.RUNNING },
+    ];
+
+    for (const { id, status } of active) {
       (mockManagerInstance.getJob as Mock)
-        .mockResolvedValueOnce(mockJobsMap.get(id)) // First call finds the job
+        .mockResolvedValueOnce(mockJobsMap.get(id)) // Found before cancelling
         .mockResolvedValueOnce({
           ...mockJobsMap.get(id),
           status: PipelineJobStatus.CANCELLING,
-        }); // Second call shows cancelling status
+        });
 
       const result = await cancelJobTool.execute({ jobId: id });
 
-      expect(mockManagerInstance.getJob).toHaveBeenCalledWith(id);
-      expect(mockManagerInstance.cancelJob).toHaveBeenCalledWith(id);
-      expect(result.message).toContain("Cancellation requested");
-      expect(result.message).toContain(PipelineJobStatus.CANCELLING); // Check updated status in message
-      expect(result.finalStatus).toBe(PipelineJobStatus.CANCELLING);
-    },
-  );
+      expect.soft(mockManagerInstance.cancelJob, status).toHaveBeenLastCalledWith(id);
+      expect.soft(result, status).toEqual({
+        message: `Cancellation requested for job ${id}. Current status: ${PipelineJobStatus.CANCELLING}.`,
+        finalStatus: PipelineJobStatus.CANCELLING,
+      });
+    }
+  });
 
   it("should throw ToolError if cancelJob throws an error", async () => {
-    const cancelError = new Error("Cancellation failed");
-    (mockManagerInstance.cancelJob as Mock).mockRejectedValue(cancelError);
+    (mockManagerInstance.cancelJob as Mock).mockRejectedValue(
+      new Error("Cancellation failed"),
+    );
 
     await expect(cancelJobTool.execute({ jobId: MOCK_JOB_ID_RUNNING })).rejects.toThrow(
-      ToolError,
+      new ToolError(
+        `Failed to cancel job ${MOCK_JOB_ID_RUNNING}: Cancellation failed`,
+        "CancelJobTool",
+      ),
     );
-    await expect(cancelJobTool.execute({ jobId: MOCK_JOB_ID_RUNNING })).rejects.toThrow(
-      "Failed to cancel job",
-    );
-    await expect(cancelJobTool.execute({ jobId: MOCK_JOB_ID_RUNNING })).rejects.toThrow(
-      cancelError.message,
-    );
-    expect(mockManagerInstance.getJob).toHaveBeenCalledWith(MOCK_JOB_ID_RUNNING);
-    expect(mockManagerInstance.cancelJob).toHaveBeenCalledWith(MOCK_JOB_ID_RUNNING);
   });
 });

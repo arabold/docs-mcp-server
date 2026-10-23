@@ -85,16 +85,22 @@ async function signToken(
   return jwt.sign(keys.privateKey);
 }
 
-async function expectRejection(promise: Promise<unknown>, code: OAuthErrorCode) {
+async function expectRejection(
+  promise: Promise<unknown>,
+  code: OAuthErrorCode,
+  label = String(code),
+) {
   const error = await promise.then(
     () => undefined,
     (reason: unknown) => reason,
   );
-  expect(error).toBeInstanceOf(OAuthError);
-  expect((error as OAuthError).code).toBe(code);
+  expect.soft(error, label).toBeInstanceOf(OAuthError);
+  expect.soft((error as OAuthError | undefined)?.code, label).toBe(code);
   if (code === OAuthErrorCode.InvalidToken) {
     // Every rejection reads the same, so the client learns nothing about why.
-    expect((error as OAuthError).message).toBe(INVALID_TOKEN_DESCRIPTION);
+    expect
+      .soft((error as OAuthError | undefined)?.message, label)
+      .toBe(INVALID_TOKEN_DESCRIPTION);
   }
 }
 
@@ -116,29 +122,34 @@ async function issuerWithVerifier() {
 }
 
 describe("authorizationServerMetadataUrls", () => {
-  it("tries RFC 8414 then OIDC for an issuer without a path", () => {
-    expect(authorizationServerMetadataUrls("https://auth.example.com")).toEqual([
-      "https://auth.example.com/.well-known/oauth-authorization-server",
-      "https://auth.example.com/.well-known/openid-configuration",
-    ]);
-  });
+  it("looks where the SDK's MCP clients look: RFC 8414, then OIDC, with the path inserted then appended", () => {
+    const cases = [
+      {
+        issuer: "https://auth.example.com",
+        urls: [
+          "https://auth.example.com/.well-known/oauth-authorization-server",
+          "https://auth.example.com/.well-known/openid-configuration",
+        ],
+      },
+      {
+        issuer: "https://auth.example.com/tenant1",
+        urls: [
+          "https://auth.example.com/.well-known/oauth-authorization-server/tenant1",
+          "https://auth.example.com/.well-known/openid-configuration/tenant1",
+          "https://auth.example.com/tenant1/.well-known/openid-configuration",
+        ],
+      },
+    ];
 
-  it("inserts, then appends, the path for an issuer with a path", () => {
-    expect(authorizationServerMetadataUrls("https://auth.example.com/tenant1")).toEqual([
-      "https://auth.example.com/.well-known/oauth-authorization-server/tenant1",
-      "https://auth.example.com/.well-known/openid-configuration/tenant1",
-      "https://auth.example.com/tenant1/.well-known/openid-configuration",
-    ]);
-  });
+    for (const { issuer, urls } of cases) {
+      const actual = authorizationServerMetadataUrls(issuer);
 
-  it.each(["https://auth.example.com", "https://auth.example.com/tenant1"])(
-    "looks where the SDK's MCP clients look for %s",
-    (issuer) => {
-      expect(authorizationServerMetadataUrls(issuer)).toEqual(
-        buildDiscoveryUrls(issuer).map(({ url }) => url.href),
-      );
-    },
-  );
+      expect.soft(actual, issuer).toEqual(urls);
+      expect
+        .soft(actual, `${issuer} vs the SDK`)
+        .toEqual(buildDiscoveryUrls(issuer).map(({ url }) => url.href));
+    }
+  });
 });
 
 describe("JwtAccessTokenVerifier.create", () => {
@@ -170,34 +181,45 @@ describe("JwtAccessTokenVerifier.create", () => {
     ).resolves.toBeInstanceOf(JwtAccessTokenVerifier);
   });
 
-  it("fails when the configured issuer differs from the published one", async () => {
-    const issuer = await startIssuer({});
-    closers.push(issuer.close);
+  it("fails when the issuer's metadata cannot be used", async () => {
+    const cases: Array<{
+      label: string;
+      options: Parameters<typeof startIssuer>[0];
+      issuerUrl?: (issuer: string) => string;
+      error: RegExp;
+    }> = [
+      {
+        label: "the configured issuer differs from the published one",
+        options: {},
+        issuerUrl: (issuer) => `${issuer}/`,
+        error: /does not match the issuer the authorization server publishes/,
+      },
+      {
+        label: "the metadata has no jwks_uri",
+        options: { jwksUri: () => undefined },
+        error: /no jwks_uri/,
+      },
+      {
+        label: "no metadata document answers",
+        options: { metadataPaths: () => [] },
+        error: /Could not discover authorization server metadata/,
+      },
+    ];
 
-    await expect(
-      JwtAccessTokenVerifier.create({
-        issuerUrl: `${issuer.issuer}/`,
-        audience: AUDIENCE,
-      }),
-    ).rejects.toThrow(/does not match the issuer the authorization server publishes/);
-  });
+    for (const { label, options, issuerUrl, error } of cases) {
+      const issuer = await startIssuer(options);
+      closers.push(issuer.close);
 
-  it("fails when the metadata has no jwks_uri", async () => {
-    const issuer = await startIssuer({ jwksUri: () => undefined });
-    closers.push(issuer.close);
-
-    await expect(
-      JwtAccessTokenVerifier.create({ issuerUrl: issuer.issuer, audience: AUDIENCE }),
-    ).rejects.toThrow(/no jwks_uri/);
-  });
-
-  it("fails when no metadata document answers", async () => {
-    const issuer = await startIssuer({ metadataPaths: () => [] });
-    closers.push(issuer.close);
-
-    await expect(
-      JwtAccessTokenVerifier.create({ issuerUrl: issuer.issuer, audience: AUDIENCE }),
-    ).rejects.toThrow(/Could not discover authorization server metadata/);
+      await expect
+        .soft(
+          JwtAccessTokenVerifier.create({
+            issuerUrl: issuerUrl ? issuerUrl(issuer.issuer) : issuer.issuer,
+            audience: AUDIENCE,
+          }),
+          label,
+        )
+        .rejects.toThrow(error);
+    }
   });
 });
 
@@ -216,70 +238,41 @@ describe("JwtAccessTokenVerifier.verifyAccessToken", () => {
     expect(info.expiresAt).toBeGreaterThan(Date.now() / 1000);
   });
 
-  it("rejects a token issued for another resource", async () => {
+  it("rejects every bad token the same way", async () => {
     const { issuer, verifier } = await issuerWithVerifier();
+    const cases: Array<{ label: string; token: () => Promise<string> }> = [
+      {
+        label: "issued for another resource",
+        token: () => signToken({ iss: issuer, aud: "https://other.example/mcp" }),
+      },
+      { label: "without an audience", token: () => signToken({ iss: issuer }) },
+      {
+        label: "from another issuer",
+        token: () => signToken({ iss: "https://other-issuer.example", aud: AUDIENCE }),
+      },
+      {
+        label: "expired",
+        token: () =>
+          signToken({
+            iss: issuer,
+            aud: AUDIENCE,
+            expiresIn: Math.floor(Date.now() / 1000) - 60,
+          }),
+      },
+      {
+        label: "signed with a key the issuer does not publish",
+        token: () => signToken({ iss: issuer, aud: AUDIENCE }, otherKeys),
+      },
+      { label: "opaque", token: async () => "oat_2s8Kq0opaqueTokenValue" },
+    ];
 
-    await expectRejection(
-      verifier.verifyAccessToken(
-        await signToken({ iss: issuer, aud: "https://other.example/mcp" }),
-      ),
-      OAuthErrorCode.InvalidToken,
-    );
-  });
-
-  it("rejects a token without an audience", async () => {
-    const { issuer, verifier } = await issuerWithVerifier();
-
-    await expectRejection(
-      verifier.verifyAccessToken(await signToken({ iss: issuer })),
-      OAuthErrorCode.InvalidToken,
-    );
-  });
-
-  it("rejects a token from another issuer", async () => {
-    const { verifier } = await issuerWithVerifier();
-
-    await expectRejection(
-      verifier.verifyAccessToken(
-        await signToken({ iss: "https://other-issuer.example", aud: AUDIENCE }),
-      ),
-      OAuthErrorCode.InvalidToken,
-    );
-  });
-
-  it("rejects an expired token", async () => {
-    const { issuer, verifier } = await issuerWithVerifier();
-
-    await expectRejection(
-      verifier.verifyAccessToken(
-        await signToken({
-          iss: issuer,
-          aud: AUDIENCE,
-          expiresIn: Math.floor(Date.now() / 1000) - 60,
-        }),
-      ),
-      OAuthErrorCode.InvalidToken,
-    );
-  });
-
-  it("rejects a token signed with a key the issuer does not publish", async () => {
-    const { issuer, verifier } = await issuerWithVerifier();
-
-    await expectRejection(
-      verifier.verifyAccessToken(
-        await signToken({ iss: issuer, aud: AUDIENCE }, otherKeys),
-      ),
-      OAuthErrorCode.InvalidToken,
-    );
-  });
-
-  it("rejects an opaque token", async () => {
-    const { verifier } = await issuerWithVerifier();
-
-    await expectRejection(
-      verifier.verifyAccessToken("oat_2s8Kq0opaqueTokenValue"),
-      OAuthErrorCode.InvalidToken,
-    );
+    for (const { label, token } of cases) {
+      await expectRejection(
+        verifier.verifyAccessToken(await token()),
+        OAuthErrorCode.InvalidToken,
+        label,
+      );
+    }
   });
 
   it("reports unreachable signing keys as a server error", async () => {

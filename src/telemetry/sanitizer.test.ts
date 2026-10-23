@@ -27,56 +27,47 @@ describe("extractProtocol", () => {
 });
 
 describe("sanitizeErrorMessage", () => {
-  it("should sanitize error messages removing sensitive info", () => {
-    expect(sanitizeErrorMessage("Error in /Users/john/project/file.js")).toBe(
-      "Error in [path]",
-    );
+  it("removes paths, file URLs, URLs and credentials, and keeps slashes that are not paths", () => {
+    const cases = [
+      { message: "Error in /Users/john/project/file.js", sanitized: "Error in [path]" },
+      {
+        message: "Failed to read file:///Users/john/documents/secret.txt",
+        sanitized: "Failed to read [file-url]",
+      },
+      { message: "Cannot access ./local/config.json", sanitized: "Cannot access [path]" },
+      { message: "api_key=secret123 invalid", sanitized: "api_key=[redacted] invalid" },
+      // URLs with paths and query strings
+      {
+        message: "HTTP 404 for https://intranet.example.com/team/doc?q=secret",
+        sanitized: "HTTP 404 for [url]",
+      },
+      // Absolute paths without a file extension
+      {
+        message: "ENOENT: no such file or directory, scandir '/home/john/private-docs'",
+        sanitized: "ENOENT: no such file or directory, scandir '[path]'",
+      },
+      // Single-component absolute paths
+      { message: "scandir '/private-docs'", sanitized: "scandir '[path]'" },
+      { message: "cannot open /private-docs", sanitized: "cannot open [path]" },
+      // Paths with spaces
+      {
+        message: "scandir '/Users/Jane Doe/private-docs'",
+        sanitized: "scandir '[path]'",
+      },
+      {
+        message: "open C:\\Users\\Jane Doe\\docs failed",
+        sanitized: "open [path] failed",
+      },
+      // Slashes that are not paths
+      {
+        message: "HTTP/1.1 503 on 2024/10/18, retry and/or wait",
+        sanitized: "HTTP/1.1 503 on 2024/10/18, retry and/or wait",
+      },
+    ];
 
-    expect(
-      sanitizeErrorMessage("Failed to read file:///Users/john/documents/secret.txt"),
-    ).toBe("Failed to read [file-url]");
-
-    expect(sanitizeErrorMessage("Cannot access ./local/config.json")).toBe(
-      "Cannot access [path]",
-    );
-
-    expect(sanitizeErrorMessage("api_key=secret123 invalid")).toBe(
-      "api_key=[redacted] invalid",
-    );
-  });
-
-  it("should remove URLs with paths and query strings", () => {
-    expect(
-      sanitizeErrorMessage("HTTP 404 for https://intranet.example.com/team/doc?q=secret"),
-    ).toBe("HTTP 404 for [url]");
-  });
-
-  it("should remove absolute paths without a file extension", () => {
-    expect(
-      sanitizeErrorMessage(
-        "ENOENT: no such file or directory, scandir '/home/john/private-docs'",
-      ),
-    ).toBe("ENOENT: no such file or directory, scandir '[path]'");
-  });
-
-  it("should remove single-component absolute paths", () => {
-    expect(sanitizeErrorMessage("scandir '/private-docs'")).toBe("scandir '[path]'");
-    expect(sanitizeErrorMessage("cannot open /private-docs")).toBe("cannot open [path]");
-  });
-
-  it("should remove paths with spaces", () => {
-    expect(sanitizeErrorMessage("scandir '/Users/Jane Doe/private-docs'")).toBe(
-      "scandir '[path]'",
-    );
-    expect(sanitizeErrorMessage("open C:\\Users\\Jane Doe\\docs failed")).toBe(
-      "open [path] failed",
-    );
-  });
-
-  it("should keep slashes that are not paths", () => {
-    expect(sanitizeErrorMessage("HTTP/1.1 503 on 2024/10/18, retry and/or wait")).toBe(
-      "HTTP/1.1 503 on 2024/10/18, retry and/or wait",
-    );
+    for (const { message, sanitized } of cases) {
+      expect.soft(sanitizeErrorMessage(message), message).toBe(sanitized);
+    }
   });
 });
 
@@ -90,55 +81,57 @@ describe("sanitizeErrorForTracking", () => {
     expect(sanitized.message).toBe("Failed to fetch [url]");
   });
 
-  it("should shorten stack frame paths to file names or package paths", () => {
-    const error = new Error("boom");
-    error.stack = [
-      "Error: boom",
-      "    at run (/Users/john/project/dist/index.js:10:5)",
-      "    at file:///home/john/.npm/_npx/abc/node_modules/better-sqlite3/lib/database.js:3:1",
-      "    at C:\\Users\\john\\app\\server.js:7:2",
-      "    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)",
-    ].join("\n");
+  it("shortens stack frame paths to file names or package paths", () => {
+    const cases = [
+      {
+        frame: "    at run (/Users/john/project/dist/index.js:10:5)",
+        shortened: "    at run (index.js:10:5)",
+      },
+      {
+        frame:
+          "    at file:///home/john/.npm/_npx/abc/node_modules/better-sqlite3/lib/database.js:3:1",
+        shortened: "    at better-sqlite3/lib/database.js:3:1",
+      },
+      {
+        frame: "    at C:\\Users\\john\\app\\server.js:7:2",
+        shortened: "    at server.js:7:2",
+      },
+      {
+        frame:
+          "    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)",
+        shortened:
+          "    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)",
+      },
+      // Query strings and fragments are dropped from URL frames
+      {
+        frame:
+          "    at eval (https://intranet.example.com/private-module.js?token=secret:3:7)",
+        shortened: "    at eval (private-module.js:3:7)",
+      },
+      {
+        frame: "    at load (https://intranet.example.com/loader.js#secret:1:2)",
+        shortened: "    at load (loader.js:1:2)",
+      },
+      // A line but no column
+      {
+        frame: "    at load (/Users/john/private-docs/loader.js:10)",
+        shortened: "    at load (loader.js:10)",
+      },
+      // Frames without a file location are kept
+      {
+        frame: "    at async Promise.all (index 0)",
+        shortened: "    at async Promise.all (index 0)",
+      },
+    ];
 
-    const sanitized = sanitizeErrorForTracking(error);
+    for (const { frame, shortened } of cases) {
+      const error = new Error("boom");
+      error.stack = `Error: boom\n${frame}`;
 
-    expect(sanitized.stack).toBe(
-      [
-        "Error: boom",
-        "    at run (index.js:10:5)",
-        "    at better-sqlite3/lib/database.js:3:1",
-        "    at server.js:7:2",
-        "    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)",
-      ].join("\n"),
-    );
-  });
-
-  it("should drop query strings and fragments from URL frames", () => {
-    const error = new Error("boom");
-    error.stack = [
-      "Error: boom",
-      "    at eval (https://intranet.example.com/private-module.js?token=secret:3:7)",
-      "    at load (https://intranet.example.com/loader.js#secret:1:2)",
-    ].join("\n");
-
-    const sanitized = sanitizeErrorForTracking(error);
-
-    expect(sanitized.stack).toBe(
-      [
-        "Error: boom",
-        "    at eval (private-module.js:3:7)",
-        "    at load (loader.js:1:2)",
-      ].join("\n"),
-    );
-  });
-
-  it("should shorten frames that have a line but no column", () => {
-    const error = new Error("boom");
-    error.stack = "Error: boom\n    at load (/Users/john/private-docs/loader.js:10)";
-
-    const sanitized = sanitizeErrorForTracking(error);
-
-    expect(sanitized.stack).toBe("Error: boom\n    at load (loader.js:10)");
+      expect
+        .soft(sanitizeErrorForTracking(error).stack, frame)
+        .toBe(`Error: boom\n${shortened}`);
+    }
   });
 
   it("should drop lines that are not stack frames", () => {
@@ -150,15 +143,6 @@ describe("sanitizeErrorForTracking", () => {
 
     expect(sanitized.stack).not.toContain("private.example");
     expect(sanitized.stack).not.toContain("secret");
-  });
-
-  it("should keep frames without a file location", () => {
-    const error = new Error("boom");
-    error.stack = "Error: boom\n    at async Promise.all (index 0)";
-
-    const sanitized = sanitizeErrorForTracking(error);
-
-    expect(sanitized.stack).toBe("Error: boom\n    at async Promise.all (index 0)");
   });
 
   it("should drop the original message from the stack", () => {

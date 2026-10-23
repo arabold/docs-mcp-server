@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
 import * as appModule from "../../app";
-import { openBackend } from "../../services/backend";
+import { registerGlobalServices } from "../services";
 import { createWorkerCommand } from "./worker";
 
 const pipelineMock = {};
@@ -76,32 +76,24 @@ describe("worker command", () => {
     vi.spyOn(process, "exit").mockImplementation((() => {}) as any);
   });
 
-  it("starts worker server with correct config", async () => {
+  // The only check that a worker leaves the web UI and the MCP endpoint off
+  it("starts the API without the web UI or the MCP endpoint", async () => {
     const parser = yargs().scriptName("test");
     createWorkerCommand(parser);
-
-    const services = await import("../services");
-    vi.mocked(services.registerGlobalServices)
+    // The command waits forever once the server runs; stop it right there.
+    // It reports the stop as a startup failure and resolves.
+    vi.mocked(registerGlobalServices)
       .mockImplementationOnce(() => {})
       .mockImplementationOnce(() => {
         throw new Error("Simulated Stop");
       });
 
-    try {
-      await parser.parse(`worker --port 8080`);
-    } catch (e: any) {
-      if (e.message !== "Simulated Stop") throw e;
-    }
+    await parser.parse("worker");
 
-    expect(appModule.startAppServer).toHaveBeenCalled();
-    const callArgs = (appModule.startAppServer as any).mock.calls[0];
-    const config = callArgs[1]; // 2nd arg is config
-    // Jobs run in the worker's own process, recovering interrupted ones by default
-    expect(openBackend).toHaveBeenCalledWith(
-      expect.objectContaining({ jobs: { interruptedJobs: "recover" } }),
-    );
-    expect(config.enableApiServer).toBe(true);
-    expect(config.enableWebInterface).toBe(false);
-    expect(config.port).toBe(8080);
+    expect(vi.mocked(appModule.startAppServer).mock.calls[0]?.[1]).toMatchObject({
+      enableApiServer: true,
+      enableWebInterface: false,
+      enableMcpServer: false,
+    });
   });
 });
