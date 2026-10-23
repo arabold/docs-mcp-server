@@ -18,6 +18,7 @@ import { createListCommand } from "./commands/list";
 import { createMcpCommand } from "./commands/mcp";
 import { createRefreshCommand } from "./commands/refresh";
 import { createRemoveCommand } from "./commands/remove";
+import { createRenameCommand } from "./commands/rename";
 import { createScrapeCommand } from "./commands/scrape";
 import { createSearchCommand } from "./commands/search";
 import { createWebCommand } from "./commands/web";
@@ -47,6 +48,7 @@ export const COMMAND_FACTORIES: ReadonlyArray<(cli: Argv) => void> = [
   createMcpCommand,
   createRefreshCommand,
   createRemoveCommand,
+  createRenameCommand,
   createScrapeCommand,
   createSearchCommand,
   createWebCommand,

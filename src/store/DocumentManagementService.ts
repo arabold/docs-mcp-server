@@ -390,6 +390,30 @@ export class DocumentManagementService {
   }
 
   /**
+   * Renames a library in place, keeping its versions and indexed content.
+   *
+   * @param library Current library name.
+   * @param newName New name as entered; its trimmed form becomes the display name.
+   * @returns The previous and new display names.
+   * @throws {LibraryNotFoundInStoreError} If the library does not exist.
+   */
+  async renameLibrary(
+    library: string,
+    newName: string,
+  ): Promise<{ oldName: string; newName: string }> {
+    logger.info(`✏️ Renaming library: ${library} -> ${newName}`);
+
+    await this.requireLibrary(library);
+    const renamed = await this.store.renameLibrary(library, newName);
+    if (!renamed) {
+      throw await this.libraryNotFound(library);
+    }
+
+    logger.info(`✅ Renamed '${renamed.oldName}' to '${renamed.newName}'.`);
+    return renamed;
+  }
+
+  /**
    * Returns every label stored for a library — semantic versions and opaque tags
    * alike — in canonical display order.
    *

@@ -192,6 +192,20 @@ export function createDataRouter(trpc: unknown) {
         },
       ),
 
+    renameLibrary: tt.procedure
+      .input(z.object({ library: nonEmpty, newName: nonEmpty }))
+      .mutation(
+        async ({
+          ctx,
+          input,
+        }: {
+          ctx: DataTrpcContext;
+          input: { library: string; newName: string };
+        }) => {
+          return await ctx.docService.renameLibrary(input.library, input.newName);
+        },
+      ),
+
     // Status and version helpers
 
     getVersionsByStatus: tt.procedure
