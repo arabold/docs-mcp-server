@@ -65,16 +65,25 @@ describe("dataRouter", () => {
   });
 
   it("passes each procedure's input to the service and returns its result", async () => {
-    const chunks = await caller.listVersionChunks({
+    // A limit below the rows left after the offset, so a dropped limit shows.
+    const window = await caller.listVersionChunks({
       library: "router-test-lib",
       version: "1.0.0",
-      limit: 2,
+      limit: 1,
       offset: 1,
-      filter: "content",
     });
-    expect(chunks.total).toBe(3);
-    expect(chunks.chunks.map((chunk) => chunk.content)).toEqual([
+    expect(window.total).toBe(3);
+    expect(window.chunks.map((chunk) => chunk.content)).toEqual([
       "Beta content about switches",
+    ]);
+    // A filter only one chunk matches, so a dropped filter shows.
+    const filtered = await caller.listVersionChunks({
+      library: "router-test-lib",
+      version: "1.0.0",
+      filter: "gateways",
+    });
+    expect(filtered.total).toBe(1);
+    expect(filtered.chunks.map((chunk) => chunk.content)).toEqual([
       "Gamma content about gateways",
     ]);
 
