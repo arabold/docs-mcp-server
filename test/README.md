@@ -20,7 +20,7 @@ work.
 | `npx vitest run <file>` | One test file |
 | `npm run test:watch` | Vitest in watch mode |
 | `npm run test:coverage` | The `npm test` set with coverage. Install `@vitest/coverage-v8` first; it is not a dev dependency. |
-| `npm run test:live` | The live HTML pipeline suite against real documentation sites |
+| `npm run test:live` | The live suites: the HTML pipeline against real documentation sites, and GitHub scraping against this repository |
 | `npm run test:docker` | The production Docker image suite (needs a Docker daemon) |
 | `npm run evaluate:accuracy` | The search accuracy benchmark ([tests/search-accuracy/README.md](../tests/search-accuracy/README.md)); not part of `npm test` |
 
@@ -54,7 +54,7 @@ real credentials from `.env` load it with dotenv's `config()`, which ignores
 the default model whenever a key is set.
 
 `npm run test:live` uses `vite.config.live.ts` instead. It drops
-`setup-e2e.ts`, so the live suite reaches the real network.
+`setup-e2e.ts`, so the live suites reach the real network.
 
 `npm run evaluate:accuracy` uses `vite.config.accuracy.ts`, which also drops
 `setup-e2e.ts` (the benchmark downloads its corpus and calls the embedding

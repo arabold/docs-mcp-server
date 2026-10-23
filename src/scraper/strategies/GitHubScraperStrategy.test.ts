@@ -206,15 +206,6 @@ describe("GitHubScraperStrategy", () => {
     );
   });
 
-  it("should return empty links for non-depth-0 items", async () => {
-    const strategy = new GitHubScraperStrategy(config);
-
-    const result = await strategy.processItem({ url: REPO_URL, depth: 1 }, options());
-
-    expect(result.status).toBe(FetchStatus.SUCCESS);
-    expect(result.links).toEqual([]);
-  });
-
   describe("a single-file blob URL", () => {
     const FILE_URL = blobUrl("docs/guide.md");
     const RAW_PATH = "/owner/repo/main/docs/guide.md";

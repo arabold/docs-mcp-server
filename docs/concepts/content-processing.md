@@ -30,7 +30,7 @@ The links a pipeline finds go back to the strategy, which decides which of them 
 
 - `WebScraperStrategy` crawls HTTP and HTTPS sites. When the start URL is an archive, it downloads the archive and hands it to `LocalFileStrategy`.
 - `LocalFileStrategy` walks `file://` directories and opens archives it meets as containers of more files.
-- `GitHubScraperStrategy` lists a repository's files through the GitHub API, keeps the ones its extension filter accepts, and fetches each from `raw.githubusercontent.com`. `GitHubRepoProcessor` handles repository files and `GitHubWikiProcessor` handles wiki pages.
+- `GitHubScraperStrategy` lists a repository's files through the GitHub API, keeps the ones its extension filter accepts, and fetches each from `raw.githubusercontent.com`. `GitHubRepoProcessor` handles repository files and `GitHubWikiProcessor` handles wiki pages. The repository or `/tree/<branch>` URL is a container that lists the files and the wiki, not a stored page, and scope is measured from the repository root, which covers both.
 - `NpmScraperStrategy` and `PyPiScraperStrategy` wrap a `WebScraperStrategy` that also strips query strings from package-page URLs.
 
 Every strategy builds its pipelines with `PipelineFactory.createStandardPipelines()` and selects among them the same way, so a format reads the same whatever its source. `FetchUrlTool` uses the same pipelines to convert a single URL.
