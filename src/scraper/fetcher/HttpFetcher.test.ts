@@ -14,6 +14,7 @@ import {
   ScraperError,
   TlsCertificateError,
 } from "../../utils/errors";
+import { FingerprintGenerator } from "./FingerprintGenerator";
 import { HttpFetcher } from "./HttpFetcher";
 import { MARKDOWN_PREFERRED_ACCEPT } from "./headers";
 import { FetchStatus } from "./types";
@@ -293,6 +294,31 @@ describe("HttpFetcher", () => {
         accept: "application/json",
       });
       expect(headers).not.toHaveProperty("Accept");
+    });
+
+    it("leaves the fingerprint's connection-level headers to Node's HTTP client", async () => {
+      // A few generated fingerprints carry `Connection: keep-alive`. MSW never
+      // ends a mocked response without Content-Length on a kept-alive
+      // connection, so the crawl suites hung on the rare request that sent it.
+      const generateHeaders = vi
+        .spyOn(FingerprintGenerator.prototype, "generateHeaders")
+        .mockReturnValue({
+          "user-agent": "Fingerprint/1.0",
+          Connection: "keep-alive",
+          te: "trailers",
+        });
+      try {
+        mockedAxios.get.mockResolvedValue(ok());
+
+        await fetcher.fetch(PAGE_URL);
+
+        const headers = requestConfig()?.headers;
+        expect(headers).toMatchObject({ "user-agent": "Fingerprint/1.0" });
+        expect(headers).not.toHaveProperty("Connection");
+        expect(headers).not.toHaveProperty("te");
+      } finally {
+        generateHeaders.mockRestore();
+      }
     });
 
     it("skips certificate verification only for https with allowInvalidTls", async () => {

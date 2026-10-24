@@ -75,6 +75,11 @@ request a test makes in its own process:
 - `http` and `https` requests to loopback skip MSW altogether. MSW cannot pass
   through a request whose agent connects later, as Playwright's request API does
   for `localhost`, so such a request would hang until it timed out.
+- MSW ends a mocked response that has no `Content-Length` by closing the
+  connection, and does not close one the request asked to keep alive. A request
+  that sends `Connection: keep-alive` itself waits for the rest of such a body
+  until the test times out, which is why `HttpFetcher` leaves connection-level
+  headers to Node.
 - An opt-in live suite calls `allowLiveNetwork()` in `beforeAll` once its
   credentials are set, and calls the function it returns in `afterAll`.
 
