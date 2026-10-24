@@ -14,7 +14,7 @@ import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { detectChallengePage } from "./challenge";
 import { FingerprintGenerator } from "./FingerprintGenerator";
-import { withMarkdownPreferredAccept } from "./headers";
+import { withMarkdownPreferredAccept, withoutConnectionHeaders } from "./headers";
 import {
   type ContentFetcher,
   type FetchOptions,
@@ -123,7 +123,11 @@ export class HttpFetcher implements ContentFetcher {
         let redirectCount = 0;
 
         while (true) {
-          const fingerprint = this.fingerprintGenerator.generateHeaders();
+          // Node's HTTP client manages the connection, so the fingerprint's
+          // connection-level headers are left out.
+          const fingerprint = withoutConnectionHeaders(
+            this.fingerprintGenerator.generateHeaders(),
+          );
           const headers = withMarkdownPreferredAccept(
             {
               ...fingerprint,
