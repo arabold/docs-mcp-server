@@ -39,7 +39,10 @@ describe("Embedding service outage E2E", () => {
   const h = usePipelineHarness({
     library: "embed-lib",
     version: "1.0.0",
-    defaults: { url: site.url("/"), maxDepth: 1 },
+    // `ignoreErrors` is on by default in the CLI and `scrape_docs`. It lets
+    // the crawl carry on past an ordinary page error, so only the embedding
+    // failure itself can stop it.
+    defaults: { url: site.url("/"), maxDepth: 1, ignoreErrors: true },
     embeddingModel: "openai:text-embedding-3-small",
   });
 
