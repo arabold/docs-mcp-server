@@ -4,7 +4,8 @@ import { DEFAULT_CONFIG, loadConfig } from "../../utils/config";
 vi.mock("playwright", () => ({
   chromium: {
     launch: vi.fn(),
-    executablePath: vi.fn(),
+    // Playwright names its full build's path even when it is not installed.
+    executablePath: vi.fn(() => "/ms-playwright/chromium-1248/chrome-linux64/chrome"),
   },
 }));
 

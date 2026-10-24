@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { type Browser, chromium, type LaunchOptions } from "playwright";
 import { ScraperAccessPolicy } from "../../utils/accessPolicy";
 import type { AppConfig } from "../../utils/config";
@@ -219,6 +220,42 @@ export class ManagedBrowser {
   }
 
   /**
+   * Tells whether Playwright's own Chromium is installed: the headless shell a
+   * launch uses by default, or the full build it falls back to.
+   *
+   * Playwright only reports the full build's path. The shell of the same
+   * revision sits next to it, in `chromium_headless_shell-<revision>`, and
+   * Playwright marks a finished download with an `INSTALLATION_COMPLETE` file.
+   *
+   * @returns True when a launch without an explicit executable can succeed.
+   */
+  static isPlaywrightChromiumInstalled(): boolean {
+    let fullBuildPath: string;
+    try {
+      fullBuildPath = chromium.executablePath();
+    } catch {
+      // executablePath() throws when no managed build is registered at all.
+      return false;
+    }
+    if (fs.existsSync(fullBuildPath)) {
+      return true;
+    }
+
+    // Walk up from the executable to its `chromium-<revision>` folder.
+    for (let dir = fullBuildPath; path.dirname(dir) !== dir; dir = path.dirname(dir)) {
+      const revision = /^chromium-(\d+)$/.exec(path.basename(dir))?.[1];
+      if (revision) {
+        const shellDir = path.join(
+          path.dirname(dir),
+          `chromium_headless_shell-${revision}`,
+        );
+        return fs.existsSync(path.join(shellDir, "INSTALLATION_COMPLETE"));
+      }
+    }
+    return false;
+  }
+
+  /**
    * Resolves the Chromium binary to launch.
    *
    * Playwright's own managed build is pinned to the installed Playwright
@@ -234,12 +271,8 @@ export class ManagedBrowser {
       return configuredPath;
     }
 
-    try {
-      if (fs.existsSync(chromium.executablePath())) {
-        return undefined;
-      }
-    } catch {
-      // executablePath() throws when no managed build is registered at all.
+    if (ManagedBrowser.isPlaywrightChromiumInstalled()) {
+      return undefined;
     }
 
     const systemPath = [

@@ -11,7 +11,11 @@ import { logger } from "../../utils/logger";
 import { followJobLogs } from "../JobOutputFollower";
 import { renderTextOutput } from "../output";
 import { registerGlobalServices } from "../services";
-import { type CliContext, getEventBus } from "../utils";
+import {
+  type CliContext,
+  ensurePlaywrightBrowsersInstalled,
+  getEventBus,
+} from "../utils";
 
 export function createRefreshCommand(cli: Argv) {
   cli.command(
@@ -74,6 +78,11 @@ export function createRefreshCommand(cli: Argv) {
         configPath: argv.config as string,
         searchDir: argv.storePath as string,
       });
+
+      // With a server URL, the server runs the job and its browser
+      if (!serverUrl) {
+        ensurePlaywrightBrowsersInstalled();
+      }
 
       const eventBus = getEventBus(argv as CliContext);
 

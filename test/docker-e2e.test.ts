@@ -6,7 +6,8 @@
  *   2. Chromium is installed where the runtime expects it (Playwright path).
  *   3. The Playwright-backed scrape pipeline renders a page served from the
  *      host, running its JavaScript, and a live documentation site whose
- *      content only its scripts produce.
+ *      content only its scripts produce. It uses the image's Chromium and
+ *      never downloads Playwright's own.
  *   4. The Xberg-backed PDF pipeline can extract a PDF from a mounted volume.
  *   5. The web server serves the built admin UI (SPA shell, hashed assets,
  *      client-route fallback) and the tRPC API over HTTP.
@@ -248,6 +249,36 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     } finally {
       await page.close();
       fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  }, 240_000);
+
+  it("renders with the image's Chromium instead of downloading Playwright's", async () => {
+    const page = await startScriptedPage();
+    const pageUrl = `http://host.docker.internal:${page.port}/`;
+    try {
+      // fetch-url makes sure a browser is installed before it renders. A
+      // download would land in Playwright's cache in the user's home.
+      const r = await docker(
+        [
+          "run",
+          "--rm",
+          "--add-host=host.docker.internal:host-gateway",
+          "-e",
+          "DOCS_MCP_TELEMETRY=false",
+          "-e",
+          "DOCS_MCP_SCRAPER_SECURITY_NETWORK_ALLOW_PRIVATE_NETWORKS=true",
+          "--entrypoint",
+          "sh",
+          IMAGE_TAG,
+          "-c",
+          `node dist/index.js fetch-url ${pageUrl} --scrape-mode playwright && test ! -e "$HOME/.cache/ms-playwright"`,
+        ],
+        { timeout: 180_000 },
+      );
+      expect(r.status, `stdout=${r.stdout}\nstderr=${r.stderr}`).toBe(0);
+      expect(r.stdout).toContain(RENDERED_TEXT);
+    } finally {
+      await page.close();
     }
   }, 240_000);
 
