@@ -66,7 +66,7 @@ A worker first clears the version, unless the job is a refresh or the scrape ask
 - A page that is gone is deleted, when it came from the store.
 - Unchanged, skipped and failed pages change nothing.
 
-A failed write for one page is logged and the job goes on. A failed deletion fails the job, because it would leave the page's chunks searchable. [Refresh Architecture](refresh-architecture.md) describes the outcomes a refresh produces.
+A page whose chunks cannot be embedded fails the job at once (`EmbeddingError`): this usually means the provider is down or misconfigured, and a job that went on would complete with the remaining pages missing. Any other failed write for one page is logged and the job goes on. A failed deletion fails the job, because it would leave the page's chunks searchable. An error the worker throws for a page ends the crawl; the scraper does not count it as one failed page. [Refresh Architecture](refresh-architecture.md) describes the outcomes a refresh produces.
 
 Each outcome also advances the job's progress counters. The `scrape-progress-reporting` spec ([openspec/specs/scrape-progress-reporting/spec.md](../../openspec/specs/scrape-progress-reporting/spec.md)) defines them, and [Scrape progress counters](../../ARCHITECTURE.md#scrape-progress-counters) summarizes them.
 

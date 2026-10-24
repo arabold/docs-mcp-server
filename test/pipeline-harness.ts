@@ -53,6 +53,12 @@ export interface PipelineHarnessOptions {
   version: string;
   /** Scrape options applied to every `scrape()` unless the call overrides them. */
   defaults?: ScrapeRequest;
+  /**
+   * The embedding model, e.g. `openai:text-embedding-3-small`. Defaults to none.
+   * The provider's credentials come from the environment, and the OpenAI
+   * endpoint is answered by `test/mock-server.ts`.
+   */
+  embeddingModel?: string;
 }
 
 /** The pipeline under test. See {@link usePipelineHarness}. */
@@ -100,11 +106,12 @@ const FINAL_STATUSES = new Set([
  *
  * Call it at describe level. Before each test it loads the configuration (the
  * test environment points `DOCS_MCP_CONFIG` at a file that never exists, so
- * this is the built-in defaults), then sets an in-memory store, no embeddings,
- * one worker, no fetch retries and Fetch mode, and allows private networks so
- * the access policy never resolves the mock hosts through DNS. After each test
- * it cancels any job still running and shuts the services down. A test that
- * needs other settings changes `config` before starting a job.
+ * this is the built-in defaults), then sets an in-memory store, no embeddings
+ * unless `embeddingModel` names a model, one worker, no fetch retries and Fetch
+ * mode, and allows private networks so the access policy never resolves the
+ * mock hosts through DNS. After each test it cancels any job still running and
+ * shuts the services down. A test that needs other settings changes `config`
+ * before starting a job.
  *
  * @param options The library and version to index into, and optional defaults.
  * @returns The harness, valid inside tests and hooks.
@@ -132,7 +139,7 @@ export function usePipelineHarness(options: PipelineHarnessOptions): PipelineHar
   beforeEach(async () => {
     const config = loadConfig();
     config.app.storePath = ":memory:";
-    config.app.embeddingModel = "";
+    config.app.embeddingModel = options.embeddingModel ?? "";
     config.scraper.maxConcurrency = 1;
     config.scraper.fetcher.maxRetries = 0;
     config.scraper.security.network.allowPrivateNetworks = true;
