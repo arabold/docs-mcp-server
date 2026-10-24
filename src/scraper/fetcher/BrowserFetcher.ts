@@ -224,12 +224,14 @@ export class BrowserFetcher implements ContentFetcher {
         // API instead (see fetchViaRequest): it shares cookies — so any
         // anti-bot clearance carries over — but does not try to render them.
         // A navigation cut off because its page or browser is going away (for
-        // example, the browser was replaced) is reported as ERR_ABORTED too,
-        // with "frame was detached"; that is no download, so it is not
-        // fetched again here.
-        const frameDetached = /frame was detached/i.test(message);
+        // example, the browser was replaced) is reported as ERR_ABORTED too;
+        // that is no download, so it is not fetched again here. Only a page
+        // that went first says "frame was detached": a closed browser leaves
+        // a bare ERR_ABORTED, so ask the browser itself.
+        const goingAway =
+          /frame was detached/i.test(message) || !this.managedBrowser.isCurrent(browser);
         if (
-          !frameDetached &&
+          !goingAway &&
           /ERR_INVALID_ARGUMENT|ERR_ABORTED|Download is starting/i.test(message)
         ) {
           return await this.fetchViaRequest(

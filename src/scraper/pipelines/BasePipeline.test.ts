@@ -1,5 +1,6 @@
 // Copyright (c) 2025
 import { describe, expect, it, vi } from "vitest";
+import { ScraperError } from "../../utils/errors";
 import type { ContentProcessorMiddleware, MiddlewareContext } from "../middleware/types";
 import { BasePipeline } from "./BasePipeline";
 import type { PipelineResult } from "./types";
@@ -106,6 +107,28 @@ describe("BasePipeline", () => {
       expect.soft(context.errors[0], label).toBeInstanceOf(Error);
       expect.soft(context.errors[0]?.message, label).toBe(message);
     }
+  });
+
+  it("executeMiddlewareStack lets a ScraperError fail the page", async () => {
+    const pipeline = new TestPipeline();
+    const context: MiddlewareContext = {
+      content: "test",
+      source: "http://test",
+      links: [],
+      errors: [],
+      // @ts-expect-error
+      options: {},
+    };
+    const failure = new ScraperError("Page cannot be processed");
+    const next = { process: vi.fn() };
+
+    await expect(
+      pipeline.testExecuteMiddlewareStack(
+        [{ process: vi.fn().mockRejectedValue(failure) }, next],
+        context,
+      ),
+    ).rejects.toBe(failure);
+    expect(next.process).not.toHaveBeenCalled();
   });
 
   it("executeMiddlewareStack prevents calling next() multiple times", async () => {

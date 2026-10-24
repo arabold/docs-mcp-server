@@ -1,3 +1,4 @@
+import { ScraperError } from "../../utils/errors";
 import type { ContentFetcher, RawContent } from "../fetcher/types";
 import type { ContentProcessorMiddleware, MiddlewareContext } from "../middleware/types";
 import type { ScraperOptions } from "../types";
@@ -40,8 +41,12 @@ export class BasePipeline implements ContentPipeline {
    * Executes a middleware stack on the given context.
    * This is a utility method used by derived pipeline classes.
    *
+   * A middleware error is recorded in `context.errors` and the pipeline goes on
+   * with what is left, except a `ScraperError`, which fails the page.
+   *
    * @param middleware - The middleware stack to execute
    * @param context - The context to process
+   * @throws {ScraperError} When a middleware throws one.
    */
   protected async executeMiddlewareStack(
     middleware: ContentProcessorMiddleware[],
@@ -59,6 +64,9 @@ export class BasePipeline implements ContentPipeline {
     try {
       await dispatch(0);
     } catch (error) {
+      if (error instanceof ScraperError) {
+        throw error;
+      }
       context.errors.push(error instanceof Error ? error : new Error(String(error)));
     }
   }

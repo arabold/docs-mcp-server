@@ -10,7 +10,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { HttpResponse, http } from "msw";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AutoDetectFetcher } from "../src/scraper/fetcher/AutoDetectFetcher";
 import { ScrapeMode } from "../src/scraper/types";
 import { ToolError, ValidationError } from "../src/tools/errors";
@@ -132,6 +132,25 @@ describe("FetchUrlTool E2E", () => {
 
     // Today the error reads "Processing resulted in empty content".
     it.todo("reports a 404 response as not found");
+
+    it("rejects a page the browser cannot render in Playwright mode with a ToolError naming the render", async () => {
+      // Every launch fails at once, without needing a real browser.
+      vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", "/nonexistent/chromium");
+      const url = "https://httpbin.org/html";
+
+      try {
+        await expect(
+          fetchUrlTool.execute({ url, scrapeMode: ScrapeMode.Playwright }),
+        ).rejects.toThrow(
+          expect.objectContaining({
+            name: "ToolError",
+            message: expect.stringContaining(`Playwright could not render ${url}`),
+          }),
+        );
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
 
     it("rejects an unreachable host with a ToolError asking to check the URL", async () => {
       const url = "https://this-domain-definitely-does-not-exist-12345.com";

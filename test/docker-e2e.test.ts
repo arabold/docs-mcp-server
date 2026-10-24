@@ -5,7 +5,8 @@
  *   1. Container starts and runs as a non-root user (security hardening).
  *   2. Chromium is installed where the runtime expects it (Playwright path).
  *   3. The Playwright-backed scrape pipeline renders a page served from the
- *      host, running its JavaScript.
+ *      host, running its JavaScript, and a live documentation site whose
+ *      content only its scripts produce.
  *   4. The Xberg-backed PDF pipeline can extract a PDF from a mounted volume.
  *   5. The web server serves the built admin UI (SPA shell, hashed assets,
  *      client-route fallback) and the tRPC API over HTTP.
@@ -246,6 +247,48 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
       expect(indexedContent(dbPath, pageUrl)).toContain(RENDERED_TEXT);
     } finally {
       await page.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  }, 240_000);
+
+  it("renders a live JavaScript documentation site through the Playwright pipeline", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-docker-live-"));
+    fs.chmodSync(dataDir, 0o777);
+    // Docsify serves an empty `<div id="app">`. Its scripts, loaded from a CDN,
+    // fetch README.md and render it, so the tagline below reaches the store only
+    // when Chromium ran them; the shell's meta description lacks "site". A
+    // Chromium that starts but cannot load the scripts renders an empty app,
+    // which only the content check catches.
+    const siteUrl = "https://docsify.js.org/";
+    try {
+      const r = await docker(
+        [
+          "run",
+          "--rm",
+          "-v",
+          `${dataDir}:/data`,
+          "-e",
+          "DOCS_MCP_TELEMETRY=false",
+          IMAGE_TAG,
+          "scrape",
+          "docker-e2e-live",
+          siteUrl,
+          "--max-pages",
+          "1",
+          "--max-depth",
+          "0",
+          "--scrape-mode",
+          "playwright",
+        ],
+        { timeout: 180_000 },
+      );
+      const output = `stdout=${r.stdout}\nstderr=${r.stderr}`;
+      expect(r.status, output).toBe(0);
+      expect(
+        indexedContent(path.join(dataDir, "documents.db"), siteUrl),
+        output,
+      ).toContain("A magical documentation site generator");
+    } finally {
       fs.rmSync(dataDir, { recursive: true, force: true });
     }
   }, 240_000);
