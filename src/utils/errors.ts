@@ -79,12 +79,38 @@ class AccessPolicyError extends ScraperError {
   }
 }
 
+/**
+ * Returns the first line of a thrown value's message.
+ *
+ * Playwright's messages run on with call logs and install hints; the first line
+ * names the failure.
+ *
+ * @param error The thrown value.
+ * @returns The first line, or the whole message when that line is empty.
+ */
+function firstErrorLine(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.split("\n")[0] || message;
+}
+
+/** A page that had to be rendered in the browser could not be. */
+class RenderError extends ScraperError {
+  constructor(
+    public readonly url: string,
+    cause: Error,
+  ) {
+    super(`Playwright could not render ${url}: ${firstErrorLine(cause)}`, false, cause);
+  }
+}
+
 export {
   AccessPolicyError,
   ChallengeError,
+  firstErrorLine,
   HttpStatusError,
   InvalidUrlError,
   RedirectError,
+  RenderError,
   ScraperError,
   TlsCertificateError,
 };

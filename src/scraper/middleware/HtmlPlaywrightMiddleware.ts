@@ -9,6 +9,7 @@ import type {
 } from "playwright";
 import { ScraperAccessPolicy } from "../../utils/accessPolicy";
 import { type AppConfig, defaults } from "../../utils/config";
+import { firstErrorLine, RenderError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { withTimeout } from "../../utils/timeout";
@@ -625,11 +626,6 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     return error.message.includes("Target page, context or browser has been closed");
   }
 
-  private formatRouteError(error: unknown): string {
-    const message = error instanceof Error ? error.message : String(error);
-    return message.split("\n")[0] || message;
-  }
-
   private isSpeculativePrefetch(route: Route): boolean {
     const headers = route.request().headers();
     return (
@@ -717,7 +713,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
         return;
       }
 
-      const errorMessage = this.formatRouteError(error);
+      const errorMessage = firstErrorLine(error);
       logger.debug(`Error continuing ${resourceType} ${reqUrl}: ${errorMessage}`);
       await this.abortRoute(route, reqUrl, "abort after continue error", "failed");
     }
@@ -834,7 +830,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
         return;
       }
 
-      const errorMessage = this.formatRouteError(error);
+      const errorMessage = firstErrorLine(error);
       logger.debug(`Network error fetching ${resourceType} ${reqUrl}: ${errorMessage}`);
       await this.abortRoute(route, reqUrl, "abort after error", "failed");
     }
@@ -1049,9 +1045,11 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
    * - Injects Authorization header for all same-origin requests if credentials are present and not already set.
    * - Forwards all custom headers from context.options?.headers to Playwright requests.
    * - Waits for common loading indicators to disappear before extracting HTML.
+   * - When rendering fails, `auto` mode records the error and keeps the fetched HTML.
    *
    * @param context The middleware context containing the HTML and source URL.
    * @param next The next middleware function in the pipeline.
+   * @throws {RenderError} When rendering fails in `playwright` mode.
    */
   async process(context: MiddlewareContext, next: () => Promise<void>): Promise<void> {
     // Check if we have a MIME type from the raw content and if it's suitable for HTML processing
@@ -1103,11 +1101,18 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       );
     } catch (error) {
       logger.error(`❌ Playwright failed to render ${context.source}: ${error}`);
-      context.errors.push(
+      const renderError =
         error instanceof Error
           ? error
-          : new Error(`Playwright rendering failed: ${String(error)}`),
-      );
+          : new Error(`Playwright rendering failed: ${String(error)}`);
+      // Only `auto` falls back to the page as fetched. `playwright` mode asked
+      // for the rendered page, and indexing the fetched HTML in its place would
+      // report success for content the browser never produced. The cleanup
+      // below still runs first.
+      if (scrapeMode === ScrapeMode.Playwright) {
+        throw new RenderError(context.source, renderError);
+      }
+      context.errors.push(renderError);
     } finally {
       const closed = await this.cleanupPageAndContext(
         handles.page,
@@ -1135,10 +1140,6 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       context.content = renderedHtml;
       logger.debug(
         `Playwright middleware updated content for ${context.source}. Proceeding.`,
-      );
-    } else {
-      logger.warn(
-        `⚠️  Playwright rendering resulted in null content for ${context.source}. Proceeding without content update.`,
       );
     }
 

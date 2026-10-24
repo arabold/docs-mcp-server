@@ -162,6 +162,57 @@ describe("CLI E2E", () => {
     // Two CLI processes; generous for CI runners, which are several times slower
   }, 60000);
 
+  describe("when Chromium cannot start", () => {
+    // Every launch fails at once, without needing a real browser.
+    const brokenChromium = { PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: "/nonexistent/chromium" };
+    let storePath: string;
+    let configPath: string;
+
+    beforeAll(() => {
+      storePath = mkdtempSync(path.join(tmpdir(), "cli-e2e-no-chromium-"));
+      configPath = writeTestConfig(storePath);
+    });
+
+    afterAll(() => {
+      rmSync(storePath, { recursive: true, force: true });
+    });
+
+    function scrape(library: string, scrapeMode: ScrapeMode) {
+      return runCli(
+        [
+          "scrape",
+          library,
+          fixtureUrl,
+          "--store-path",
+          storePath,
+          "--config",
+          configPath,
+          "--scrape-mode",
+          scrapeMode,
+        ],
+        40_000,
+        { env: brokenChromium },
+      );
+    }
+
+    it("fails a playwright scrape instead of indexing the unrendered page", async () => {
+      const result = await scrape("Rendered", ScrapeMode.Playwright);
+
+      expect(result.code, result.stdout).toBe(1);
+      expect(result.stderr).toContain(`Playwright could not render ${fixtureUrl}`);
+    }, 60_000);
+
+    it("indexes the page as fetched in an auto scrape", async () => {
+      const result = await scrape("Fetched", ScrapeMode.Auto);
+
+      expect(result.code, result.stderr).toBe(0);
+      const hits = await withStore(storePath, (store) => store.searchStore("Fetched", "", "Melville"), {
+        configPath,
+      });
+      expect(hits.map((hit) => hit.content).join("\n")).toContain("Moby-Dick");
+    }, 60_000);
+  });
+
   it("leaves the jobs of another process alone when it scrapes and refreshes locally", async () => {
     const storePath = mkdtempSync(path.join(tmpdir(), "cli-e2e-leave-"));
     const configPath = writeTestConfig(storePath);

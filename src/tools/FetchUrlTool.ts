@@ -5,7 +5,7 @@ import { ScrapeMode } from "../scraper/types";
 import { convertToString } from "../scraper/utils/buffer";
 import { resolveCharset } from "../scraper/utils/charset";
 import type { AppConfig } from "../utils/config";
-import { ChallengeError } from "../utils/errors";
+import { ChallengeError, RenderError } from "../utils/errors";
 import { logger } from "../utils/logger";
 import { ToolError, ValidationError } from "./errors";
 
@@ -156,6 +156,14 @@ export class FetchUrlTool {
       if (error instanceof ChallengeError) {
         throw new ToolError(
           `Unable to fetch the URL "${url}": the site answered with a ${error.challengeType} bot challenge instead of the page, which cannot be passed automatically.`,
+          this.constructor.name,
+        );
+      }
+
+      // The page was fetched; only the browser failed, so the URL is not the problem.
+      if (error instanceof RenderError) {
+        throw new ToolError(
+          `${error.message}. Use scrape mode "auto" to read the page as fetched instead.`,
           this.constructor.name,
         );
       }

@@ -52,7 +52,7 @@ A pipeline ([src/scraper/pipelines/](../../src/scraper/pipelines/)) does two job
 
 The strategy tries the pipelines in a fixed order and uses the first whose `canProcess()` accepts the item's MIME type. Content that no pipeline accepts is skipped. The same `canProcess()` methods decide what a web crawl downloads at all, so support for a format is declared in one place.
 
-The HTML and Markdown pipelines preprocess content with a middleware chain (`BasePipeline.executeMiddlewareStack`). Each middleware reads and updates a shared `MiddlewareContext` (content, title, links, errors) and calls the next one. An error that a middleware throws goes into the context's `errors` instead of stopping the pipeline, and the pipeline splits whatever content is left. `WebScraperStrategy` treats a run that produced errors and no text as a failed extraction, not an empty page, so the stored page survives it (see [Scrape progress counters](../../ARCHITECTURE.md#scrape-progress-counters)).
+The HTML and Markdown pipelines preprocess content with a middleware chain (`BasePipeline.executeMiddlewareStack`). Each middleware reads and updates a shared `MiddlewareContext` (content, title, links, errors) and calls the next one. An error that a middleware throws goes into the context's `errors` instead of stopping the pipeline, and the pipeline splits whatever content is left. A `ScraperError` is the exception: it fails the page, like an error while fetching it. `WebScraperStrategy` treats a run that produced errors and no text as a failed extraction, not an empty page, so the stored page survives it (see [Scrape progress counters](../../ARCHITECTURE.md#scrape-progress-counters)).
 
 ### HTML
 
@@ -69,7 +69,7 @@ graph LR
     MD --> S[GreedySplitter over SemanticMarkdownSplitter]
 ```
 
-- Rendering comes first and runs only in the `playwright` and `auto` scrape modes. GitHub repository files always use `fetch` mode, since a raw file's scripts and styles are not served next to it. GitHub wiki pages use `fetch` mode too.
+- Rendering comes first and runs only in the `playwright` and `auto` scrape modes. When the browser cannot render a page, `auto` mode continues with the HTML as fetched, while `playwright` mode fails the page, so a scrape whose start page cannot be rendered fails. GitHub repository files always use `fetch` mode, since a raw file's scripts and styles are not served next to it. GitHub wiki pages use `fetch` mode too.
 - The title and the links come from the whole page, before extraction. The title is the `<title>` text, or the first `<h1>` when that is empty. Links in navigation and sidebars still reach the crawler, even though extraction removes their text from the indexed content.
 - Extraction removes page chrome. `scraper.htmlExtractor` selects the extractor. The default, `cheerio`, runs `HtmlSanitizerMiddleware`: it removes known chrome by selector, plus any `excludeSelectors` from the scrape options, and then narrows the page to its `<main>` or `role="main"` region when that region holds most of the remaining text. This catches site-specific promo banners and sponsor blocks that no selector list can name. `defuddle` runs `HtmlDefuddleMiddleware`, which the pipeline imports only on first use, so the default path never loads Defuddle and its dependencies.
 - Normalization works on what remains. It makes relative link and image URLs absolute, and unwraps fragment-only and non-HTTP links (`javascript:`, `mailto:`) to their text.
