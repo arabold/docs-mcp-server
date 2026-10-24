@@ -167,6 +167,12 @@ export interface ResolvedVersion {
   versionId: number;
   /** The library's stored display name. */
   library: string;
+  /**
+   * The status the version had before the claim reserved it as `queued`.
+   * Set only when the claim used `markQueued`, so a failed enqueue can put
+   * the status back instead of leaving the version busy forever.
+   */
+  previousStatus?: string;
 }
 
 /**

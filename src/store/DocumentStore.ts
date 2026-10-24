@@ -275,6 +275,7 @@ export class DocumentStore {
     getLibraryById: Database.Statement<[number]>;
     // New version-related statements
     insertVersion: Database.Statement<[number, string | null]>;
+    markVersionQueued: Database.Statement<[number]>;
     resolveVersionId: Database.Statement<[number, string | null]>;
     getVersionById: Database.Statement<[number]>;
     queryVersionsByLibraryId: Database.Statement<[number]>;
@@ -441,6 +442,9 @@ export class DocumentStore {
       // New version-related statements
       insertVersion: this.db.prepare<[number, string]>(
         "INSERT INTO versions (library_id, name, status) VALUES (?, ?, 'not_indexed') ON CONFLICT(library_id, name) DO NOTHING",
+      ),
+      markVersionQueued: this.db.prepare<[number]>(
+        "UPDATE versions SET status = 'queued' WHERE id = ?",
       ),
       resolveVersionId: this.db.prepare<[number, string]>(
         "SELECT id FROM versions WHERE library_id = ? AND name = ?",
@@ -1474,6 +1478,7 @@ export class DocumentStore {
     library: string,
     version: string,
     policy: ExistingTargetPolicy,
+    options?: { markQueued?: boolean },
   ): Promise<ResolvedVersion> {
     // Last point every write passes through: apply the single version label
     // contract here so an entry point that forgets to normalize cannot create a
@@ -1499,6 +1504,20 @@ export class DocumentStore {
         throw new StoreError(
           `Failed to resolve version_id for library: ${quoteName(library)}, version: ${quoteName(version)}`,
         );
+      }
+      if (options?.markQueued) {
+        // Reserve the version for the job being enqueued, inside the claim
+        // transaction: a concurrent renameLibrary sees an active status and
+        // refuses, instead of letting the resumed job recreate the old library.
+        const current = this.statements.getVersionById.get(versionIdRow.id) as {
+          status: string;
+        };
+        this.statements.markVersionQueued.run(versionIdRow.id);
+        return {
+          versionId: versionIdRow.id,
+          library: libraryRow.displayName,
+          previousStatus: current.status,
+        };
       }
       return { versionId: versionIdRow.id, library: libraryRow.displayName };
     });
