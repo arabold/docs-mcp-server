@@ -9,7 +9,13 @@ import * as githubAuth from "./github-auth";
 
 // Building realistic request headers loads a large browser-fingerprint model on
 // every fetcher construction, which only costs time here.
-vi.mock("../fetcher/FingerprintGenerator");
+vi.mock("../fetcher/FingerprintGenerator", () => ({
+  FingerprintGenerator: class {
+    generateHeaders(): Record<string, string> {
+      return {};
+    }
+  },
+}));
 
 const baseConfig = loadConfig();
 const config = {

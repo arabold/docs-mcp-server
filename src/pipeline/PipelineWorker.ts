@@ -6,6 +6,7 @@ import {
   type ScraperProgressEvent,
 } from "../scraper/types";
 import type { DocumentManagementService } from "../store";
+import { EmbeddingError } from "../store/errors";
 import { logger } from "../utils/logger";
 import { CancellationError } from "./errors";
 import type { InternalPipelineJob } from "./types";
@@ -248,12 +249,18 @@ export class PipelineWorker {
       logger.error(
         `❌ [${job.id}] Failed to process content ${progress.currentUrl}: ${docError}`,
       );
-      // A single document error is logged and the job continues.
       await callbacks.onJobError?.(
         job,
         docError instanceof Error ? docError : new Error(String(docError)),
         progress.result,
       );
+      // A failed embedding usually means the provider is down or misconfigured,
+      // so the remaining pages would fail too. The job fails at once instead of
+      // completing with nothing stored. Any other error is logged and the job
+      // continues.
+      if (docError instanceof EmbeddingError) {
+        throw docError;
+      }
     }
   }
 }

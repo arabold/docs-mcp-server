@@ -202,6 +202,12 @@ export class DimensionError extends StoreError {
 export class ConnectionError extends StoreError {}
 
 /**
+ * Error thrown when the embedding provider fails to embed a page's chunks.
+ * Nothing of the page is written when this is thrown.
+ */
+export class EmbeddingError extends ConnectionError {}
+
+/**
  * Error thrown when attempting to retrieve a document that doesn't exist.
  */
 export class DocumentNotFoundError extends StoreError {

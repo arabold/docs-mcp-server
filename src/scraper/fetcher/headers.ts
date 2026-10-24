@@ -63,9 +63,10 @@ export function withMarkdownPreferredAccept(
 }
 
 /**
- * Connection-level headers that Chromium refuses to take from a page. A
- * navigation that carries one fails with `net::ERR_INVALID_ARGUMENT`.
- * Generated Firefox fingerprints include `TE: trailers`.
+ * Connection-level headers, which the client that opens a connection sets for
+ * itself. Chromium refuses to take them from a page: a navigation that carries
+ * one fails with `net::ERR_INVALID_ARGUMENT`. Generated Firefox fingerprints
+ * include `TE: trailers`, and a few include `Connection: keep-alive`.
  */
 const CONNECTION_HEADERS = new Set([
   "connection",
@@ -79,6 +80,27 @@ const CONNECTION_HEADERS = new Set([
   "transfer-encoding",
   "upgrade",
 ]);
+
+/**
+ * Returns headers without the connection-level ones.
+ *
+ * A generated fingerprint copies a browser's headers, connection-level ones
+ * included. The HTTP client that sends the request manages its own connection
+ * and sets these itself: a copied `Connection: keep-alive` asks the server to
+ * hold open a connection the client may never reuse.
+ *
+ * @param headers Request headers, such as a generated fingerprint.
+ * @returns The headers minus any connection-level entry, in any letter case.
+ */
+export function withoutConnectionHeaders(
+  headers: Record<string, string>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers).filter(
+      ([header]) => !CONNECTION_HEADERS.has(header.toLowerCase()),
+    ),
+  );
+}
 
 /**
  * Returns headers without the ones Chromium sets for itself.
@@ -99,9 +121,8 @@ export function withoutBrowserManagedHeaders(
   headers: Record<string, string>,
 ): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(headers).filter(([header]) => {
-      const name = header.toLowerCase();
-      return !name.startsWith("sec-fetch-") && !CONNECTION_HEADERS.has(name);
-    }),
+    Object.entries(withoutConnectionHeaders(headers)).filter(
+      ([header]) => !header.toLowerCase().startsWith("sec-fetch-"),
+    ),
   );
 }
