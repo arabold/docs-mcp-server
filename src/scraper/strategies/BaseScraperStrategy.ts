@@ -78,8 +78,11 @@ class FailureThresholdExceededError extends ScraperError {}
 
 /** Abort state shared by the items of one crawl. */
 interface CrawlAbortState {
-  /** Set once the child-page failure rate trips; running items stop on it. */
-  abortError: FailureThresholdExceededError | null;
+  /**
+   * Set once the child-page failure rate trips or the progress callback
+   * throws; running items stop on it.
+   */
+  abortError: Error | null;
 }
 
 export abstract class BaseScraperStrategy implements ScraperStrategy {
@@ -424,34 +427,43 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
         `🌐 Scraping page ${pagesScraped}/${this.effectiveTotal} (depth ${item.depth}/${maxDepth}): ${item.url}`,
       );
 
-      await progressCallback({
-        pagesScraped,
-        totalPages: this.effectiveTotal,
-        totalDiscovered: this.totalDiscovered,
-        pagesIndexed: this.pagesIndexed,
-        currentUrl: item.url,
-        depth: item.depth,
-        maxDepth,
-        outcome,
-        result: null,
-        pageId: item.pageId,
-        ...extra,
-        // Told to the store rather than derived there: only the crawl knows
-        // whether it has already stored this identity during this run, and
-        // that is what separates "a competing representation" from "the new
-        // state of the page", which are resolved in opposite directions.
-        ...(extra.result
-          ? { result: { ...extra.result, isAdditionalRepresentation: alreadyStored } }
-          : {}),
-        ...(extra.emptyPage
-          ? {
-              emptyPage: {
-                ...extra.emptyPage,
-                isAdditionalRepresentation: alreadyStored,
-              },
-            }
-          : {}),
-      });
+      try {
+        await progressCallback({
+          pagesScraped,
+          totalPages: this.effectiveTotal,
+          totalDiscovered: this.totalDiscovered,
+          pagesIndexed: this.pagesIndexed,
+          currentUrl: item.url,
+          depth: item.depth,
+          maxDepth,
+          outcome,
+          result: null,
+          pageId: item.pageId,
+          ...extra,
+          // Told to the store rather than derived there: only the crawl knows
+          // whether it has already stored this identity during this run, and
+          // that is what separates "a competing representation" from "the new
+          // state of the page", which are resolved in opposite directions.
+          ...(extra.result
+            ? { result: { ...extra.result, isAdditionalRepresentation: alreadyStored } }
+            : {}),
+          ...(extra.emptyPage
+            ? {
+                emptyPage: {
+                  ...extra.emptyPage,
+                  isAdditionalRepresentation: alreadyStored,
+                },
+              }
+            : {}),
+        });
+      } catch (error) {
+        // The consumer reports a page it cannot store and carries on, so an
+        // error that reaches here means the job cannot go on. Recording it ends
+        // the crawl; the catch below would otherwise count it as one failed
+        // page and, under `ignoreErrors`, crawl on.
+        crawl.abortError ??= error instanceof Error ? error : new Error(String(error));
+        throw error;
+      }
     };
 
     try {

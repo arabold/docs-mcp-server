@@ -20,6 +20,7 @@ import { FixedDimensionEmbeddings } from "./embeddings/FixedDimensionEmbeddings"
 import {
   ConnectionError,
   DimensionError,
+  EmbeddingError,
   EmbeddingModelChangedError,
   InvalidLibraryNameError,
   LibraryAlreadyExistsError,
@@ -1896,7 +1897,7 @@ export class DocumentStore {
   private createEmbeddingConnectionError(
     error: unknown,
     context: EmbeddingBatchContext,
-  ): ConnectionError {
+  ): EmbeddingError {
     const modelSpec = this.embeddingConfig?.modelSpec ?? "unknown";
     const errorHint = this.getEmbeddingErrorHint(error);
     const providerHint = this.embeddingConfig
@@ -1905,7 +1906,7 @@ export class DocumentStore {
     const hints = [errorHint, providerHint].filter((hint) => hint !== null);
     const hintText = hints.length > 0 ? `\n   ${hints.join("\n   ")}` : "";
 
-    return new ConnectionError(
+    return new EmbeddingError(
       `Failed to generate embeddings for ${context.url} using ${modelSpec}.\n` +
         `   Batch ${context.batchIndex}: ${context.batchTextCount} text(s), ${context.batchChars} chars, ${context.totalChunks} page chunk(s).\n` +
         `   Config: batchSize=${this.embeddingBatchSize}, batchChars=${this.embeddingBatchChars}, vectorDimension=${this.dbDimension}.` +
