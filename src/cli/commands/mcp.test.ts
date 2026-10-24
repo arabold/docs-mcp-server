@@ -55,6 +55,7 @@ vi.mock("../utils", () => ({
   resolveProtocol: vi.fn((p) => p || "http"),
   checkAuthForProtocol: vi.fn(),
   createAppServerConfig: vi.fn((config) => config),
+  ensurePlaywrightBrowsersInstalled: vi.fn(),
   handleEmbeddingModelChange: vi.fn(),
   CliContext: {},
   setupLogging: vi.fn(),

@@ -14,7 +14,7 @@ import {
 import { FetchUrlTool } from "../../tools";
 import { loadConfig } from "../../utils/config";
 import { renderTextOutput } from "../output";
-import { parseHeaders } from "../utils";
+import { ensurePlaywrightBrowsersInstalled, parseHeaders } from "../utils";
 
 export function createFetchUrlCommand(cli: Argv) {
   cli.command(
@@ -70,6 +70,8 @@ export function createFetchUrlCommand(cli: Argv) {
         configPath: argv.config as string,
         searchDir: argv.storePath as string, // resolved globally
       });
+
+      ensurePlaywrightBrowsersInstalled();
 
       const fetchUrlTool = new FetchUrlTool(
         new AutoDetectFetcher(appConfig.scraper),

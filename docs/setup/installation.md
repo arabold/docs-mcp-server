@@ -22,7 +22,7 @@ Started from a terminal, this runs the HTTP server on port 6280:
 
 The server listens on `127.0.0.1` only. [Configuration](configuration.md) covers the host, the port and every other setting.
 
-On its first start, the server installs Playwright's Chromium, which it uses for pages that need JavaScript. To use a Chromium you already have, set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to its executable.
+On its first start, the server installs Playwright's headless Chromium, which it uses for pages that need JavaScript. A Chromium installed with `playwright install` for the same Playwright version counts too. To use a Chromium you already have, set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to its executable.
 
 To get a `docs-mcp-server` command instead of calling npx each time, install the package globally:
 
