@@ -265,8 +265,9 @@ export class DocumentManagementService {
     library: string,
     version: string,
     policy: ExistingTargetPolicy,
+    options?: { markQueued?: boolean },
   ): Promise<ResolvedVersion> {
-    return this.store.claimVersion(library, version, policy);
+    return this.store.claimVersion(library, version, policy, options);
   }
 
   /**
@@ -409,6 +410,7 @@ export class DocumentManagementService {
       throw await this.libraryNotFound(library);
     }
 
+    this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
     logger.info(`✅ Renamed '${renamed.oldName}' to '${renamed.newName}'.`);
     return renamed;
   }

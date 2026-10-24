@@ -1958,6 +1958,29 @@ describe("DocumentStore - Common Functionality", () => {
           newName: "next",
         });
       });
+
+      it("refuses the rename right after a job claim, before the job status update", async () => {
+        // Regression (review on #594): the enqueue path claimed a version and
+        // only later marked it queued, so a rename in between let the resumed
+        // job recreate the old library and split its data. The claim now
+        // reserves the version as queued inside the same transaction.
+        const claimed = await store.claimVersion("react", "19.0.0", "replace", {
+          markQueued: true,
+        });
+        expect(claimed.previousStatus).toBe(VersionStatus.NOT_INDEXED);
+
+        await expect(store.renameLibrary("react", "next")).rejects.toThrow(
+          LibraryBusyError,
+        );
+        expect(await listedLibraries()).toEqual(["react"]);
+
+        // An existing version reports the status to put back if the enqueue fails
+        await store.updateVersionStatus(claimed.versionId, VersionStatus.COMPLETED);
+        const reclaimed = await store.claimVersion("react", "19.0.0", "replace", {
+          markQueued: true,
+        });
+        expect(reclaimed.previousStatus).toBe(VersionStatus.COMPLETED);
+      });
     });
 
     describe("findVersion", () => {

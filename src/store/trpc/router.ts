@@ -2,9 +2,15 @@
  * tRPC router exposing document data store operations via the worker API.
  * Only procedures actually used externally are included to keep surface minimal.
  */
-import { initTRPC } from "@trpc/server";
+import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import { z } from "zod";
+import {
+  InvalidLibraryNameError,
+  LibraryAlreadyExistsError,
+  LibraryBusyError,
+  LibraryNotFoundInStoreError,
+} from "../errors";
 import type {
   DbVersionWithLibrary,
   EmbeddingConfigInfo,
@@ -15,6 +21,24 @@ import type {
   VersionStatus,
 } from "../types";
 import type { IDocumentManagement } from "./interfaces";
+
+/**
+ * Maps a rename failure a caller can act on to its tRPC code, mirroring the
+ * pipeline router's enqueue mapping. Anything else passes through unchanged.
+ */
+function toRenameError(error: unknown): unknown {
+  const code =
+    error instanceof LibraryAlreadyExistsError || error instanceof LibraryBusyError
+      ? "CONFLICT"
+      : error instanceof InvalidLibraryNameError
+        ? "BAD_REQUEST"
+        : error instanceof LibraryNotFoundInStoreError
+          ? "NOT_FOUND"
+          : null;
+  return code && error instanceof Error
+    ? new TRPCError({ code, message: error.message, cause: error })
+    : error;
+}
 
 // Context carries the document management API
 export interface DataTrpcContext {
@@ -202,7 +226,11 @@ export function createDataRouter(trpc: unknown) {
           ctx: DataTrpcContext;
           input: { library: string; newName: string };
         }) => {
-          return await ctx.docService.renameLibrary(input.library, input.newName);
+          try {
+            return await ctx.docService.renameLibrary(input.library, input.newName);
+          } catch (error) {
+            throw toRenameError(error);
+          }
         },
       ),
 

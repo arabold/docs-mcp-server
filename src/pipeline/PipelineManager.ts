@@ -442,67 +442,87 @@ export class PipelineManager implements IPipeline {
     const requested = enqueue.onExisting ?? "reject-version";
     const policy =
       options.clean === false && requested === "reject-version" ? "replace" : requested;
-    const claimed = await this.store.claimVersion(library, normalizedVersion, policy);
-
-    await this.stopJobsFor(library, normalizedVersion);
-    const label = formatVersionLabel(claimed.library, normalizedVersion);
-
-    const normalizedOptions = this.normalizeScraperOptions(options);
-
-    const jobId = uuidv4();
-    const abortController = new AbortController();
-    let resolveCompletion!: () => void;
-    let rejectCompletion!: (reason?: unknown) => void;
-
-    const completionPromise = new Promise<void>((resolve, reject) => {
-      resolveCompletion = resolve;
-      rejectCompletion = reject;
+    // Reserve the version as queued inside the claim transaction, so a rename
+    // racing the enqueue sees an active status and refuses (copilot review on
+    // #594). If the enqueue fails before the job is registered, the catch below
+    // puts the previous status back.
+    const claimed = await this.store.claimVersion(library, normalizedVersion, policy, {
+      markQueued: true,
     });
-    // Prevent unhandled rejection warnings if rejection occurs before consumers attach handlers
-    completionPromise.catch(() => {});
 
-    const job: InternalPipelineJob = {
-      id: jobId,
-      // The stored display name, not the caller's casing
-      library: claimed.library,
-      version: normalizedVersion,
-      versionId: claimed.versionId,
-      status: PipelineJobStatus.QUEUED,
-      progress: null,
-      error: null,
-      createdAt: new Date(),
-      startedAt: null,
-      finishedAt: null,
-      abortController,
-      completionPromise,
-      resolveCompletion,
-      rejectCompletion,
-      // Database fields (single source of truth)
-      // Will be populated by updateJobStatus
-      progressPages: 0,
-      progressPagesIndexed: 0,
-      progressMaxPages: 0,
-      errorMessage: null,
-      updatedAt: new Date(),
-      sourceUrl: normalizedOptions.url,
-      scraperOptions: normalizedOptions,
-    };
+    let registered = false;
+    try {
+      await this.stopJobsFor(library, normalizedVersion);
+      const label = formatVersionLabel(claimed.library, normalizedVersion);
 
-    this.jobMap.set(jobId, job);
-    this.jobQueue.push(jobId);
-    logger.info(`📝 Job enqueued: ${jobId} for ${label}`);
+      const normalizedOptions = this.normalizeScraperOptions(options);
 
-    // Update database status to QUEUED
-    await this.updateJobStatus(job, PipelineJobStatus.QUEUED);
+      const jobId = uuidv4();
+      const abortController = new AbortController();
+      let resolveCompletion!: () => void;
+      let rejectCompletion!: (reason?: unknown) => void;
 
-    // Trigger processing if manager is running
-    if (this.isRunning) {
-      this._processQueue().catch((error) => {
-        logger.error(`❌ Error in processQueue during enqueue: ${error}`);
+      const completionPromise = new Promise<void>((resolve, reject) => {
+        resolveCompletion = resolve;
+        rejectCompletion = reject;
       });
-    }
+      // Prevent unhandled rejection warnings if rejection occurs before consumers attach handlers
+      completionPromise.catch(() => {});
 
-    return jobId;
+      const job: InternalPipelineJob = {
+        id: jobId,
+        // The stored display name, not the caller's casing
+        library: claimed.library,
+        version: normalizedVersion,
+        versionId: claimed.versionId,
+        status: PipelineJobStatus.QUEUED,
+        progress: null,
+        error: null,
+        createdAt: new Date(),
+        startedAt: null,
+        finishedAt: null,
+        abortController,
+        completionPromise,
+        resolveCompletion,
+        rejectCompletion,
+        // Database fields (single source of truth)
+        // Will be populated by updateJobStatus
+        progressPages: 0,
+        progressPagesIndexed: 0,
+        progressMaxPages: 0,
+        errorMessage: null,
+        updatedAt: new Date(),
+        sourceUrl: normalizedOptions.url,
+        scraperOptions: normalizedOptions,
+      };
+
+      this.jobMap.set(jobId, job);
+      this.jobQueue.push(jobId);
+      registered = true;
+      logger.info(`📝 Job enqueued: ${jobId} for ${label}`);
+
+      // Update database status to QUEUED
+      await this.updateJobStatus(job, PipelineJobStatus.QUEUED);
+
+      // Trigger processing if manager is running
+      if (this.isRunning) {
+        this._processQueue().catch((error) => {
+          logger.error(`❌ Error in processQueue during enqueue: ${error}`);
+        });
+      }
+
+      return jobId;
+    } catch (error) {
+      // The claim reserved the version as queued; without a registered job
+      // behind it the reservation must not stick, or the library stays busy
+      // forever. A registered job owns the status from here on.
+      if (!registered && claimed.previousStatus) {
+        await this.store
+          .updateVersionStatus(claimed.versionId, claimed.previousStatus as VersionStatus)
+          .catch(() => {});
+      }
+      throw error;
+    }
   }
 
   /**
