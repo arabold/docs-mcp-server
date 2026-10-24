@@ -139,7 +139,7 @@ describe("paths utilities", () => {
       const result = resolveStorePath(relativePath);
 
       expect(result).toBe(`${projectRoot}/relative/storage/path`);
-      expect(vol.existsSync(relativePath)).toBe(true);
+      expect(vol.existsSync(result)).toBe(true);
     });
 
     it("should handle empty string storePath by falling back to normal logic", () => {
