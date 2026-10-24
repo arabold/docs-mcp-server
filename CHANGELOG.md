@@ -1,3 +1,22 @@
+# [3.4.0](https://github.com/arabold/docs-mcp-server/compare/v3.3.0...v3.4.0) (2026-10-24)
+
+### Features
+
+- Confirm an embedding model change without a terminal using `--accept-model-change` or `DOCS_MCP_ACCEPT_MODEL_CHANGE=true` with the default command, `mcp`, or `worker`; this deletes the stored vectors and allows startup to continue. Confirmation messages no longer show an assumed dimension count when the new model’s dimensions are unknown. ([#593](https://github.com/arabold/docs-mcp-server/issues/593), [#588](https://github.com/arabold/docs-mcp-server/issues/588))
+
+### Bug fixes
+
+- GitHub scraping indexes files from blob and branch-tree URLs without storing repository or directory listings as empty pages. Refresh removes those unwanted entries, missing wikis no longer appear as repository content, and empty wiki pages keep their HTML titles. ([#590](https://github.com/arabold/docs-mcp-server/issues/590), [#589](https://github.com/arabold/docs-mcp-server/issues/589))
+- The web interface’s search playground resolves “Latest” and version ranges the same way as the `search_docs` MCP tool, so versioned libraries return results instead of searching only the unversioned bucket. ([#592](https://github.com/arabold/docs-mcp-server/issues/592), [#587](https://github.com/arabold/docs-mcp-server/issues/587))
+- Search results include child content and the enclosing declarations and closing braces needed to understand code matches, without pulling in unrelated scopes. JSON matches return their containing object or array with enclosing keys and brackets rather than the whole document. ([#578](https://github.com/arabold/docs-mcp-server/issues/578), [#353](https://github.com/arabold/docs-mcp-server/issues/353), [#469](https://github.com/arabold/docs-mcp-server/issues/469), [#475](https://github.com/arabold/docs-mcp-server/issues/475), [#480](https://github.com/arabold/docs-mcp-server/issues/480))
+- Scrape jobs fail immediately when embeddings cannot be generated instead of reporting completion with no stored content. Fatal worker errors, such as a failed page deletion during refresh, also stop the crawl even when page errors are ignored. ([#595](https://github.com/arabold/docs-mcp-server/issues/595), [#585](https://github.com/arabold/docs-mcp-server/issues/585))
+- Playwright mode reports rendering failures instead of silently storing unrendered HTML; auto mode retains its fallback, and `fetch_url` identifies render failures explicitly. Browser restarts avoid an unnecessary retry through the retiring browser, and dependency updates address security vulnerabilities. ([#597](https://github.com/arabold/docs-mcp-server/issues/597))
+
+### Internal changes
+
+- Consolidate tests and strengthen checks through real CLI, MCP, server, scraper, and store interfaces, while removing unused internal code. GitHub blob-refresh and wiki-title checks move into the strategy suite without losing coverage. ([#579](https://github.com/arabold/docs-mcp-server/issues/579), [#580](https://github.com/arabold/docs-mcp-server/issues/580), [#581](https://github.com/arabold/docs-mcp-server/issues/581), [#582](https://github.com/arabold/docs-mcp-server/issues/582), [#586](https://github.com/arabold/docs-mcp-server/issues/586), [#306](https://github.com/arabold/docs-mcp-server/issues/306), [#311](https://github.com/arabold/docs-mcp-server/issues/311), [#341](https://github.com/arabold/docs-mcp-server/issues/341), [#353](https://github.com/arabold/docs-mcp-server/issues/353), [#418](https://github.com/arabold/docs-mcp-server/issues/418), [#475](https://github.com/arabold/docs-mcp-server/issues/475), [#490](https://github.com/arabold/docs-mcp-server/issues/490), [#503](https://github.com/arabold/docs-mcp-server/issues/503))
+- Make browser and crawl tests more reliable by bypassing request interception for loopback traffic and leaving generated connection headers to Node. ([#591](https://github.com/arabold/docs-mcp-server/issues/591), [#596](https://github.com/arabold/docs-mcp-server/issues/596))
+
 ## [3.2.1](https://github.com/arabold/docs-mcp-server/compare/v3.2.0...v3.2.1) (2026-09-27)
 
 
