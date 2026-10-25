@@ -3,7 +3,7 @@ import https from "node:https";
 import path from "node:path";
 import { Readable } from "node:stream";
 import axios from "axios";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CancellationError } from "../../pipeline/errors";
 import { type AppConfig, DEFAULT_CONFIG } from "../../utils/config";
 import {
@@ -649,6 +649,56 @@ describe("HttpFetcher", () => {
       }
     });
 
+    it("fails a 429 carrying a challenge marker as a ChallengeError without retrying", async () => {
+      // The response docs.godotengine.org sent once Cloudflare rate limited the crawl.
+      const cases: Array<{
+        label: string;
+        headers: Record<string, string>;
+        body: string;
+      }> = [
+        {
+          label: "a cf-mitigated header",
+          headers: { "cf-mitigated": "challenge", server: "cloudflare" },
+          body: "",
+        },
+        {
+          label: "the Just a moment marker",
+          headers: {},
+          body: "<html><head><title>Just a moment...</title></head></html>",
+        },
+      ];
+
+      for (const { label, headers, body } of cases) {
+        mockedAxios.get.mockReset();
+        mockedAxios.get.mockRejectedValue(httpError(429, headers, body));
+
+        const error = await new HttpFetcher(scraperConfig())
+          .fetch(PAGE_URL, { maxRetries: 2, retryDelay: 1 })
+          .catch((e) => e);
+
+        expect.soft(error, label).toBeInstanceOf(ChallengeError);
+        expect.soft(error.statusCode, label).toBe(429);
+        expect.soft(mockedAxios.get, label).toHaveBeenCalledTimes(1);
+      }
+    });
+
+    it("retries a 429 whose only Cloudflare marker is the server header", async () => {
+      // A plain rate limit on a Cloudflare-fronted site, not a challenge.
+      mockedAxios.get
+        .mockRejectedValueOnce(
+          httpError(429, { server: "cloudflare" }, "Too many requests"),
+        )
+        .mockResolvedValueOnce(ok("success"));
+
+      const result = await new HttpFetcher(scraperConfig()).fetch(PAGE_URL, {
+        maxRetries: 1,
+        retryDelay: 1,
+      });
+
+      expect(result.content.toString()).toBe("success");
+      expect(mockedAxios.get).toHaveBeenCalledTimes(2);
+    });
+
     it("fails an ordinary 403 as an HttpStatusError", async () => {
       mockedAxios.get.mockRejectedValue(
         httpError(403, { server: "nginx" }, "<html><body>Access denied</body></html>"),
@@ -659,6 +709,146 @@ describe("HttpFetcher", () => {
       expect(error).toBeInstanceOf(HttpStatusError);
       expect(error).not.toBeInstanceOf(ChallengeError);
       expect(error.statusCode).toBe(403);
+    });
+  });
+
+  describe("throttling", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      // On a whole second, so an HTTP-date names the delay exactly.
+      vi.setSystemTime(new Date("2026-10-25T12:00:00Z"));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    /** The URLs axios was asked for, in order. */
+    function requestedUrls() {
+      return mockedAxios.get.mock.calls.map(([url]) => url);
+    }
+
+    it("waits for the Retry-After delay before retrying a 429 or 503", async () => {
+      const cases = [
+        { label: "a 429 with delta-seconds", status: 429, retryAfter: () => "7" },
+        { label: "a 503 with delta-seconds", status: 503, retryAfter: () => "7" },
+        {
+          label: "a 429 with an HTTP-date",
+          status: 429,
+          retryAfter: () => new Date(Date.now() + 7_000).toUTCString(),
+        },
+      ];
+
+      for (const { label, status, retryAfter } of cases) {
+        mockedAxios.get.mockReset();
+        mockedAxios.get
+          .mockRejectedValueOnce(httpError(status, { "retry-after": retryAfter() }))
+          .mockResolvedValueOnce(ok("success"));
+
+        const result = new HttpFetcher(scraperConfig()).fetch(PAGE_URL, {
+          maxRetries: 1,
+        });
+
+        await vi.advanceTimersByTimeAsync(6_999);
+        expect.soft(mockedAxios.get, label).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect.soft((await result).content.toString(), label).toBe("success");
+        expect.soft(mockedAxios.get, label).toHaveBeenCalledTimes(2);
+      }
+    });
+
+    it("waits between half and all of five times the retry delay when a 429 names no delay", async () => {
+      mockedAxios.get
+        .mockRejectedValueOnce(httpError(429))
+        .mockResolvedValueOnce(ok("success"));
+
+      const result = new HttpFetcher(scraperConfig()).fetch(PAGE_URL, {
+        maxRetries: 1,
+        retryDelay: 1_000,
+      });
+
+      await vi.advanceTimersByTimeAsync(2_499);
+      expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2_501);
+      expect((await result).content.toString()).toBe("success");
+    });
+
+    it("retries a 503 without Retry-After on the ordinary schedule", async () => {
+      mockedAxios.get
+        .mockRejectedValueOnce(httpError(503))
+        .mockResolvedValueOnce(ok("success"));
+
+      const result = new HttpFetcher(scraperConfig()).fetch(PAGE_URL, {
+        maxRetries: 1,
+        retryDelay: 1_000,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect((await result).content.toString()).toBe("success");
+    });
+
+    it("holds the host's other requests until its pause ends", async () => {
+      const fetcher = new HttpFetcher(
+        scraperConfig({ allowedHosts: ["example.com", "example.org"] }),
+      );
+      let throttled = false;
+      mockedAxios.get.mockImplementation(async (url) => {
+        if (url === PAGE_URL && !throttled) {
+          throttled = true;
+          throw httpError(429, { "retry-after": "10" });
+        }
+        return ok(`body of ${url}`);
+      });
+
+      const first = fetcher.fetch(PAGE_URL, { maxRetries: 1 });
+      await vi.advanceTimersByTimeAsync(0);
+      const sameHost = fetcher.fetch("https://example.com/other");
+      const otherHost = fetcher.fetch("https://example.org/page");
+      await vi.advanceTimersByTimeAsync(9_999);
+
+      expect(requestedUrls()).toEqual([PAGE_URL, "https://example.org/page"]);
+      expect((await otherHost).content.toString()).toBe(
+        "body of https://example.org/page",
+      );
+
+      await vi.advanceTimersByTimeAsync(1);
+      await Promise.all([first, sameHost]);
+      expect(requestedUrls().slice(2).sort()).toEqual([
+        "https://example.com/other",
+        PAGE_URL,
+      ]);
+    });
+
+    it("pauses the host on a 429 challenge it does not retry", async () => {
+      const fetcher = new HttpFetcher(scraperConfig());
+      mockedAxios.get
+        .mockRejectedValueOnce(
+          httpError(429, { "cf-mitigated": "challenge", "retry-after": "10" }),
+        )
+        .mockResolvedValue(ok("success"));
+
+      const challenge = await fetcher.fetch(PAGE_URL).catch((e) => e);
+      const next = fetcher.fetch("https://example.com/other");
+      await vi.advanceTimersByTimeAsync(9_999);
+
+      expect(challenge).toBeInstanceOf(ChallengeError);
+      expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await next).content.toString()).toBe("success");
+    });
+
+    it("fails with CancellationError when the signal aborts while the host is paused", async () => {
+      mockedAxios.get.mockRejectedValueOnce(httpError(429, { "retry-after": "30" }));
+      const controller = new AbortController();
+
+      const error = new HttpFetcher(scraperConfig())
+        .fetch(PAGE_URL, { maxRetries: 1, signal: controller.signal })
+        .catch((e) => e);
+      await vi.advanceTimersByTimeAsync(1_000);
+      controller.abort();
+
+      expect(await error).toBeInstanceOf(CancellationError);
+      expect(mockedAxios.get).toHaveBeenCalledTimes(1);
     });
   });
 

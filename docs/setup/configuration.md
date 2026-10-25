@@ -252,7 +252,7 @@ Settings for fetching and crawling. The `scrape` command can override `maxPages`
 | `pageTimeoutMs` | `5000` | Timeout for each wait while a page renders (content, iframes, network idle) and for closing a page or the browser (ms). A browser that does not close in time is killed. |
 | `browserTimeoutMs` | `30000` | Timeout for a page navigation in the browser, used by the browser fetcher and the Playwright renderer (ms). |
 | `fetcher.maxRetries` | `3` | Retries for a failed HTTP request. |
-| `fetcher.baseDelayMs` | `1000` | Initial delay for exponential backoff between retries (ms). |
+| `fetcher.baseDelayMs` | `1000` | Initial delay for exponential backoff between retries (ms). A host that answers 429 without `Retry-After` is paused for five times as long (see [Throttling](../concepts/content-processing.md#throttling)). |
 | `fetcher.timeoutMs` | `30000` | Timeout for an HTTP request made without the browser (ms). |
 | `fetcher.maxCacheItemSizeBytes` | `512000` | Largest resource, in bytes, that the browser renderer keeps in its in-memory cache. |
 | `document.maxSize` | `10485760` | Maximum size (bytes) of a PDF, Office or other binary document. |

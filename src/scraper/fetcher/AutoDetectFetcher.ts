@@ -9,6 +9,7 @@ import { ChallengeError, HttpStatusError, TlsCertificateError } from "../../util
 import { logger } from "../../utils/logger";
 import { BrowserFetcher } from "./BrowserFetcher";
 import { FileFetcher } from "./FileFetcher";
+import { HostBackoff } from "./HostBackoff";
 import { HttpFetcher } from "./HttpFetcher";
 import type { ManagedBrowser } from "./ManagedBrowser";
 import type { ContentFetcher, FetchOptions, RawContent } from "./types";
@@ -27,6 +28,8 @@ export class AutoDetectFetcher implements ContentFetcher {
   private readonly httpFetcher: HttpFetcher;
   private readonly browserFetcher: BrowserFetcher;
   private readonly fileFetcher: FileFetcher;
+  /** Pauses a host that throttled a request, for the browser fallback too. */
+  private readonly hostBackoff = new HostBackoff();
 
   /**
    * @param scraperConfig - Scraper settings shared by all fetchers.
@@ -34,7 +37,7 @@ export class AutoDetectFetcher implements ContentFetcher {
    * share it with the HTML renderer.
    */
   constructor(scraperConfig: AppConfig["scraper"], managedBrowser?: ManagedBrowser) {
-    this.httpFetcher = new HttpFetcher(scraperConfig);
+    this.httpFetcher = new HttpFetcher(scraperConfig, this.hostBackoff);
     this.browserFetcher = new BrowserFetcher(scraperConfig, managedBrowser);
     this.fileFetcher = new FileFetcher(scraperConfig);
   }
@@ -94,6 +97,8 @@ export class AutoDetectFetcher implements ContentFetcher {
         const reason = AutoDetectFetcher.browserFallbackReason(error);
         if (reason) {
           logger.info(`🔄 ${reason} for ${source}, falling back to browser fetcher...`);
+          // A 429 paused the host; navigating at once would be throttled again.
+          await this.hostBackoff.wait(source, options?.signal);
           return this.browserFetcher.fetch(source, options);
         }
         throw error;

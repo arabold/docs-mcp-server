@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Readable } from "node:stream";
+import axios from "axios";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../utils/config";
 import {
   ChallengeError,
@@ -10,6 +12,8 @@ import { AutoDetectFetcher } from "./AutoDetectFetcher";
 import { BrowserFetcher } from "./BrowserFetcher";
 import { HttpFetcher } from "./HttpFetcher";
 import { FetchStatus } from "./types";
+
+vi.mock("axios");
 
 describe("AutoDetectFetcher", () => {
   const scraperConfig = loadConfig().scraper;
@@ -97,5 +101,49 @@ describe("AutoDetectFetcher", () => {
         .rejects.toBe(error);
       expect.soft(browserSpy, label).not.toHaveBeenCalled();
     }
+  });
+
+  describe("on a throttled host", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("waits out the host's pause before falling back to the browser", async () => {
+      // Lists the host so the access policy needs no DNS lookup.
+      const config = {
+        ...scraperConfig,
+        security: {
+          ...scraperConfig.security,
+          network: { ...scraperConfig.security.network, allowedHosts: ["example.com"] },
+        },
+      };
+      vi.mocked(axios.get)
+        .mockReset()
+        .mockRejectedValue(
+          Object.assign(new Error("Request failed with status code 429"), {
+            isAxiosError: true,
+            response: {
+              status: 429,
+              headers: { "cf-mitigated": "challenge", "retry-after": "10" },
+              data: Readable.from([""]),
+            },
+          }),
+        );
+      const browserSpy = vi
+        .spyOn(BrowserFetcher.prototype, "fetch")
+        .mockResolvedValue(browserResult);
+
+      const result = new AutoDetectFetcher(config).fetch(source);
+      await vi.advanceTimersByTimeAsync(9_999);
+
+      expect(browserSpy).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await result).toBe(browserResult);
+      expect(axios.get).toHaveBeenCalledTimes(1);
+    });
   });
 });
