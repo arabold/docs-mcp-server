@@ -16,7 +16,6 @@ import {
 } from "../../utils/errors";
 import { FingerprintGenerator } from "./FingerprintGenerator";
 import { HttpFetcher } from "./HttpFetcher";
-import { MARKDOWN_PREFERRED_ACCEPT } from "./headers";
 import { FetchStatus } from "./types";
 
 vi.mock("axios");
@@ -246,7 +245,7 @@ describe("HttpFetcher", () => {
   });
 
   describe("request", () => {
-    it("sends a streamed request with browser headers, a Markdown-preferred Accept and the default timeout", async () => {
+    it("sends a streamed request with browser headers, an HTML-first Accept and the default timeout", async () => {
       mockedAxios.get.mockResolvedValue(ok());
 
       await fetcher.fetch(PAGE_URL);
@@ -258,7 +257,9 @@ describe("HttpFetcher", () => {
           headers: expect.objectContaining({
             "user-agent": expect.any(String),
             "accept-language": expect.any(String),
-            Accept: MARKDOWN_PREFERRED_ACCEPT,
+            // Asking for Markdown would get a server's on-request conversion,
+            // which leaves out the navigation links a crawl follows.
+            accept: expect.stringMatching(/^text\/html,/),
             // zstd is left out because axios does not decompress it.
             "Accept-Encoding": "gzip, deflate, br",
           }),

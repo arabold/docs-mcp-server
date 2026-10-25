@@ -83,7 +83,7 @@ graph LR
 
 ### Markdown
 
-`MarkdownPipeline` takes the title from the front matter `title` field, or else from the first `#` heading. It collects inline and reference-style link targets for the crawler and splits the text with the same splitters as HTML. A site that serves Markdown, through content negotiation or a `.md` variant, skips the HTML chain entirely.
+`MarkdownPipeline` takes the title from the front matter `title` field, or else from the first `#` heading. It collects inline and reference-style link targets for the crawler and splits the text with the same splitters as HTML. A Markdown response, from a `.md` URL or a caller's own `Accept` header, skips the HTML chain entirely.
 
 ### Documents
 

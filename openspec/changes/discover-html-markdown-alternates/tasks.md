@@ -17,7 +17,7 @@
 - [ ] 3.1 Apply existing scope checks, include/exclude pattern checks, and optional custom follow-link policy before fetching a resolved alternate URL.
 - [ ] 3.2 Treat an accepted alternate as the representation of the original page and avoid enqueueing or indexing both resources solely because of the alternate relationship.
 - [ ] 3.3 Preserve existing llms.txt ordering: implicit `.md` variant first for `fromLlmsTxt` pages, then original HTML alternate discovery only if the implicit variant fails and the original response is HTML.
-- [ ] 3.4 Preserve existing Markdown content negotiation behavior for all web requests.
+- [ ] 3.4 Keep the default HTML-first `Accept` header for all web requests; a Markdown alternate is reached by its own URL.
 
 ## 4. Integration Tests
 

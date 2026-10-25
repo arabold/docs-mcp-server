@@ -15,7 +15,7 @@ import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { detectChallengePage } from "./challenge";
 import { FingerprintGenerator } from "./FingerprintGenerator";
 import { HostBackoff, parseRetryAfter } from "./HostBackoff";
-import { withMarkdownPreferredAccept, withoutConnectionHeaders } from "./headers";
+import { withoutConnectionHeaders } from "./headers";
 import {
   type ContentFetcher,
   type FetchOptions,
@@ -148,13 +148,14 @@ export class HttpFetcher implements ContentFetcher {
           const fingerprint = withoutConnectionHeaders(
             this.fingerprintGenerator.generateHeaders(),
           );
-          const headers = withMarkdownPreferredAccept(
-            {
-              ...fingerprint,
-              ...options?.headers, // User-provided headers override generated ones
-            },
-            options?.headers,
-          );
+          // The fingerprint's Accept asks for HTML first. Markdown that a server
+          // converts on request leaves out the site's navigation, and with it
+          // the links a crawl follows; Markdown the site publishes is fetched
+          // by its own URL instead (llms.txt entries, `.md` links).
+          const headers: Record<string, string> = {
+            ...fingerprint,
+            ...options?.headers, // User-provided headers override generated ones
+          };
 
           // Add If-None-Match header for conditional requests if ETag is provided
           if (options?.etag) {

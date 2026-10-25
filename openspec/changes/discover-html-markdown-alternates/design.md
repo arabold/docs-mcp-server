@@ -2,7 +2,7 @@
 
 The current web scraper fetches a URL, selects a content pipeline by MIME type, and sends HTML through `HtmlPipeline`. That pipeline can run Playwright for `scrapeMode=playwright` or `scrapeMode=auto`, then parses the resulting HTML with Cheerio, extracts links and metadata, sanitizes, normalizes, and converts to Markdown.
 
-The llms.txt branch already improves Markdown ingestion by probing `llms.txt`, trying implicit `.md` variants for llms.txt pages, and requesting `Accept: text/markdown`. HTML alternate links are complementary: a page can explicitly advertise a Markdown representation with standard markup such as `<link rel="alternate" type="text/markdown" href="page.md">`.
+The llms.txt branch already improves Markdown ingestion by probing `llms.txt`, and trying implicit `.md` variants for llms.txt pages. It does not ask for Markdown through the `Accept` header: a server's on-request conversion leaves out the navigation a crawl follows. HTML alternate links are complementary: a page can explicitly advertise a Markdown representation with standard markup such as `<link rel="alternate" type="text/markdown" href="page.md">`.
 
 The important placement constraint is performance. Alternate discovery must happen before expensive HTML processing. If the raw fetched HTML declares a usable Markdown alternate, the scraper should fetch and process that alternate instead of running Playwright or converting the original HTML.
 
@@ -75,7 +75,7 @@ Alternate href resolution SHALL respect `<base href>` using the same cautious ba
 
 For pages marked as discovered from llms.txt, the implicit `.md` variant preference remains the first attempt. If that attempt fails and the original URL fetch returns HTML, HTML Markdown alternate discovery MAY then run before normal HTML processing.
 
-For pages not discovered from llms.txt, the scraper fetches the original URL with Markdown-preferred `Accept`; if the server returns HTML, HTML Markdown alternate discovery runs before normal HTML processing.
+For pages not discovered from llms.txt, the scraper fetches the original URL with the default HTML-first `Accept`; if the server returns HTML, HTML Markdown alternate discovery runs before normal HTML processing.
 
 **Rationale:** The llms.txt change already defines a specific `.md` convention for llms-discovered pages. Explicit HTML alternates should complement, not replace, that behavior.
 

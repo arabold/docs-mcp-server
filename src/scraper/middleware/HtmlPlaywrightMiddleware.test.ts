@@ -1,7 +1,6 @@
 import { type Browser, chromium, type Route } from "playwright";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type AppConfig, DEFAULT_CONFIG } from "../../utils/config";
-import { MARKDOWN_PREFERRED_ACCEPT } from "../fetcher/headers";
 import { ScrapeMode, type ScraperOptions } from "../types";
 import {
   extractCredentialsAndOrigin,
@@ -860,18 +859,14 @@ describe("mergePlaywrightHeaders", () => {
       expected: Record<string, string>;
     }> = [
       {
-        label: "adds custom headers and the Markdown-preferred Accept",
-        args: [{ "content-type": "text/html" }, { "x-custom": "value" }],
-        expected: {
-          "content-type": "text/html",
-          "x-custom": "value",
-          Accept: MARKDOWN_PREFERRED_ACCEPT,
-        },
+        label: "adds custom headers and keeps the browser's own Accept",
+        args: [{ accept: "text/html" }, { "x-custom": "value" }],
+        expected: { accept: "text/html", "x-custom": "value" },
       },
       {
         label: "keeps an existing authorization header over a custom one",
         args: [{ authorization: "Bearer existing" }, { Authorization: "Bearer custom" }],
-        expected: { authorization: "Bearer existing", Accept: MARKDOWN_PREFERRED_ACCEPT },
+        expected: { authorization: "Bearer existing" },
       },
       {
         label: "leaves out basic auth when authorization is already set",
@@ -882,7 +877,7 @@ describe("mergePlaywrightHeaders", () => {
           "https://example.com",
           "https://example.com",
         ],
-        expected: { authorization: "Bearer x", Accept: MARKDOWN_PREFERRED_ACCEPT },
+        expected: { authorization: "Bearer x" },
       },
       {
         label: "keeps a caller-supplied Accept header",
