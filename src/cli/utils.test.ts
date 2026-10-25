@@ -1,6 +1,21 @@
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { chromium } from "playwright";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EmbeddingModelChangedError } from "../store/errors";
-import { checkAuthForProtocol, handleEmbeddingModelChange } from "./utils";
+import {
+  checkAuthForProtocol,
+  ensurePlaywrightBrowsersInstalled,
+  handleEmbeddingModelChange,
+} from "./utils";
+
+// Stands in for the browser install, which downloads from Playwright's CDN
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  execFileSync: vi.fn(),
+}));
 
 describe("handleEmbeddingModelChange without a terminal", () => {
   const change = new EmbeddingModelChangedError(
@@ -83,5 +98,53 @@ describe("checkAuthForProtocol", () => {
         6280,
       ),
     ).toThrow(/Issuer URL must use HTTPS/);
+  });
+});
+
+describe("ensurePlaywrightBrowsersInstalled", () => {
+  let browsersDir = "";
+
+  beforeEach(() => {
+    vi.stubEnv("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "");
+    vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", "");
+    browsersDir = mkdtempSync(path.join(tmpdir(), "ms-playwright-"));
+    // Where Playwright keeps its full build, which no test here installs
+    vi.spyOn(chromium, "executablePath").mockReturnValue(
+      path.join(browsersDir, "chromium-1248", "chrome-linux64", "chrome"),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+    vi.mocked(execFileSync).mockClear();
+    rmSync(browsersDir, { recursive: true, force: true });
+  });
+
+  it("accepts an install that has only the headless shell", () => {
+    const shellDir = path.join(browsersDir, "chromium_headless_shell-1248");
+    mkdirSync(shellDir);
+    writeFileSync(path.join(shellDir, "INSTALLATION_COMPLETE"), "");
+
+    ensurePlaywrightBrowsersInstalled();
+
+    expect(execFileSync).not.toHaveBeenCalled();
+  });
+
+  it("installs the headless shell with the CLI of the bundled Playwright", () => {
+    ensurePlaywrightBrowsersInstalled();
+
+    expect(execFileSync).toHaveBeenCalledWith(
+      process.execPath,
+      [
+        expect.stringMatching(/playwright[\\/]cli\.js$/),
+        "install",
+        "chromium-headless-shell",
+        "--no-remove",
+      ],
+      expect.anything(),
+    );
+    const [, args] = vi.mocked(execFileSync).mock.calls[0];
+    expect(existsSync(String(args?.[0]))).toBe(true);
   });
 });

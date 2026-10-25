@@ -2,13 +2,15 @@
  * Shared CLI utilities and helper functions.
  */
 
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import path from "node:path";
 import { createInterface } from "node:readline";
-import { chromium } from "playwright";
 import type { AppServerConfig } from "../app";
 import type { AuthConfig } from "../auth/types";
 import type { EventBusService } from "../events";
+import { ManagedBrowser } from "../scraper/fetcher/ManagedBrowser";
 import type { DocumentManagementService } from "../store/DocumentManagementService";
 import {
   EmbeddingConfig,
@@ -17,7 +19,6 @@ import {
 import { describeEmbeddingModel, type EmbeddingModelChangedError } from "../store/errors";
 import { parseEnvBoolean } from "../utils/config";
 import { logger } from "../utils/logger";
-import { getProjectRoot } from "../utils/paths";
 import type { GlobalOptions } from "./types";
 
 /**
@@ -61,7 +62,14 @@ export interface EmbeddingContext {
 }
 
 /**
- * Ensures that the Playwright browsers are installed, unless a system Chromium path is set.
+ * Ensures a Chromium for scraping is installed, unless a system Chromium path
+ * is set.
+ *
+ * Any Chromium `ManagedBrowser` launches without an explicit path counts: the
+ * headless shell or the full build. When neither is there, the headless shell
+ * is installed with the CLI of the Playwright this package depends on, so it
+ * matches that version. The install leaves other browsers alone, since another
+ * process may be running them.
  */
 export function ensurePlaywrightBrowsersInstalled(): void {
   if (process.env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD === "1") {
@@ -79,30 +87,29 @@ export function ensurePlaywrightBrowsersInstalled(): void {
     );
     return;
   }
+
+  if (ManagedBrowser.isPlaywrightChromiumInstalled()) {
+    return;
+  }
+
+  // `playwright/cli.js` is not an exported path, but its package.json is.
+  const playwrightCli = path.join(
+    path.dirname(createRequire(import.meta.url).resolve("playwright/package.json")),
+    "cli.js",
+  );
   try {
-    // Dynamically require Playwright and check for Chromium browser
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const chromiumPath = chromium.executablePath();
-    if (!chromiumPath || !existsSync(chromiumPath)) {
-      throw new Error("Playwright Chromium browser not found");
-    }
+    logger.info("🌐 Installing Playwright Chromium browser... (this may take a moment)");
+    execFileSync(
+      process.execPath,
+      [playwrightCli, "install", "chromium-headless-shell", "--no-remove"],
+      { stdio: "ignore" },
+    );
   } catch (error) {
-    // Not installed or not found, attempt to install
     logger.debug(String(error));
-    try {
-      logger.info(
-        "🌐 Installing Playwright Chromium browser... (this may take a moment)",
-      );
-      execSync("npm exec -y playwright install --no-shell --with-deps chromium", {
-        stdio: "ignore", // Suppress output
-        cwd: getProjectRoot(),
-      });
-    } catch (_installErr) {
-      logger.error(
-        "❌ Failed to install Playwright browsers automatically. Please run:\n  npx playwright install --no-shell --with-deps chromium\nand try again.",
-      );
-      process.exit(1);
-    }
+    logger.error(
+      `❌ Failed to install Playwright browsers automatically. Please run:\n  node "${playwrightCli}" install --with-deps chromium-headless-shell\nand try again.`,
+    );
+    process.exit(1);
   }
 }
 

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
 import { telemetry } from "../../telemetry";
 import { ScrapeTool } from "../../tools";
+import { ensurePlaywrightBrowsersInstalled } from "../utils";
 import { createScrapeCommand } from "./scrape";
 
 const pipelineMock = {};
@@ -46,6 +47,7 @@ vi.mock("../utils", () => ({
     emit: vi.fn(),
   })),
   parseHeaders: vi.fn(() => ({})),
+  ensurePlaywrightBrowsersInstalled: vi.fn(),
   resolveEmbeddingContext: vi.fn(() => ({ provider: "mock", model: "mock-model" })),
   CliContext: {},
   setupLogging: vi.fn(),
@@ -118,6 +120,30 @@ describe("scrape command", () => {
         }),
       }),
     );
+  });
+
+  it("makes sure a browser is installed before it scrapes here", async () => {
+    const parser = yargs().scriptName("test");
+    createScrapeCommand(parser);
+
+    await parser.parse(["scrape", "react", "https://react.dev"]);
+
+    expect(ensurePlaywrightBrowsersInstalled).toHaveBeenCalled();
+  });
+
+  it("leaves the browser to the server it hands the scrape to", async () => {
+    const parser = yargs().scriptName("test");
+    createScrapeCommand(parser);
+
+    await parser.parse([
+      "scrape",
+      "react",
+      "https://react.dev",
+      "--server-url",
+      "http://localhost:8080/api",
+    ]);
+
+    expect(ensurePlaywrightBrowsersInstalled).not.toHaveBeenCalled();
   });
 
   it("sends only the host of the URL to telemetry", async () => {

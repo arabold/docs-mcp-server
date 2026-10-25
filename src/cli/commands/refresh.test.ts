@@ -40,6 +40,7 @@ vi.mock("../utils", () => ({
     on: vi.fn(),
     emit: vi.fn(),
   })),
+  ensurePlaywrightBrowsersInstalled: vi.fn(),
   resolveEmbeddingContext: vi.fn(() => ({ provider: "mock", model: "mock-model" })),
   CliContext: {},
   setupLogging: vi.fn(),

@@ -196,7 +196,9 @@ Each page's routes check the requests it makes against the access policy, but Pl
 
 A crawl that ends early, because an item failed or the job was cancelled, aborts the items still running and waits for them before it returns. `ScraperService` cleans up the strategy, and with it the browser, only after that, so no item is left using a closed browser or launching a new one that nobody closes. An aborted browser fetch closes its context, which ends a navigation in progress.
 
-Playwright's headless shell is the default binary. Installs made with `playwright install --no-shell` have only the full Chromium build, and the launch falls back to it. `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` overrides both. When Playwright's full build is not installed, a system Chromium (`/usr/lib/chromium/chromium`, `/usr/bin/chromium` or `/usr/bin/chromium-browser`) is used if one exists.
+Playwright's headless shell is the default binary. Installs made with `playwright install --no-shell` have only the full Chromium build, and the launch falls back to it. `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` overrides both. When neither of Playwright's builds is installed, a system Chromium (`/usr/lib/chromium/chromium`, `/usr/bin/chromium` or `/usr/bin/chromium-browser`) is used if one exists.
+
+Commands that can launch a browser in their own process (the default server, `mcp`, `worker`, `fetch-url`, and `scrape`, `refresh` and `web` without `--server-url`) make sure one is installed before they start. Either of Playwright's builds counts. When both are missing, the command installs the headless shell with the CLI of the bundled Playwright, so the revision matches what the launch looks for. The install runs with `--no-remove`, because another process may be running browsers that Playwright would otherwise delete as unused.
 
 #### Sub-resource blocklist
 
