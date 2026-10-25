@@ -211,7 +211,7 @@ Whether a consumer presents the identity or the retrieval location is that consu
 
 ### Requirement: Ordering with llms.txt Markdown preference
 
-For queue items discovered from llms.txt, the scraper SHALL preserve the existing implicit `.md` variant preference before using HTML Markdown alternate discovery. If the implicit `.md` variant fails and the original URL response is HTML, the scraper SHALL then apply HTML Markdown alternate discovery before normal HTML processing. For queue items not discovered from llms.txt, the scraper SHALL fetch the original URL with the existing Markdown-preferred `Accept` behavior and apply HTML Markdown alternate discovery only when the response is HTML.
+For queue items discovered from llms.txt, the scraper SHALL preserve the existing implicit `.md` variant preference before using HTML Markdown alternate discovery. If the implicit `.md` variant fails and the original URL response is HTML, the scraper SHALL then apply HTML Markdown alternate discovery before normal HTML processing. For queue items not discovered from llms.txt, the scraper SHALL fetch the original URL with the default HTML-first `Accept` header and apply HTML Markdown alternate discovery only when the response is HTML.
 
 #### Scenario: llms.txt .md variant wins before HTML alternate
 - **WHEN** a queue item is marked as discovered from llms.txt

@@ -15,7 +15,6 @@ import { FingerprintGenerator } from "./FingerprintGenerator";
 import {
   DEFAULT_BROWSER_USER_AGENT,
   getHeader,
-  withMarkdownPreferredAccept,
   withoutBrowserManagedHeaders,
 } from "./headers";
 import { ManagedBrowser } from "./ManagedBrowser";
@@ -175,14 +174,12 @@ export class BrowserFetcher implements ContentFetcher {
 
       // Compose the browser-like fingerprint headers used both for the page's
       // own navigation and (if needed) the non-navigable request-API fallback,
-      // so the two look like the same client to anti-bot checks.
-      const requestHeaders = withMarkdownPreferredAccept(
-        {
-          ...fingerprintHeaders,
-          ...options?.headers,
-        },
-        options?.headers,
-      );
+      // so the two look like the same client to anti-bot checks. Like
+      // HttpFetcher, it keeps the fingerprint's HTML-first Accept.
+      const requestHeaders: Record<string, string> = {
+        ...fingerprintHeaders,
+        ...options?.headers,
+      };
       // Chromium sets the Sec-Fetch-* and connection-level headers itself;
       // overriding them would make it fail the page's scripts, styles and other
       // sub-resources, or the navigation itself. The request API is

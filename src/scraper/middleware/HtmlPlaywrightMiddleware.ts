@@ -14,11 +14,7 @@ import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { withTimeout } from "../../utils/timeout";
 import { ManagedBrowser } from "../fetcher";
-import {
-  DEFAULT_BROWSER_USER_AGENT,
-  getHeader,
-  withMarkdownPreferredAccept,
-} from "../fetcher/headers";
+import { DEFAULT_BROWSER_USER_AGENT, getHeader } from "../fetcher/headers";
 import { ScrapeMode } from "../types";
 import { SimpleMemoryCache } from "../utils/SimpleMemoryCache";
 import { isBlockedSubresource } from "./subresourceBlocklist";
@@ -1341,5 +1337,5 @@ export function mergePlaywrightHeaders(
       Authorization: `Basic ${basic}`,
     };
   }
-  return withMarkdownPreferredAccept(headers, customHeaders);
+  return headers;
 }

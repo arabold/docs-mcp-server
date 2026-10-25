@@ -9,7 +9,6 @@ import {
   RedirectError,
   ScraperError,
 } from "../../utils/errors";
-import { MARKDOWN_PREFERRED_ACCEPT } from "./headers";
 
 vi.mock("playwright", () => ({
   chromium: {
@@ -144,10 +143,12 @@ describe("BrowserFetcher", () => {
     );
     const [[defaultHeaders], [callerAccept]] = page.setExtraHTTPHeaders.mock.calls;
     expect(defaultHeaders).toEqual(
-      expect.objectContaining({ "X-Test": "1", Accept: MARKDOWN_PREFERRED_ACCEPT }),
+      expect.objectContaining({
+        "X-Test": "1",
+        accept: expect.stringMatching(/^text\/html,/),
+      }),
     );
     expect(callerAccept).toEqual(expect.objectContaining({ accept: "text/html" }));
-    expect(callerAccept).not.toHaveProperty("Accept");
   });
 
   it("keeps connection-level headers off the page so Chromium can navigate", async () => {
@@ -164,11 +165,7 @@ describe("BrowserFetcher", () => {
       });
 
       const [headers] = vi.mocked(page.setExtraHTTPHeaders).mock.calls[0];
-      expect(headers).toEqual({
-        "user-agent": "Fingerprint/1.0",
-        "X-Test": "1",
-        Accept: MARKDOWN_PREFERRED_ACCEPT,
-      });
+      expect(headers).toEqual({ "user-agent": "Fingerprint/1.0", "X-Test": "1" });
     } finally {
       generateHeaders.mockRestore();
     }
