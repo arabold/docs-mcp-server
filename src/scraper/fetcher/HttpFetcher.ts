@@ -303,7 +303,12 @@ export class HttpFetcher implements ContentFetcher {
               ? detectChallengePage(content)
               : null;
             if (challengeType) {
-              throw new ChallengeError(source, response.status, challengeType);
+              throw new ChallengeError(
+                source,
+                response.status,
+                challengeType,
+                currentUrl,
+              );
             }
 
             return {
@@ -408,7 +413,7 @@ export class HttpFetcher implements ContentFetcher {
             responseBody.includes("cf_chl_opt");
 
           if (isCloudflareChallenge) {
-            throw new ChallengeError(source, status, "cloudflare");
+            throw new ChallengeError(source, status, "cloudflare", currentUrl);
           }
         }
 
@@ -447,7 +452,7 @@ export class HttpFetcher implements ContentFetcher {
         } attempts: ${axiosError.message ?? "Unknown error"}`;
         throw status === undefined
           ? new ScraperError(failureMessage, true, errorCause)
-          : new HttpStatusError(failureMessage, true, status, errorCause);
+          : new HttpStatusError(failureMessage, true, status, errorCause, currentUrl);
       }
     }
     throw new ScraperError(

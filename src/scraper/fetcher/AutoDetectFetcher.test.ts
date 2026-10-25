@@ -104,8 +104,33 @@ describe("AutoDetectFetcher", () => {
   });
 
   describe("on a throttled host", () => {
+    // Lists the hosts so the access policy needs no DNS lookup.
+    const config = {
+      ...scraperConfig,
+      security: {
+        ...scraperConfig.security,
+        network: {
+          ...scraperConfig.security.network,
+          allowedHosts: ["example.com", "example.org"],
+        },
+      },
+    };
+
+    /** The rejection axios produces for Cloudflare's challenged 429. */
+    function challenged429() {
+      return Object.assign(new Error("Request failed with status code 429"), {
+        isAxiosError: true,
+        response: {
+          status: 429,
+          headers: { "cf-mitigated": "challenge", "retry-after": "10" },
+          data: Readable.from([""]),
+        },
+      });
+    }
+
     beforeEach(() => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      vi.mocked(axios.get).mockReset();
     });
 
     afterEach(() => {
@@ -113,26 +138,7 @@ describe("AutoDetectFetcher", () => {
     });
 
     it("waits out the host's pause before falling back to the browser", async () => {
-      // Lists the host so the access policy needs no DNS lookup.
-      const config = {
-        ...scraperConfig,
-        security: {
-          ...scraperConfig.security,
-          network: { ...scraperConfig.security.network, allowedHosts: ["example.com"] },
-        },
-      };
-      vi.mocked(axios.get)
-        .mockReset()
-        .mockRejectedValue(
-          Object.assign(new Error("Request failed with status code 429"), {
-            isAxiosError: true,
-            response: {
-              status: 429,
-              headers: { "cf-mitigated": "challenge", "retry-after": "10" },
-              data: Readable.from([""]),
-            },
-          }),
-        );
+      vi.mocked(axios.get).mockRejectedValue(challenged429());
       const browserSpy = vi
         .spyOn(BrowserFetcher.prototype, "fetch")
         .mockResolvedValue(browserResult);
@@ -144,6 +150,27 @@ describe("AutoDetectFetcher", () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(await result).toBe(browserResult);
       expect(axios.get).toHaveBeenCalledTimes(1);
+    });
+
+    it("waits for the host a redirect led to when that host throttled", async () => {
+      vi.mocked(axios.get)
+        .mockResolvedValueOnce({
+          status: 301,
+          headers: { location: "https://example.org/docs" },
+          data: Readable.from([""]),
+        })
+        .mockRejectedValueOnce(challenged429());
+      const browserSpy = vi
+        .spyOn(BrowserFetcher.prototype, "fetch")
+        .mockResolvedValue(browserResult);
+
+      const result = new AutoDetectFetcher(config).fetch(source);
+      await vi.advanceTimersByTimeAsync(9_999);
+
+      expect(browserSpy).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await result).toBe(browserResult);
+      expect(axios.get).toHaveBeenCalledTimes(2);
     });
   });
 });

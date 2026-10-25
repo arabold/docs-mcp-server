@@ -50,7 +50,7 @@ Some challenges answer with status 200, such as Fastly's client challenge on pyp
 
 A server throttles a client with status 429, or with 503 and a `Retry-After` header. `HttpFetcher` then pauses the whole host ([src/scraper/fetcher/HostBackoff.ts](../../src/scraper/fetcher/HostBackoff.ts)): every request it sends there, the retry included, waits until the pause ends, so the other pages of the crawl stop requesting the host as well. The pause is the `Retry-After` delay, given either in seconds or as an HTTP-date. Without the header it starts at five times `scraper.fetcher.baseDelayMs`, doubles with each throttled response in a row and is jittered down by up to half. It never exceeds 60 seconds, and it resets once the host answers a request sent after the last throttle. A 503 without `Retry-After` is an ordinary server error and is retried on the usual schedule.
 
-Cloudflare answers a client it rate limits with its challenge page and status 429. `HttpFetcher` recognizes that challenge by the `cf-mitigated: challenge` header or the markers of the challenge page, pauses the host and throws a `ChallengeError` without retrying. `AutoDetectFetcher` waits out the pause before it tries the browser, so a challenged page costs two requests.
+Cloudflare answers a client it rate limits with its challenge page and status 429. `HttpFetcher` recognizes that challenge by the `cf-mitigated: challenge` header or the markers of the challenge page, pauses the host and throws a `ChallengeError` without retrying. `AutoDetectFetcher` waits out the pause before it tries the browser, so a challenged page costs two requests. When a redirect led to another host, the error names the URL that answered, and the fallback waits for that host's pause too.
 
 ## Content pipelines
 
