@@ -1,3 +1,10 @@
+## [3.4.1](https://github.com/arabold/docs-mcp-server/compare/v3.4.0...v3.4.1) (2026-10-25)
+
+### Bug fixes
+- The CLI recognizes Playwright’s headless shell, installs it with its bundled Playwright when needed, and avoids checking or reinstalling browsers for commands that don’t launch one. Docker images can use their own Chromium without downloading Playwright’s. ([#598](https://github.com/arabold/docs-mcp-server/issues/598), [#549](https://github.com/arabold/docs-mcp-server/issues/549))
+- Scraping now backs off across all requests to a throttled host, honors `Retry-After`, and avoids repeated HTTP retries for Cloudflare challenges before falling back to a browser. ([#600](https://github.com/arabold/docs-mcp-server/issues/600))
+- Crawls request HTML first so sites that provide Markdown responses don’t lose navigation and pages; Markdown responses are still supported when available. ([#599](https://github.com/arabold/docs-mcp-server/issues/599))
+
 # [3.4.0](https://github.com/arabold/docs-mcp-server/compare/v3.3.0...v3.4.0) (2026-10-24)
 
 ### Features
