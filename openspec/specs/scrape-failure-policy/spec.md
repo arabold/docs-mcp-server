@@ -25,6 +25,20 @@ The scraper SHALL bound how long a single HTTP fetch may wait, so that a server 
 - **THEN** the fetch is abandoned once the bound elapses
 - **AND** the remaining pages are still fetched and indexed
 
+### Requirement: Throttled Hosts Are Backed Off
+The scraper SHALL treat HTTP 429, and HTTP 503 with a `Retry-After` header, as a request to slow down that applies to the whole host. Until the pause ends, no request of the crawl SHALL be sent to that host, the throttled request's own retry included. The pause SHALL be the `Retry-After` delay, read as delta-seconds or as an HTTP-date, when the response names one, and SHALL otherwise grow with each throttled response in a row. The pause SHALL be bounded, and it SHALL be abortable by cancelling the job. A 429 that carries a bot challenge SHALL NOT be retried over HTTP; it goes to the browser fallback once, after the pause.
+
+#### Scenario: Other pages wait while a host is paused
+- **GIVEN** a crawl fetching several pages of one host at once
+- **WHEN** the host answers one of them with 429 and `Retry-After: 10`
+- **THEN** no page of that host is requested for 10 seconds
+- **AND** pages of other hosts are still fetched
+
+#### Scenario: A challenged 429 costs one HTTP attempt
+- **WHEN** a host answers with 429 and `cf-mitigated: challenge`
+- **THEN** the fetcher SHALL fail the request with a challenge error without retrying
+- **AND** the browser fallback runs once the host's pause ends
+
 ### Requirement: Root Page Failures Abort Immediately
 The scraper SHALL fail the scrape job immediately when the root page cannot be processed successfully during a normal scrape and no alternate crawl seeds are available. During refresh, a tracked root page that returns `NOT_FOUND` SHALL be treated as a deletion instead of a hard failure.
 

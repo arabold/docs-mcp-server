@@ -14,6 +14,7 @@ import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { detectChallengePage } from "./challenge";
 import { FingerprintGenerator } from "./FingerprintGenerator";
+import { HostBackoff, parseRetryAfter } from "./HostBackoff";
 import { withMarkdownPreferredAccept, withoutConnectionHeaders } from "./headers";
 import {
   type ContentFetcher,
@@ -30,7 +31,17 @@ import {
 const MAX_REDIRECTS = 5;
 
 /**
+ * How much longer than other retries a throttled request waits when the server
+ * names no delay. A retry after the usual second would most likely be
+ * throttled again.
+ */
+const THROTTLE_DELAY_FACTOR = 5;
+
+/**
  * Fetches content from remote sources using HTTP/HTTPS.
+ *
+ * A 429, or a 503 with `Retry-After`, pauses every request this fetcher sends
+ * to that host (see {@link HostBackoff}).
  */
 export class HttpFetcher implements ContentFetcher {
   private readonly maxRetriesDefault: number;
@@ -70,13 +81,20 @@ export class HttpFetcher implements ContentFetcher {
 
   private fingerprintGenerator: FingerprintGenerator;
   private readonly accessPolicy: ScraperAccessPolicy;
+  private readonly hostBackoff: HostBackoff;
 
-  constructor(scraperConfig: AppConfig["scraper"]) {
+  /**
+   * @param scraperConfig - Scraper settings, including the retry defaults.
+   * @param hostBackoff - The per-host pause; pass one to share it with other
+   * fetchers of the same crawl.
+   */
+  constructor(scraperConfig: AppConfig["scraper"], hostBackoff = new HostBackoff()) {
     this.maxRetriesDefault = scraperConfig.fetcher.maxRetries;
     this.baseDelayDefaultMs = scraperConfig.fetcher.baseDelayMs;
     this.timeoutDefaultMs = scraperConfig.fetcher.timeoutMs;
     this.fingerprintGenerator = new FingerprintGenerator();
     this.accessPolicy = new ScraperAccessPolicy(scraperConfig.security);
+    this.hostBackoff = hostBackoff;
   }
 
   canFetch(source: string): boolean {
@@ -118,8 +136,10 @@ export class HttpFetcher implements ContentFetcher {
     await this.accessPolicy.assertNetworkUrlAllowed(source);
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      // Outside the try so a throttle is recorded against the host of the hop
+      // that answered, which a redirect may have changed.
+      let currentUrl = source;
       try {
-        let currentUrl = source;
         let redirectCount = 0;
 
         while (true) {
@@ -172,7 +192,12 @@ export class HttpFetcher implements ContentFetcher {
             config.httpsAgent = new https.Agent({ rejectUnauthorized: false });
           }
 
+          // A throttled retry waits here too, together with every other
+          // request to the host.
+          await this.hostBackoff.wait(currentUrl, options?.signal);
+          const sentAt = Date.now();
           const response = await axios.get(currentUrl, config);
+          this.hostBackoff.recover(currentUrl, sentAt);
 
           // Under `responseType: "stream"` a body that is never read pins its
           // socket: Node will not return a partially-consumed response to the
@@ -278,7 +303,12 @@ export class HttpFetcher implements ContentFetcher {
               ? detectChallengePage(content)
               : null;
             if (challengeType) {
-              throw new ChallengeError(source, response.status, challengeType);
+              throw new ChallengeError(
+                source,
+                response.status,
+                challengeType,
+                currentUrl,
+              );
             }
 
             return {
@@ -336,8 +366,25 @@ export class HttpFetcher implements ContentFetcher {
           }
         }
 
-        // Detect Cloudflare challenges
-        if (status === 403) {
+        // The server asked the scraper to slow down. The pause covers the whole
+        // host, and is recorded before the challenge check below so the browser
+        // fallback waits it out as well.
+        const retryAfterMs = parseRetryAfter(
+          axiosError.response?.headers?.["retry-after"],
+        );
+        const throttleDelayMs =
+          status === 429 || (status === 503 && retryAfterMs !== undefined)
+            ? this.hostBackoff.throttle(
+                currentUrl,
+                baseDelay * THROTTLE_DELAY_FACTOR,
+                retryAfterMs,
+              )
+            : undefined;
+
+        // Detect Cloudflare challenges. Cloudflare also serves its challenge
+        // with 429 once a client is rate limited; retrying that only extends
+        // the block, so it goes to the browser at once like a 403 challenge.
+        if (status === 403 || status === 429) {
           const cfMitigated = axiosError.response?.headers?.["cf-mitigated"];
           const server = axiosError.response?.headers?.server;
           let responseBody = "";
@@ -355,16 +402,18 @@ export class HttpFetcher implements ContentFetcher {
             }
           }
 
-          // Check for various Cloudflare challenge indicators
+          // Check for various Cloudflare challenge indicators. A 429 from
+          // Cloudflare is not a challenge on the server header alone: that is
+          // also how a plain rate limit on a Cloudflare-fronted site looks.
           const isCloudflareChallenge =
             cfMitigated === "challenge" ||
-            server === "cloudflare" ||
+            (status === 403 && server === "cloudflare") ||
             responseBody.includes("Enable JavaScript and cookies to continue") ||
             responseBody.includes("Just a moment...") ||
             responseBody.includes("cf_chl_opt");
 
           if (isCloudflareChallenge) {
-            throw new ChallengeError(source, status, "cloudflare");
+            throw new ChallengeError(source, status, "cloudflare", currentUrl);
           }
         }
 
@@ -383,13 +432,17 @@ export class HttpFetcher implements ContentFetcher {
           (status === undefined || this.retryableStatusCodes.includes(status)) &&
           !this.nonRetryableErrorCodes.includes(code ?? "")
         ) {
-          const delay = baseDelay * 2 ** attempt;
+          const delay = throttleDelayMs ?? baseDelay * 2 ** attempt;
           logger.warn(
             `⚠️  Attempt ${attempt + 1}/${
               maxRetries + 1
             } failed for ${source} (Status: ${status}, Code: ${code}). Retrying in ${delay}ms...`,
           );
-          await this.delay(delay);
+          // A throttled request waits out the host's pause at the top of the
+          // next attempt instead.
+          if (throttleDelayMs === undefined) {
+            await this.delay(delay);
+          }
           continue;
         }
 
@@ -399,7 +452,7 @@ export class HttpFetcher implements ContentFetcher {
         } attempts: ${axiosError.message ?? "Unknown error"}`;
         throw status === undefined
           ? new ScraperError(failureMessage, true, errorCause)
-          : new HttpStatusError(failureMessage, true, status, errorCause);
+          : new HttpStatusError(failureMessage, true, status, errorCause, currentUrl);
       }
     }
     throw new ScraperError(

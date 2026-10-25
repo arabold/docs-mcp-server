@@ -33,10 +33,18 @@ class RedirectError extends ScraperError {
 
 /** A bot-protection challenge answered the request in place of the page. */
 class ChallengeError extends ScraperError {
+  /**
+   * @param url The URL that was requested.
+   * @param statusCode The status the challenge was served with.
+   * @param challengeType The kind of challenge, such as "cloudflare".
+   * @param responseUrl The URL whose response carried the challenge, which a
+   * redirect may have moved to another host.
+   */
   constructor(
     public readonly url: string,
     public readonly statusCode: number,
     public readonly challengeType: string,
+    public readonly responseUrl: string = url,
   ) {
     super(
       `Challenge detected for ${url} (status: ${statusCode}, type: ${challengeType}): the site answered with a bot check instead of the page`,
@@ -63,11 +71,20 @@ class TlsCertificateError extends ScraperError {
 
 /** An HTTP fetch that failed with a response, carrying that response's status. */
 class HttpStatusError extends ScraperError {
+  /**
+   * @param message Describes the failure.
+   * @param isRetryable Whether a later attempt may succeed.
+   * @param statusCode The response's status.
+   * @param cause The underlying error.
+   * @param responseUrl The URL that answered with the status, when known; a
+   * redirect may have moved it to another host.
+   */
   constructor(
     message: string,
     isRetryable: boolean,
     public readonly statusCode: number,
     cause?: Error,
+    public readonly responseUrl?: string,
   ) {
     super(message, isRetryable, cause);
   }

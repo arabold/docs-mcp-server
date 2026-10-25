@@ -46,6 +46,12 @@ A fetcher returns `RawContent`: the bytes, the MIME type and charset, and the `E
 
 Some challenges answer with status 200, such as Fastly's client challenge on pypi.org. `HttpFetcher` and `BrowserFetcher` both check the HTML they return against the known challenge pages ([src/scraper/fetcher/challenge.ts](../../src/scraper/fetcher/challenge.ts)) and throw a `ChallengeError` on a match, so a page the browser fallback cannot get past either fails with an error that names the challenge and stores nothing. The HTML pipeline needs no check of its own: it renders the HTML a fetcher returned and does not request the page again.
 
+### Throttling
+
+A server throttles a client with status 429, or with 503 and a `Retry-After` header. `HttpFetcher` then pauses the whole host ([src/scraper/fetcher/HostBackoff.ts](../../src/scraper/fetcher/HostBackoff.ts)): every request it sends there, the retry included, waits until the pause ends, so the other pages of the crawl stop requesting the host as well. The pause is the `Retry-After` delay, given either in seconds or as an HTTP-date. Without the header it starts at five times `scraper.fetcher.baseDelayMs`, doubles with each throttled response in a row and is jittered down by up to half. It never exceeds 60 seconds, and it resets once the host answers a request sent after the last throttle. A 503 without `Retry-After` is an ordinary server error and is retried on the usual schedule.
+
+Cloudflare answers a client it rate limits with its challenge page and status 429. `HttpFetcher` recognizes that challenge by the `cf-mitigated: challenge` header or the markers of the challenge page, pauses the host and throws a `ChallengeError` without retrying. `AutoDetectFetcher` waits out the pause before it tries the browser, so a challenged page costs two requests. When a redirect led to another host, the error names the URL that answered, and the fallback waits for that host's pause too.
+
 ## Content pipelines
 
 A pipeline ([src/scraper/pipelines/](../../src/scraper/pipelines/)) does two jobs: it converts raw content into text, and it splits that text into chunks. Splitting lives in the pipeline so each content type can use the splitter that understands its structure.
