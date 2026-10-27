@@ -155,30 +155,22 @@ export class WebScraperStrategy extends BaseScraperStrategy {
   }
 
   /**
-   * Restates an accepted Markdown variant's content type as Markdown.
-   *
-   * Sites disagree on how to serve a `.md` file: vite.dev sends `text/markdown`,
-   * react.dev sends `text/plain`. Both are Markdown documents, so both are
-   * parsed and recorded as Markdown — the extension is the author's statement
-   * about the format, and the plain-text pipeline would throw away every
-   * heading. Markdown is close enough to a superset of plain text that a file
-   * using none of its syntax still comes through intact.
-   *
-   * `text/plain` is not treated as a weaker signal than HTML. It was, briefly,
-   * to stop a plain-text soft error page outranking the page it folds onto —
-   * but the hosts that soft-404 a `.md` URL answer `200 text/markdown` with a
-   * `# Page Not Found` body (ai-sdk.dev, nextjs.org), so that rule caught none
-   * of them, while react.dev — the `text/plain` host — returns a real 404.
-   * It cost the published Markdown of every such site and bought nothing.
-   * Soft-error detection needs to read the body, and belongs elsewhere.
+   * Restates web text/plain responses as Markdown while preserving their source MIME type
+   * for the result record. Maintainers confirm that ordinary text without Markdown syntax
+   * remains intact, while Markdown semantics are needed for content-negotiated documentation.
    */
   private asMarkdownRepresentation(url: string, rawContent: RawContent): RawContent {
-    if (!this.isMarkdownUrl(url) || !this.isAcceptableMarkdownVariant(rawContent)) {
+    const mimeType = rawContent.mimeType.toLowerCase();
+    if (mimeType === "text/plain" && MimeTypeUtils.isBinary(rawContent.content)) {
       return rawContent;
     }
-    return MimeTypeUtils.isMarkdown(rawContent.mimeType)
-      ? rawContent
-      : { ...rawContent, mimeType: "text/markdown" };
+    if (mimeType === "text/plain" || this.isMarkdownUrl(url)) {
+      if (MimeTypeUtils.isMarkdown(mimeType)) return rawContent;
+      if (this.isAcceptableMarkdownVariant(rawContent)) {
+        return { ...rawContent, mimeType: "text/markdown" };
+      }
+    }
+    return rawContent;
   }
 
   private isAcceptableMarkdownVariant(rawContent: RawContent): boolean {
@@ -491,6 +483,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       // Markdown representation, and the queued URL would hide that. Applied
       // here rather than per fetch path so every route reaching this point —
       // including the llms.txt variant fallback — is covered by one rule.
+      const sourceContentType = fetched.mimeType;
       const rawContent = this.asMarkdownRepresentation(fetchedSource, fetched);
       // A Markdown variant is recorded under the page it represents, so a `.md`
       // URL and its canonical form resolve to one identity however each was found.
@@ -514,7 +507,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
           queueItems: llmsTxtQueueItems,
           // Carried so a fatal skip at the requested root can name the type that
           // caused it. Null for 304 and 404, whose MIME type describes nothing.
-          sourceContentType: rawContent.mimeType ?? null,
+          sourceContentType: sourceContentType ?? null,
           status: rawContent.status,
         };
       }
@@ -553,7 +546,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
           url: effectiveSource,
           links: [],
           queueItems: llmsTxtQueueItems,
-          sourceContentType: rawContent.mimeType ?? null,
+          sourceContentType: sourceContentType ?? null,
           // Skipped, not empty: nothing read the body, so we cannot claim the
           // page has no content — and a refresh must not erase what is stored.
           status: FetchStatus.SKIPPED,
@@ -581,7 +574,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
           // the validator the Markdown file issued.
           contentUrl: effectiveSource === fetchedSource ? undefined : fetchedSource,
           title: processed.title ?? null,
-          sourceContentType: rawContent.mimeType,
+          sourceContentType,
           contentType: processed.contentType || rawContent.mimeType,
           etag: rawContent.etag,
           lastModified: rawContent.lastModified,
@@ -638,7 +631,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         contentUrl: effectiveSource === fetchedSource ? undefined : fetchedSource,
         etag: rawContent.etag,
         lastModified: rawContent.lastModified,
-        sourceContentType: rawContent.mimeType,
+        sourceContentType,
         contentType: processed.contentType || rawContent.mimeType,
         content: processed,
         links: filteredLinks,

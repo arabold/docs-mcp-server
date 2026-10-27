@@ -182,11 +182,12 @@ describe("WebScraperStrategy", () => {
         },
         {
           label: "plain text",
-          body: "# Plain Title\n\nThis stays plain text.",
+          body: "This stays plain text.",
           type: "text/plain",
           expected: {
             textContent: expect.stringContaining("This stays plain text."),
-            contentType: "text/plain",
+            sourceContentType: "text/plain",
+            contentType: "text/markdown",
           },
         },
       ];
@@ -201,6 +202,29 @@ describe("WebScraperStrategy", () => {
           .toMatchObject(expected);
         endCase(label);
       }
+    });
+
+    it("processes content-negotiated plain text as Markdown", async () => {
+      const body = `---\ntitle: React Community\n---\n\n<Intro>\n\n# Community {/*community*/}\n\nReact has a community.`;
+      site.page("/community", body, PLAIN_TEXT);
+
+      const events = await crawl({ url: `${ROOT}community`, maxDepth: 0 });
+      const result = eventFor(events, `${ROOT}community`)?.result;
+
+      expect(result).toMatchObject({
+        title: "React Community",
+        sourceContentType: "text/plain",
+        contentType: "text/markdown",
+      });
+      expect(result?.chunks.some((chunk) => chunk.content.includes("<Intro>"))).toBe(
+        false,
+      );
+      expect(
+        result?.chunks.some((chunk) => chunk.content.includes("{/*community*/}")),
+      ).toBe(false);
+      expect(
+        result?.chunks.some((chunk) => chunk.content.includes("React has a community.")),
+      ).toBe(true);
     });
 
     it("skips a child no pipeline can read without failing the crawl", async () => {
