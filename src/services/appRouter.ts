@@ -48,6 +48,8 @@ export interface AppRouterContextDeps {
   systemInfo: SystemInfo;
   /** Cheap, synchronous check for remote worker connectivity (remote worker mode only). */
   isWorkerConnected?: () => boolean;
+  /** Checks the current request's operator key before administrative procedures. */
+  requireMcpAdmin?: () => void;
 }
 
 const t = initTRPC.context<AppRouterContext>().create({
@@ -141,5 +143,6 @@ export function createAppRouterContext(deps: AppRouterContextDeps): AppRouterCon
     eventBus: deps.eventBus,
     systemInfo: deps.systemInfo,
     isWorkerConnected: deps.isWorkerConnected,
+    requireMcpAdmin: deps.requireMcpAdmin,
   };
 }

@@ -6,10 +6,14 @@
  * {@link ../services/appRouter}, keeping HTTP and WebSocket behavior identical.
  */
 
-import { fastifyTRPCPlugin } from "@trpc/server/adapters/fastify";
+import {
+  type CreateFastifyContextOptions,
+  fastifyTRPCPlugin,
+} from "@trpc/server/adapters/fastify";
 import { applyWSSHandler } from "@trpc/server/adapters/ws";
 import type { FastifyInstance } from "fastify";
 import type { WebSocketServer } from "ws";
+import { requireMcpAdmin } from "../auth/mcpAdmin";
 import type { EventBusService } from "../events";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
@@ -24,6 +28,7 @@ import type { SystemInfo } from "./systemInfo";
  * @param eventBus - The event bus backing the events subscription router.
  * @param systemInfo - Distilled, serializable snapshot of the server's startup configuration.
  * @param isWorkerConnected - Cheap connectivity check, provided only when the worker is remote.
+ * @param adminToken - Operator key protecting MCP management and statistics.
  */
 export async function registerTrpcService(
   server: FastifyInstance,
@@ -32,19 +37,23 @@ export async function registerTrpcService(
   eventBus: EventBusService,
   systemInfo: SystemInfo,
   isWorkerConnected?: () => boolean,
+  adminToken = "",
 ): Promise<void> {
   await server.register(fastifyTRPCPlugin, {
     prefix: "/api",
     trpcOptions: {
       router: appRouter,
-      createContext: async () =>
-        createAppRouterContext({
+      createContext: async ({ req, res }: CreateFastifyContextOptions) => {
+        res.header("Cache-Control", "no-store");
+        return createAppRouterContext({
           pipeline,
           docService,
           eventBus,
           systemInfo,
           isWorkerConnected,
-        }),
+          requireMcpAdmin: () => requireMcpAdmin(req.headers.authorization, adminToken),
+        });
+      },
     },
   });
 }
@@ -57,6 +66,7 @@ export async function registerTrpcService(
  * @param eventBus - The event bus backing the events subscription router.
  * @param systemInfo - Distilled, serializable snapshot of the server's startup configuration.
  * @param isWorkerConnected - Cheap connectivity check, provided only when the worker is remote.
+ * @param adminToken - Operator key; administrative operations use HTTP only.
  * @returns The tRPC WebSocket handler returned by `applyWSSHandler`.
  */
 export function applyTrpcWebSocketHandler(
@@ -66,6 +76,7 @@ export function applyTrpcWebSocketHandler(
   eventBus: EventBusService,
   systemInfo: SystemInfo,
   isWorkerConnected?: () => boolean,
+  adminToken = "",
 ) {
   return applyWSSHandler({
     wss,
@@ -77,6 +88,7 @@ export function applyTrpcWebSocketHandler(
         eventBus,
         systemInfo,
         isWorkerConnected,
+        requireMcpAdmin: () => requireMcpAdmin(undefined, adminToken),
       }),
   });
 }

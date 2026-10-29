@@ -17,6 +17,7 @@ import { useConfirm } from "../components/ConfirmDialog";
 import { EmptyState } from "../components/EmptyState";
 import { Icon } from "../components/Icon";
 import { Input } from "../components/Input";
+import { McpAdminGate } from "../components/McpAdminGate";
 import { Modal } from "../components/Modal";
 import { Pill } from "../components/Pill";
 import { Loading } from "../components/Spinner";
@@ -278,7 +279,7 @@ function McpTokensSection() {
         </div>
         <p style={{ margin: "0 0 8px 0", color: "var(--text-muted)", fontSize: 11.5 }}>
           Supply your token in the <code>Authorization: Bearer &lt;TOKEN&gt;</code> HTTP
-          header, the <code>x-api-key</code> header, or directly in the URL query string:
+          header or the <code>x-api-key</code> header:
         </p>
         <pre
           style={{
@@ -317,6 +318,7 @@ function McpTokensSection() {
                 placeholder="e.g. Friend Alex, Personal Cursor, Work Laptop"
                 value={comment}
                 onChange={(e) => setComment(e.target.value)}
+                maxLength={100}
                 required
                 autoFocus
               />
@@ -325,6 +327,8 @@ function McpTokensSection() {
                 placeholder="Leave blank to auto-generate a secure token"
                 value={customToken}
                 onChange={(e) => setCustomToken(e.target.value)}
+                minLength={32}
+                maxLength={256}
               />
             </div>
             <div
@@ -459,6 +463,16 @@ export default function Settings() {
 
   const authRows: SettingRow[] = [
     {
+      key: "access-tokens",
+      label: "MCP access",
+      caption: "Required credentials for every HTTP MCP request",
+      value: (
+        <Pill variant="ok">
+          {health.auth.enabled ? "OAuth bearer token" : "MCP access token"}
+        </Pill>
+      ),
+    },
+    {
       key: "oauth",
       label: "OAuth2 / OIDC",
       caption: "External identity provider protection for MCP endpoint",
@@ -489,7 +503,9 @@ export default function Settings() {
         </div>
       </div>
 
-      <McpTokensSection />
+      <McpAdminGate>
+        <McpTokensSection />
+      </McpAdminGate>
 
       <div style={{ marginTop: 24 }}>
         <SettingsGroup title="Embeddings" rows={embeddingsRows} />

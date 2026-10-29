@@ -678,11 +678,11 @@ export interface McpToolCallInput {
   tokenComment?: string | null;
   tool: string;
   library?: string | null;
-  query?: string | null;
-  detail?: string | null;
+  version?: string | null;
+  target?: string | null;
+  protocol?: "http" | "sse" | "stdio";
   success: boolean;
   durationMs: number;
-  errorMessage?: string | null;
 }
 
 /**
@@ -694,11 +694,11 @@ export interface McpToolCallRecord {
   tokenComment: string | null;
   tool: string;
   library: string | null;
-  query: string | null;
-  detail: string | null;
+  version: string | null;
+  target: string | null;
+  protocol: "http" | "sse" | "stdio";
   success: boolean;
   durationMs: number;
-  errorMessage: string | null;
   createdAt: string;
 }
 
@@ -749,7 +749,6 @@ export interface McpLibraryStatItem {
   library: string;
   count: number;
   percentage: number;
-  topQueries: Array<{ query: string; count: number }>;
 }
 
 /**
@@ -765,6 +764,7 @@ export interface McpActivityPoint {
  * Comprehensive summary overview of MCP usage statistics.
  */
 export interface McpStatsOverview {
+  firstDay: string | null;
   totalCalls: number;
   successCalls: number;
   failedCalls: number;

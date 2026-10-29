@@ -27,6 +27,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { createApiClient } from "../src/services/apiClient";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import Database from "better-sqlite3";
@@ -456,12 +457,15 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     // the test never clashes with a port already bound on the CI host. The
     // image sets DOCS_MCP_STORE_PATH=/data (writable), so no mount is needed —
     // an empty store still serves the UI and system-health API.
+    const adminToken = "docker-e2e-operator-key-for-mcp-administration";
     const run = await docker([
       "run",
       "-d",
       "-P",
       "-e",
       "DOCS_MCP_TELEMETRY=false",
+      "-e",
+      `DOCS_MCP_ADMIN_TOKEN=${adminToken}`,
       IMAGE_TAG,
       ...args,
     ]);
@@ -536,9 +540,16 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
         worker: true,
       });
       if (mcp) {
+        const { api: management } = createApiClient(`${base}/api`, {
+          subscriptions: false,
+          headers: () => ({ authorization: `Bearer ${adminToken}` }),
+        });
+        const [token] = await management.listMcpTokens.query();
         const client = new Client({ name: "docker-http-test", version: "1.0.0" });
         try {
-          await client.connect(new StreamableHTTPClientTransport(new URL("/mcp", base)));
+          await client.connect(new StreamableHTTPClientTransport(new URL("/mcp", base), {
+            requestInit: { headers: { authorization: `Bearer ${token.token}` } },
+          }));
           const tools = await client.listTools();
           expect(tools.tools.map((tool) => tool.name)).toContain("search_docs");
         } finally {

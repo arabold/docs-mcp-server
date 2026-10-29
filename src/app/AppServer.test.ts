@@ -289,7 +289,7 @@ describe("AppServer", () => {
 
     expect(logged("info")).toContainEqual(
       expect.stringContaining(
-        "Authentication: protects https://docs.example.com/tools/mcp only; the web UI and API are not protected",
+        "OAuth: protects https://docs.example.com/tools/mcp; MCP administrative API procedures require the separate operator key",
       ),
     );
   });

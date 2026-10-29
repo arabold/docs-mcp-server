@@ -29,6 +29,12 @@ import {
   StoreError,
   VersionAlreadyExistsError,
 } from "./errors";
+import {
+  pruneMcpCalls,
+  readMcpOverview,
+  readMcpRecent,
+  recordMcpCall,
+} from "./McpStatistics";
 import type {
   ActivityHistory,
   CompactResult,
@@ -37,15 +43,12 @@ import type {
   LibraryVersionSummary,
   ListVersionChunksOptions,
   ListVersionChunksResult,
-  McpLibraryStatItem,
   McpRecentCallsOptions,
   McpStatsFilterOptions,
   McpStatsOverview,
   McpTokenRecord,
-  McpTokenStatItem,
   McpToolCallInput,
   McpToolCallRecord,
-  McpToolStatItem,
   PageListItem,
   ResolvedVersion,
   StoredScraperOptions,
@@ -3361,8 +3364,8 @@ export class DocumentStore {
              id,
              token,
              comment,
-             created_at as createdAt,
-             last_used_at as lastUsedAt
+             strftime('%Y-%m-%dT%H:%M:%fZ', created_at) as createdAt,
+             strftime('%Y-%m-%dT%H:%M:%fZ', last_used_at) as lastUsedAt
            FROM mcp_tokens
            ORDER BY created_at DESC`,
         )
@@ -3397,8 +3400,8 @@ export class DocumentStore {
              id,
              token,
              comment,
-             created_at as createdAt,
-             last_used_at as lastUsedAt
+             strftime('%Y-%m-%dT%H:%M:%fZ', created_at) as createdAt,
+             strftime('%Y-%m-%dT%H:%M:%fZ', last_used_at) as lastUsedAt
            FROM mcp_tokens
            WHERE id = ?`,
         )
@@ -3446,8 +3449,8 @@ export class DocumentStore {
              id,
              token,
              comment,
-             created_at as createdAt,
-             last_used_at as lastUsedAt
+             strftime('%Y-%m-%dT%H:%M:%fZ', created_at) as createdAt,
+             strftime('%Y-%m-%dT%H:%M:%fZ', last_used_at) as lastUsedAt
            FROM mcp_tokens
            WHERE token = ?`,
         )
@@ -3472,7 +3475,7 @@ export class DocumentStore {
   }
 
   /**
-   * Generates a default admin token if no tokens exist in the database.
+   * Generates an initial client access token if no tokens exist in the database.
    */
   async ensureDefaultMcpToken(): Promise<McpTokenRecord | null> {
     try {
@@ -3480,15 +3483,13 @@ export class DocumentStore {
         .prepare("SELECT COUNT(*) as count FROM mcp_tokens")
         .get() as { count: number };
       if (countRow.count === 0) {
-        const created = await this.createMcpToken("Default Admin Token");
-        logger.info(
-          `🔑 Created initial MCP access token: ${created.token} (Default Admin Token)`,
-        );
+        const created = await this.createMcpToken("Default Access Token");
+        logger.info(`🔑 Created initial MCP access token (id: ${created.id})`);
         return created;
       }
       return null;
     } catch (error) {
-      logger.warn(`Could not ensure default MCP token: ${error}`);
+      logger.warn(`⚠️ Could not ensure default MCP token: ${error}`);
       return null;
     }
   }
@@ -3506,88 +3507,23 @@ export class DocumentStore {
   }
 
   /**
-   * Prunes old MCP statistics records to prevent database bloating.
-   * Keeps records within `retentionDays` (default 30 days) and caps total rows at `maxRows` (default 20,000).
+   * Prunes recent invocation metadata without deleting historical daily counters.
+   * @param retentionDays - Retention period for recent calls.
+   * @param maxRows - Maximum number of recent calls.
+   * @returns A promise resolved after pruning.
    */
   async pruneOldMcpStats(retentionDays = 30, maxRows = 20000): Promise<void> {
-    try {
-      this.db
-        .prepare(
-          "DELETE FROM mcp_stats WHERE created_at < datetime('now', '-' || ? || ' days')",
-        )
-        .run(retentionDays);
-
-      const countRow = this.db
-        .prepare("SELECT COUNT(*) as count FROM mcp_stats")
-        .get() as { count: number };
-
-      if (countRow.count > maxRows) {
-        const excess = countRow.count - maxRows;
-        this.db
-          .prepare(
-            `DELETE FROM mcp_stats WHERE id IN (
-               SELECT id FROM mcp_stats ORDER BY id ASC LIMIT ?
-             )`,
-          )
-          .run(excess);
-      }
-    } catch (error) {
-      logger.debug(`Error pruning old MCP stats: ${error}`);
-    }
+    pruneMcpCalls(this.db, retentionDays, maxRows);
   }
 
   /**
-   * Records an MCP tool invocation for usage statistics.
-   * Enforces strict boundaries on stored strings so that mcp_stats never stores
-   * heavy payloads, large bodies, or raw log dumpsters.
+   * Records compact invocation metadata and updates durable daily counters atomically.
+   * @param call - Metadata for the completed tool call.
+   * @returns A promise resolved after the write attempt.
    */
   async recordMcpToolCall(call: McpToolCallInput): Promise<void> {
     try {
-      // biome-ignore lint/suspicious/noExplicitAny: fallback for tool name
-      const tool = (call.tool || (call as any).toolName || "unknown").slice(0, 64);
-      const library = call.library ? call.library.trim().slice(0, 64) : null;
-      // Strip newlines/excess whitespace and cap at 150 chars max
-      const query = call.query
-        ? call.query.replace(/\s+/g, " ").trim().slice(0, 150)
-        : null;
-      const detail = call.detail
-        ? call.detail.replace(/\s+/g, " ").trim().slice(0, 100)
-        : null;
-      // Truncate error message to first 200 chars to avoid storing multi-KB stack dumps
-      const errorMessage = call.errorMessage
-        ? call.errorMessage.replace(/\s+/g, " ").trim().slice(0, 200)
-        : null;
-      const tokenComment = call.tokenComment
-        ? call.tokenComment.trim().slice(0, 100)
-        : null;
-
-      this.db
-        .prepare(
-          `INSERT INTO mcp_stats (
-             token_id,
-             token_comment,
-             tool,
-             library,
-             query,
-             detail,
-             success,
-             duration_ms,
-             error_message,
-             created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-        )
-        .run(
-          call.tokenId ?? null,
-          tokenComment,
-          tool,
-          library,
-          query,
-          detail,
-          call.success ? 1 : 0,
-          Math.max(0, Math.round(call.durationMs || 0)),
-          errorMessage,
-        );
-
+      recordMcpCall(this.db, call);
       this.maybePruneMcpStats();
     } catch (error) {
       logger.debug(`Failed to record MCP tool call stats: ${error}`);
@@ -3595,270 +3531,30 @@ export class DocumentStore {
   }
 
   /**
-   * Retrieves aggregated MCP statistics according to filter options.
+   * Retrieves historical aggregates with consistent filters across all breakdowns.
+   * @param options - UTC calendar period and usage filters.
+   * @returns The historical usage overview.
    */
   async getMcpStatsOverview(
     options: McpStatsFilterOptions = {},
   ): Promise<McpStatsOverview> {
     try {
-      const conditions = [];
-      const params = [];
-
-      if (options.days !== undefined && options.days > 0) {
-        conditions.push("created_at >= datetime('now', '-' || ? || ' days')");
-        params.push(options.days);
-      }
-      if (options.tokenId !== undefined) {
-        conditions.push("token_id = ?");
-        params.push(options.tokenId);
-      }
-      if (options.tool) {
-        conditions.push("tool = ?");
-        params.push(options.tool);
-      }
-      if (options.library) {
-        conditions.push("library = ?");
-        params.push(options.library);
-      }
-
-      const whereClause =
-        conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-
-      // 1. Overall totals
-      const totalsRow = this.db
-        .prepare(
-          `SELECT
-             COUNT(*) as total_calls,
-             SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as success_calls,
-             SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failed_calls,
-             COALESCE(ROUND(AVG(duration_ms), 1), 0) as avg_duration_ms
-           FROM mcp_stats
-           ${whereClause}`,
-        )
-        .get(...params) as
-        | {
-            total_calls: number;
-            success_calls: number;
-            failed_calls: number;
-            avg_duration_ms: number;
-          }
-        | undefined;
-
-      const totalCalls = totalsRow?.total_calls ?? 0;
-      const successCalls = totalsRow?.success_calls ?? 0;
-      const failedCalls = totalsRow?.failed_calls ?? 0;
-      const avgDurationMs = totalsRow?.avg_duration_ms ?? 0;
-      const successRate =
-        totalCalls > 0 ? Math.round((successCalls / totalCalls) * 100) : 100;
-
-      // 2. Active tokens count
-      const activeTokensRow = this.db
-        .prepare("SELECT COUNT(*) as count FROM mcp_tokens")
-        .get() as { count: number } | undefined;
-      const activeTokensCount = activeTokensRow?.count ?? 0;
-
-      // 3. By tool
-      const toolRows = this.db
-        .prepare(
-          `SELECT
-             tool,
-             COUNT(*) as count,
-             SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as success_count,
-             COALESCE(ROUND(AVG(duration_ms), 1), 0) as avg_duration_ms
-           FROM mcp_stats
-           ${whereClause}
-           GROUP BY tool
-           ORDER BY count DESC`,
-        )
-        .all(...params) as Array<{
-        tool: string;
-        count: number;
-        success_count: number;
-        avg_duration_ms: number;
-      }>;
-
-      const byTool: McpToolStatItem[] = toolRows.map((r) => ({
-        tool: r.tool,
-        count: r.count,
-        percentage: totalCalls > 0 ? Math.round((r.count / totalCalls) * 100) : 0,
-        successRate: r.count > 0 ? Math.round((r.success_count / r.count) * 100) : 100,
-        avgDurationMs: r.avg_duration_ms,
-      }));
-
-      // 4. By token
-      const tokenRows = this.db
-        .prepare(
-          `SELECT
-             token_id,
-             COALESCE(token_comment, 'Anonymous') as comment,
-             COUNT(*) as count,
-             MAX(created_at) as last_used_at
-           FROM mcp_stats
-           ${whereClause}
-           GROUP BY token_id, token_comment
-           ORDER BY count DESC`,
-        )
-        .all(...params) as Array<{
-        token_id: number | null;
-        comment: string;
-        count: number;
-        last_used_at: string | null;
-      }>;
-
-      const byToken: McpTokenStatItem[] = tokenRows.map((r) => ({
-        tokenId: r.token_id,
-        comment: r.comment,
-        count: r.count,
-        percentage: totalCalls > 0 ? Math.round((r.count / totalCalls) * 100) : 0,
-        lastUsedAt: r.last_used_at,
-      }));
-
-      // 5. By library
-      const libraryConditions = [...conditions, "library IS NOT NULL", "library != ''"];
-      const libraryWhere = `WHERE ${libraryConditions.join(" AND ")}`;
-      const libraryRows = this.db
-        .prepare(
-          `SELECT
-             library,
-             COUNT(*) as count
-           FROM mcp_stats
-           ${libraryWhere}
-           GROUP BY library
-           ORDER BY count DESC
-           LIMIT 15`,
-        )
-        .all(...params) as Array<{ library: string; count: number }>;
-
-      const byLibrary: McpLibraryStatItem[] = libraryRows.map((libRow) => {
-        const topQueries = this.db
-          .prepare(
-            `SELECT
-               query,
-               COUNT(*) as count
-             FROM mcp_stats
-             WHERE library = ? AND query IS NOT NULL AND query != ''
-             GROUP BY query
-             ORDER BY count DESC
-             LIMIT 5`,
-          )
-          .all(libRow.library) as Array<{ query: string; count: number }>;
-
-        return {
-          library: libRow.library,
-          count: libRow.count,
-          percentage: totalCalls > 0 ? Math.round((libRow.count / totalCalls) * 100) : 0,
-          topQueries,
-        };
-      });
-
-      // 6. Activity history (time series)
-      const windowDays = Math.min(Math.max(options.days ?? 14, 1), 90);
-      const calendarRows = this.db
-        .prepare(
-          `WITH RECURSIVE calendar(day) AS (
-             SELECT date('now', '-' || (? - 1) || ' days')
-             UNION ALL
-             SELECT date(day, '+1 day') FROM calendar WHERE day < date('now')
-           )
-           SELECT
-             calendar.day as date,
-             COUNT(s.id) as calls,
-             COALESCE(SUM(CASE WHEN s.success = 0 THEN 1 ELSE 0 END), 0) as errors
-           FROM calendar
-           LEFT JOIN mcp_stats s ON date(s.created_at) = calendar.day
-           GROUP BY calendar.day
-           ORDER BY calendar.day ASC`,
-        )
-        .all(windowDays) as Array<{ date: string; calls: number; errors: number }>;
-
-      return {
-        totalCalls,
-        successCalls,
-        failedCalls,
-        successRate,
-        avgDurationMs,
-        activeTokensCount,
-        topTool: byTool[0]?.tool ?? null,
-        topLibrary: byLibrary[0]?.library ?? null,
-        byTool,
-        byToken,
-        byLibrary,
-        activityHistory: calendarRows,
-      };
+      return readMcpOverview(this.db, options);
     } catch (error) {
       throw new ConnectionError("Failed to get MCP stats overview", error);
     }
   }
 
   /**
-   * Retrieves recent MCP tool calls log.
+   * Retrieves recent compact invocation metadata.
+   * @param options - UTC calendar period, filters and pagination.
+   * @returns Recent invocations without request or response bodies.
    */
   async getMcpRecentCalls(
     options: McpRecentCallsOptions = {},
   ): Promise<McpToolCallRecord[]> {
     try {
-      const conditions = [];
-      const params = [];
-
-      if (options.days !== undefined && options.days > 0) {
-        conditions.push("created_at >= datetime('now', '-' || ? || ' days')");
-        params.push(options.days);
-      }
-      if (options.tokenId !== undefined) {
-        conditions.push("token_id = ?");
-        params.push(options.tokenId);
-      }
-      if (options.tool) {
-        conditions.push("tool = ?");
-        params.push(options.tool);
-      }
-      if (options.library) {
-        conditions.push("library = ?");
-        params.push(options.library);
-      }
-
-      const whereClause =
-        conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-      const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
-      const offset = Math.max(options.offset ?? 0, 0);
-
-      const rows = this.db
-        .prepare(
-          `SELECT
-             id,
-             token_id as tokenId,
-             token_comment as tokenComment,
-             tool,
-             library,
-             query,
-             detail,
-             (success = 1) as success,
-             duration_ms as durationMs,
-             error_message as errorMessage,
-             created_at as createdAt
-           FROM mcp_stats
-           ${whereClause}
-           ORDER BY created_at DESC, id DESC
-           LIMIT ? OFFSET ?`,
-        )
-        .all(...params, limit, offset) as Array<{
-        id: number;
-        tokenId: number | null;
-        tokenComment: string | null;
-        tool: string;
-        library: string | null;
-        query: string | null;
-        detail: string | null;
-        success: number | boolean;
-        durationMs: number;
-        errorMessage: string | null;
-        createdAt: string;
-      }>;
-
-      return rows.map((r) => ({
-        ...r,
-        success: Boolean(r.success),
-      }));
+      return readMcpRecent(this.db, options);
     } catch (error) {
       throw new ConnectionError("Failed to get recent MCP calls", error);
     }

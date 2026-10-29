@@ -231,7 +231,8 @@ Bearer-token authentication for the MCP endpoint over HTTP. See [Authentication]
 
 | Option | Default | Description |
 |:-------|:--------|:------------|
-| `enabled` | `false` | Require a JWT access token on the MCP endpoint. |
+| `enabled` | `false` | Select OAuth JWT authentication instead of database client tokens on the MCP endpoint. |
+| `adminToken` | empty | Separate operator key for token management and statistics (`DOCS_MCP_ADMIN_TOKEN`). Empty disables administrative API access. |
 | `issuerUrl` | - | The identity provider's issuer identifier (e.g., Clerk, Auth0). Must match the provider's published `issuer` exactly. |
 | `audience` | - | Expected token audience. Defaults to `<publicUrl>/mcp`; set it only for providers that issue a fixed audience. |
 

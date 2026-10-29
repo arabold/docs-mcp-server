@@ -223,7 +223,7 @@ export class DocumentManagementClient implements IDocumentManagement {
   }
 
   async validateMcpToken(token: string): Promise<McpTokenRecord | null> {
-    return this.client.validateMcpToken.query({ token });
+    return this.client.validateMcpToken.mutate({ token });
   }
 
   async touchMcpToken(id: number): Promise<void> {
@@ -240,9 +240,5 @@ export class DocumentManagementClient implements IDocumentManagement {
 
   async getMcpRecentCalls(options?: McpRecentCallsOptions): Promise<McpToolCallRecord[]> {
     return this.client.getMcpRecentCalls.query(options);
-  }
-
-  async pruneOldMcpStats(_retentionDays?: number, _maxRows?: number): Promise<void> {
-    // Client-side no-op or remote trigger
   }
 }

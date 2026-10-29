@@ -4,17 +4,13 @@
  * popular, who is using the server, and what documentation is being accessed.
  */
 import { useMemo, useState } from "react";
-import {
-  useListLibraries,
-  useListMcpTokens,
-  useMcpRecentCalls,
-  useMcpStatsOverview,
-} from "../api/hooks";
+import { useListLibraries, useMcpRecentCalls, useMcpStatsOverview } from "../api/hooks";
 import { AreaChart } from "../components/AreaChart";
 import { Card } from "../components/Card";
 import { Chip } from "../components/Chip";
 import { EmptyState } from "../components/EmptyState";
 import { Icon, type IconName } from "../components/Icon";
+import { McpAdminGate } from "../components/McpAdminGate";
 import { Pill } from "../components/Pill";
 import { ProgressBar } from "../components/ProgressBar";
 import { SegmentedControl } from "../components/SegmentedControl";
@@ -25,7 +21,7 @@ import { formatRelativeShort } from "../utils/format";
 type PeriodOption = "1" | "7" | "30" | "all";
 
 const PERIOD_OPTIONS = [
-  { value: "1", label: "Today" },
+  { value: "1", label: "Today (UTC)" },
   { value: "7", label: "7 Days" },
   { value: "30", label: "30 Days" },
   { value: "all", label: "All Time" },
@@ -55,7 +51,7 @@ function Kpi({
   );
 }
 
-export default function Statistics() {
+function StatisticsContent() {
   const [period, setPeriod] = useState<PeriodOption>("7");
   const [selectedTokenId, setSelectedTokenId] = useState<number | undefined>(undefined);
   const [selectedTool, setSelectedTool] = useState<string | undefined>(undefined);
@@ -73,12 +69,16 @@ export default function Statistics() {
     [daysParam, selectedTokenId, selectedTool, selectedLibrary],
   );
 
-  const { data: overview, isLoading: overviewLoading } = useMcpStatsOverview(statsFilter);
+  const {
+    data: overview,
+    isLoading: overviewLoading,
+    error: overviewError,
+  } = useMcpStatsOverview(statsFilter);
   const { data: recentCalls, isLoading: callsLoading } = useMcpRecentCalls({
     ...statsFilter,
     limit: 50,
   });
-  const { data: tokensList } = useListMcpTokens();
+  const { data: catalog } = useMcpStatsOverview();
   const { data: librariesList } = useListLibraries();
 
   const activityValues = useMemo(() => {
@@ -111,6 +111,11 @@ export default function Statistics() {
     return <Loading label="Loading MCP statistics…" />;
   }
 
+  if (overviewError)
+    return (
+      <Card className="panel">Failed to load statistics: {overviewError.message}</Card>
+    );
+
   return (
     <div>
       <div
@@ -128,7 +133,8 @@ export default function Statistics() {
           <span className="eyebrow">Analytics</span>
           <h2>MCP Statistics</h2>
           <span className="sub" style={{ fontSize: 13, color: "var(--text-muted)" }}>
-            Overview of MCP tool usage, client distribution, and accessed documentation.
+            Daily MCP usage counters in UTC. Historical totals survive recent-call
+            cleanup.
           </span>
         </div>
         <div>
@@ -174,7 +180,7 @@ export default function Statistics() {
             <div>
               <h3>Request Volume Over Time</h3>
               <span className="sub" style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                Daily requests made by MCP clients
+                Daily requests made by MCP clients (UTC)
               </span>
             </div>
           </div>
@@ -318,26 +324,6 @@ export default function Statistics() {
                     </span>
                   </div>
                   <ProgressBar value={libItem.percentage} variant="run" />
-                  {libItem.topQueries && libItem.topQueries.length > 0 ? (
-                    <div
-                      style={{ marginTop: 4, fontSize: 11, color: "var(--text-muted)" }}
-                    >
-                      Top queries:{" "}
-                      {libItem.topQueries.map((q) => (
-                        <span
-                          key={q.query}
-                          style={{
-                            marginRight: 6,
-                            background: "var(--surface-2)",
-                            padding: "1px 5px",
-                            borderRadius: 3,
-                          }}
-                        >
-                          "{q.query}" ({q.count})
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
                 </div>
               ))}
             </div>
@@ -364,7 +350,7 @@ export default function Statistics() {
         >
           <div className="section-head" style={{ margin: 0 }}>
             <div>
-              <span className="eyebrow">Audit Log</span>
+              <span className="eyebrow">Recent Metadata</span>
               <h2>Recent Tool Invocations</h2>
             </div>
           </div>
@@ -391,11 +377,13 @@ export default function Statistics() {
               }
             >
               <option value="">All Callers</option>
-              {tokensList?.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.comment}
-                </option>
-              ))}
+              {catalog?.byToken
+                .filter((t) => t.tokenId !== null)
+                .map((t) => (
+                  <option key={t.tokenId} value={t.tokenId ?? ""}>
+                    {t.comment}
+                  </option>
+                ))}
             </select>
 
             {/* Filter by Tool */}
@@ -412,14 +400,11 @@ export default function Statistics() {
               onChange={(e) => setSelectedTool(e.target.value || undefined)}
             >
               <option value="">All Tools</option>
-              <option value="search_docs">search_docs</option>
-              <option value="read_page">read_page</option>
-              <option value="list_pages">list_pages</option>
-              <option value="list_libraries">list_libraries</option>
-              <option value="find_version">find_version</option>
-              <option value="scrape_docs">scrape_docs</option>
-              <option value="fetch_url">fetch_url</option>
-              <option value="refresh_version">refresh_version</option>
+              {catalog?.byTool.map(({ tool }) => (
+                <option key={tool} value={tool}>
+                  {tool}
+                </option>
+              ))}
             </select>
 
             {/* Filter by Library */}
@@ -436,11 +421,18 @@ export default function Statistics() {
               onChange={(e) => setSelectedLibrary(e.target.value || undefined)}
             >
               <option value="">All Libraries</option>
-              {librariesList?.map((lib) => (
-                <option key={lib.library} value={lib.library}>
-                  {lib.library}
-                </option>
-              ))}
+              {Array.from(
+                new Set([
+                  ...(librariesList?.map((lib) => lib.library) ?? []),
+                  ...(catalog?.byLibrary.map((lib) => lib.library) ?? []),
+                ]),
+              )
+                .sort()
+                .map((library) => (
+                  <option key={library} value={library}>
+                    {library}
+                  </option>
+                ))}
             </select>
           </div>
         </div>
@@ -456,7 +448,7 @@ export default function Statistics() {
                   <Th>Caller</Th>
                   <Th>Tool</Th>
                   <Th>Library</Th>
-                  <Th>Query / Target</Th>
+                  <Th>Document / Transport</Th>
                   <Th num>Latency</Th>
                   <Th>Status</Th>
                 </tr>
@@ -492,7 +484,10 @@ export default function Statistics() {
                     </Td>
                     <Td>
                       {call.library ? (
-                        <Chip>{call.library}</Chip>
+                        <Chip>
+                          {call.library}
+                          {call.version ? `@${call.version}` : ""}
+                        </Chip>
                       ) : (
                         <span style={{ color: "var(--text-faint)", fontSize: 11 }}>
                           —
@@ -507,15 +502,9 @@ export default function Statistics() {
                         whiteSpace: "nowrap",
                         fontSize: 11.5,
                       }}
-                      title={call.query ?? call.detail ?? ""}
+                      title={call.target ?? ""}
                     >
-                      {call.query ? (
-                        <span>{call.query}</span>
-                      ) : call.detail ? (
-                        <span style={{ color: "var(--text-muted)" }}>{call.detail}</span>
-                      ) : (
-                        <span style={{ color: "var(--text-faint)" }}>—</span>
-                      )}
+                      {call.target ?? "—"} <small>({call.protocol})</small>
                     </Td>
                     <Td num style={{ fontFamily: "var(--mono)", fontSize: 11 }}>
                       {call.durationMs}ms
@@ -526,7 +515,7 @@ export default function Statistics() {
                           ok
                         </Pill>
                       ) : (
-                        <span title={call.errorMessage ?? "Error"}>
+                        <span title="Tool execution failed">
                           <Pill variant="err" withDot>
                             error
                           </Pill>
@@ -541,12 +530,24 @@ export default function Statistics() {
             <div style={{ padding: "30px 20px" }}>
               <EmptyState
                 title="No tool invocations recorded"
-                description="When MCP clients call tools, each request will be logged here."
+                description="Recent calls retain only bounded metadata for up to 30 days and approximately 20,000 calls. Daily totals remain available after cleanup."
               />
             </div>
           )}
         </Card>
       </div>
     </div>
+  );
+}
+
+/**
+ * Shows usage analytics to an authenticated operator.
+ * @returns The administrative gate and statistics page.
+ */
+export default function Statistics() {
+  return (
+    <McpAdminGate>
+      <StatisticsContent />
+    </McpAdminGate>
   );
 }

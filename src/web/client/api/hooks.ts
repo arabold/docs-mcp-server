@@ -6,6 +6,7 @@
  */
 import type { inferRouterInputs } from "@trpc/server";
 import type { AppRouter } from "../../../services/appRouter";
+import { setMcpAdminToken } from "./adminAccess";
 import { trpc } from "./trpc";
 
 type RouterInputs = inferRouterInputs<AppRouter>;
@@ -149,10 +150,30 @@ export function useDeleteMcpToken() {
 
 /** Fetches aggregated MCP usage statistics and breakdown by tool, user, and library. */
 export function useMcpStatsOverview(input?: RouterInputs["getMcpStatsOverview"]) {
-  return trpc.getMcpStatsOverview.useQuery(input);
+  return trpc.getMcpStatsOverview.useQuery(input, {
+    refetchInterval: 15000,
+    retry: false,
+  });
 }
 
 /** Fetches recent MCP tool execution log. */
 export function useMcpRecentCalls(input?: RouterInputs["getMcpRecentCalls"]) {
-  return trpc.getMcpRecentCalls.useQuery(input);
+  return trpc.getMcpRecentCalls.useQuery(input, { refetchInterval: 15000, retry: false });
+}
+
+/**
+ * Verifies an operator key before protected views are mounted.
+ * @returns A sign-in function that keeps valid credentials only in tab memory.
+ */
+export function useMcpAdminLogin() {
+  const utils = trpc.useUtils();
+  return async (token: string) => {
+    setMcpAdminToken(token);
+    try {
+      await utils.client.listMcpTokens.query();
+    } catch (error) {
+      setMcpAdminToken("");
+      throw error;
+    }
+  };
 }

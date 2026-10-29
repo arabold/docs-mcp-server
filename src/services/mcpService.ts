@@ -150,41 +150,28 @@ function createPreflightChecks(originPolicy: OriginPolicy) {
 }
 
 /**
- * Register the MCP endpoint on a Fastify server.
- *
- * @param server - The Fastify instance.
- * @param deps - Services and policy the endpoint needs.
- * @param auth - Authentication for the endpoint; omit to serve it without authentication.
- */
-
-/**
- * Extracts bearer token or API key from Authorization header, x-api-key header, or URL query parameters.
+ * Extracts credentials from headers so secrets never become part of a request URL.
  */
 function extractMcpToken(request: FastifyRequest): string | undefined {
   const authorization = request.headers.authorization;
   if (authorization) {
     const match = authorization.match(/^Bearer\s+(\S+)$/i);
     if (match) return match[1];
-    if (!authorization.includes(" ") && authorization.trim().length > 0) {
-      return authorization.trim();
-    }
   }
   const apiKey = request.headers["x-api-key"];
   if (typeof apiKey === "string" && apiKey.trim()) {
     return apiKey.trim();
   }
-  const query = request.query as Record<string, unknown> | undefined;
-  if (query) {
-    if (typeof query.token === "string" && query.token.trim()) {
-      return query.token.trim();
-    }
-    if (typeof query.apiKey === "string" && query.apiKey.trim()) {
-      return query.apiKey.trim();
-    }
-  }
   return undefined;
 }
 
+/**
+ * Register the MCP endpoint on a Fastify server.
+ *
+ * @param server - The Fastify instance.
+ * @param deps - Services and policy the endpoint needs.
+ * @param auth - Optional OAuth authentication; otherwise database access tokens are required.
+ */
 export async function registerMcpService(
   server: FastifyInstance,
   deps: McpServiceDeps,
@@ -247,7 +234,9 @@ export async function registerMcpService(
       await mcpRequestContextStore.run(
         {
           tokenId: callerToken?.id,
-          tokenComment: callerToken?.comment,
+          tokenComment:
+            callerToken?.comment ?? (authInfo ? `OAuth ${authInfo.clientId}` : undefined),
+          protocol: "http",
         },
         async () => {
           await handleMcpRequest(raw, reply.raw, request.body);
@@ -273,10 +262,7 @@ function registerLegacySseTransport(
   deps: McpServiceDeps,
   createServer: ReturnType<typeof createMcpServerFactory>,
 ): void {
-  const sessions = new Map<
-    string,
-    { transport: SSEServerTransport; caller?: McpTokenRecord }
-  >();
+  const sessions = new Map<string, { transport: SSEServerTransport; callerId: number }>();
   const messagesPath = `${deps.location.basePath}/messages`;
   let warned = false;
   let capWarned = false;
@@ -327,7 +313,7 @@ function registerLegacySseTransport(
       res.setHeader("X-Accel-Buffering", "no");
       const transport = new SSEServerTransport(messagesPath, res);
       const mcpServer = createServer();
-      sessions.set(transport.sessionId, { transport, caller: callerToken });
+      sessions.set(transport.sessionId, { transport, callerId: callerToken.id });
 
       const keepAlive = setInterval(() => {
         if (!res.writableEnded) {
@@ -362,12 +348,32 @@ function registerLegacySseTransport(
       if (!session) {
         return reply.code(404).send(jsonRpcError("Unknown session."));
       }
+      const rawToken = extractMcpToken(request);
+      const callerToken = rawToken
+        ? await deps.docService.validateMcpToken(rawToken)
+        : null;
+      if (!callerToken) {
+        return reply
+          .code(401)
+          .header("WWW-Authenticate", 'Bearer error="invalid_token"')
+          .send({
+            error: "Unauthorized",
+            message: "A valid MCP access token is required.",
+          });
+      }
+      if (callerToken.id !== session.callerId) {
+        return reply
+          .code(403)
+          .send({ error: "Forbidden", message: "Token does not own this session." });
+      }
+      await deps.docService.touchMcpToken(callerToken.id);
       reply.hijack();
       try {
         await mcpRequestContextStore.run(
           {
-            tokenId: session.caller?.id,
-            tokenComment: session.caller?.comment,
+            tokenId: callerToken.id,
+            tokenComment: callerToken.comment,
+            protocol: "sse",
           },
           async () => {
             await session.transport.handlePostMessage(

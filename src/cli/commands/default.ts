@@ -143,7 +143,7 @@ export function createDefaultAction(cli: Argv) {
           backend.pipeline,
           appConfig,
         );
-        const mcpServer = await startStdioServer(mcpTools, appConfig);
+        const mcpServer = await startStdioServer(mcpTools, appConfig, backend.docService);
 
         registerGlobalServices({ mcpStdioServer: mcpServer });
 
