@@ -146,4 +146,50 @@ describe("MCP Access Tokens and Stats", () => {
     expect(searchCalls.length).toBe(1);
     expect(searchCalls[0].query).toBe("useEffect cleanup");
   });
+
+  it("sanitizes and truncates heavy queries, multi-line bodies, and stack traces", async () => {
+    const hugeQuery = "search ".repeat(100) + "\n\nmulti-line text\r\nwith extra spaces";
+    const hugeError = "Error: something failed\n" + "    at StackTrace.line (file.ts:1:1)\n".repeat(50);
+
+    await docService.recordMcpToolCall({
+      tool: "search_docs",
+      library: "very_long_library_name_".repeat(10),
+      query: hugeQuery,
+      durationMs: 15,
+      success: false,
+      errorMessage: hugeError,
+    });
+
+    const recent = await docService.getMcpRecentCalls({ limit: 1 });
+    expect(recent.length).toBe(1);
+
+    const call = recent[0];
+    // Length must be strictly capped
+    expect(call.query?.length).toBeLessThanOrEqual(150);
+    expect(call.query).not.toContain("\n");
+    expect(call.errorMessage?.length).toBeLessThanOrEqual(200);
+    expect(call.errorMessage).not.toContain("\n");
+    expect(call.library?.length).toBeLessThanOrEqual(64);
+  });
+
+  it("prunes old statistics and caps total rows to prevent log bloat", async () => {
+    // Insert 15 tool calls
+    for (let i = 0; i < 15; i++) {
+      await docService.recordMcpToolCall({
+        tool: "search_docs",
+        query: `query ${i}`,
+        durationMs: 10,
+        success: true,
+      });
+    }
+
+    const before = await docService.getMcpRecentCalls({ limit: 50 });
+    expect(before.length).toBe(15);
+
+    // Prune with a maxRows cap of 5
+    await docService.pruneOldMcpStats(30, 5);
+
+    const after = await docService.getMcpRecentCalls({ limit: 50 });
+    expect(after.length).toBe(5);
+  });
 });

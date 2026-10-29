@@ -241,4 +241,8 @@ export class DocumentManagementClient implements IDocumentManagement {
   async getMcpRecentCalls(options?: McpRecentCallsOptions): Promise<McpToolCallRecord[]> {
     return this.client.getMcpRecentCalls.query(options);
   }
+
+  async pruneOldMcpStats(_retentionDays?: number, _maxRows?: number): Promise<void> {
+    // Client-side no-op or remote trigger
+  }
 }

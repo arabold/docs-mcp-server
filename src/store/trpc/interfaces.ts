@@ -113,4 +113,5 @@ export interface IDocumentManagement {
   recordMcpToolCall(call: McpToolCallInput): Promise<void>;
   getMcpStatsOverview(options?: McpStatsFilterOptions): Promise<McpStatsOverview>;
   getMcpRecentCalls(options?: McpRecentCallsOptions): Promise<McpToolCallRecord[]>;
+  pruneOldMcpStats(retentionDays?: number, maxRows?: number): Promise<void>;
 }

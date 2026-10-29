@@ -389,8 +389,10 @@ function createMcpServerInstance(
               ? (args as Record<string, unknown>)
               : undefined;
           const library =
-            typeof toolArgs?.library === "string" ? toolArgs.library : undefined;
-          const query =
+            typeof toolArgs?.library === "string"
+              ? toolArgs.library.trim().slice(0, 64)
+              : undefined;
+          const rawQuery =
             typeof toolArgs?.query === "string"
               ? toolArgs.query
               : typeof toolArgs?.url === "string"
@@ -400,6 +402,14 @@ function createMcpServerInstance(
                   : typeof toolArgs?.topic === "string"
                     ? toolArgs.topic
                     : undefined;
+          // Keep query concise: collapse whitespaces/newlines and cap length to 150 chars
+          const query = rawQuery
+            ? rawQuery.replace(/\s+/g, " ").trim().slice(0, 150)
+            : undefined;
+          const sanitizedError = errorMessage
+            ? errorMessage.replace(/\s+/g, " ").trim().slice(0, 200)
+            : null;
+
           docService
             .recordMcpToolCall({
               tokenId: caller?.tokenId,
@@ -409,7 +419,7 @@ function createMcpServerInstance(
               query,
               durationMs,
               success,
-              errorMessage,
+              errorMessage: sanitizedError,
             })
             .catch((e: unknown) => {
               logger.debug(`Failed to log stats for tool ${name}: ${e}`);

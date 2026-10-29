@@ -37,7 +37,6 @@ import type {
   LibraryVersionSummary,
   ListVersionChunksOptions,
   ListVersionChunksResult,
-  McpActivityPoint,
   McpLibraryStatItem,
   McpRecentCallsOptions,
   McpStatsFilterOptions,
@@ -1162,6 +1161,9 @@ export class DocumentStore {
 
       // 8. Ensure initial default MCP token exists if table is empty
       await this.ensureDefaultMcpToken();
+
+      // 9. Prune old MCP stats on startup to keep telemetry lean
+      await this.pruneOldMcpStats();
     } catch (error) {
       // Re-throw StoreError, ModelConfigurationError, and UnsupportedProviderError directly
       if (
@@ -3491,11 +3493,74 @@ export class DocumentStore {
     }
   }
 
+  private mcpStatsWriteCount = 0;
+
+  private maybePruneMcpStats(): void {
+    this.mcpStatsWriteCount++;
+    if (this.mcpStatsWriteCount >= 100) {
+      this.mcpStatsWriteCount = 0;
+      this.pruneOldMcpStats().catch((err) => {
+        logger.debug(`Auto-pruning MCP stats failed: ${err}`);
+      });
+    }
+  }
+
+  /**
+   * Prunes old MCP statistics records to prevent database bloating.
+   * Keeps records within `retentionDays` (default 30 days) and caps total rows at `maxRows` (default 20,000).
+   */
+  async pruneOldMcpStats(retentionDays = 30, maxRows = 20000): Promise<void> {
+    try {
+      this.db
+        .prepare(
+          "DELETE FROM mcp_stats WHERE created_at < datetime('now', '-' || ? || ' days')",
+        )
+        .run(retentionDays);
+
+      const countRow = this.db
+        .prepare("SELECT COUNT(*) as count FROM mcp_stats")
+        .get() as { count: number };
+
+      if (countRow.count > maxRows) {
+        const excess = countRow.count - maxRows;
+        this.db
+          .prepare(
+            `DELETE FROM mcp_stats WHERE id IN (
+               SELECT id FROM mcp_stats ORDER BY id ASC LIMIT ?
+             )`,
+          )
+          .run(excess);
+      }
+    } catch (error) {
+      logger.debug(`Error pruning old MCP stats: ${error}`);
+    }
+  }
+
   /**
    * Records an MCP tool invocation for usage statistics.
+   * Enforces strict boundaries on stored strings so that mcp_stats never stores
+   * heavy payloads, large bodies, or raw log dumpsters.
    */
   async recordMcpToolCall(call: McpToolCallInput): Promise<void> {
     try {
+      // biome-ignore lint/suspicious/noExplicitAny: fallback for tool name
+      const tool = (call.tool || (call as any).toolName || "unknown").slice(0, 64);
+      const library = call.library ? call.library.trim().slice(0, 64) : null;
+      // Strip newlines/excess whitespace and cap at 150 chars max
+      const query = call.query
+        ? call.query.replace(/\s+/g, " ").trim().slice(0, 150)
+        : null;
+      const detail = call.detail
+        ? call.detail.replace(/\s+/g, " ").trim().slice(0, 100)
+        : null;
+      // Truncate error message to first 200 chars to avoid storing multi-KB stack dumps
+      const errorMessage = call.errorMessage
+        ? call.errorMessage.replace(/\s+/g, " ").trim().slice(0, 200)
+        : null;
+      const tokenComment = call.tokenComment
+        ? call.tokenComment.trim().slice(0, 100)
+        : null;
+
       this.db
         .prepare(
           `INSERT INTO mcp_stats (
@@ -3513,15 +3578,17 @@ export class DocumentStore {
         )
         .run(
           call.tokenId ?? null,
-          call.tokenComment ?? null,
-          call.tool || (call as any).toolName || "unknown",
-          call.library ?? null,
-          call.query ?? null,
-          call.detail ?? null,
+          tokenComment,
+          tool,
+          library,
+          query,
+          detail,
           call.success ? 1 : 0,
-          call.durationMs || 0,
-          call.errorMessage ?? null,
+          Math.max(0, Math.round(call.durationMs || 0)),
+          errorMessage,
         );
+
+      this.maybePruneMcpStats();
     } catch (error) {
       logger.debug(`Failed to record MCP tool call stats: ${error}`);
     }

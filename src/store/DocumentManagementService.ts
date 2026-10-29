@@ -1113,4 +1113,8 @@ export class DocumentManagementService {
   async getMcpRecentCalls(options?: McpRecentCallsOptions): Promise<McpToolCallRecord[]> {
     return this.store.getMcpRecentCalls(options);
   }
+
+  async pruneOldMcpStats(retentionDays?: number, maxRows?: number): Promise<void> {
+    return this.store.pruneOldMcpStats(retentionDays, maxRows);
+  }
 }
