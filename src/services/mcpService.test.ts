@@ -70,6 +70,28 @@ const verifier: OAuthTokenVerifier = {
   },
 };
 
+const MCP_TOKEN = "dmcp_test_access_token_for_service_requests";
+const revoked = new Set<string>();
+const tokenRecord = (token: string) => ({
+  id: token === MCP_TOKEN ? 1 : 2,
+  token,
+  comment: token === MCP_TOKEN ? "Alice" : "Bob",
+  createdAt: "2026-01-01T00:00:00Z",
+  lastUsedAt: null,
+});
+const documents = {
+  validateMcpToken: async (token: string) =>
+    !revoked.has(token) && [MCP_TOKEN, "other-token"].includes(token)
+      ? tokenRecord(token)
+      : null,
+  touchMcpToken: async () => {},
+  recordMcpToolCall: async () => {},
+} as unknown as IDocumentManagement;
+
+beforeEach(() => {
+  revoked.clear();
+});
+
 const META = {
   "io.modelcontextprotocol/protocolVersion": "2026-07-28",
   "io.modelcontextprotocol/clientCapabilities": {},
@@ -84,6 +106,7 @@ function modernRequest(method: string, extraHeaders: Record<string, string> = {}
       accept: "application/json, text/event-stream",
       "mcp-protocol-version": "2026-07-28",
       "mcp-method": method,
+      authorization: `Bearer ${MCP_TOKEN}`,
       ...extraHeaders,
     },
     payload: { jsonrpc: "2.0", id: 1, method, params: { _meta: META } },
@@ -97,6 +120,7 @@ function legacyInitialize(extraHeaders: Record<string, string> = {}) {
     headers: {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
+      authorization: `Bearer ${MCP_TOKEN}`,
       ...extraHeaders,
     },
     payload: {
@@ -125,7 +149,7 @@ async function startServer(options: { withAuth?: boolean; config?: AppConfig } =
   await registerMcpService(
     server,
     {
-      docService: {} as IDocumentManagement,
+      docService: documents,
       pipeline: {} as IPipeline,
       config: options.config ?? config,
       originPolicy: createOriginPolicy({
@@ -155,7 +179,7 @@ async function listen(app: FastifyInstance): Promise<string> {
 async function openSseStream(baseUrl: string) {
   const abort = new AbortController();
   const response = await fetch(`${baseUrl}${BASE_PATH}/sse`, {
-    headers: { accept: "text/event-stream" },
+    headers: { accept: "text/event-stream", authorization: `Bearer ${MCP_TOKEN}` },
     signal: abort.signal,
   });
   const reader = response.body?.getReader();
@@ -233,6 +257,7 @@ describe("MCP endpoint protocol", () => {
         accept: "application/json, text/event-stream",
         "mcp-protocol-version": "2026-07-28",
         "mcp-method": "subscriptions/listen",
+        authorization: `Bearer ${MCP_TOKEN}`,
       },
       body: JSON.stringify({
         jsonrpc: "2.0",
@@ -326,6 +351,44 @@ describe("MCP endpoint browser origins", () => {
 });
 
 describe("MCP endpoint authentication", () => {
+  it("rejects MCP requests without a database access token", async () => {
+    // arrange
+    const app = await startServer();
+
+    // act
+    const response = await app.inject(modernRequest("tools/list", { authorization: "" }));
+
+    // assert
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("rejects a token supplied only in the URL", async () => {
+    // arrange
+    const app = await startServer();
+
+    // act
+    const response = await app.inject({
+      ...modernRequest("tools/list", { authorization: "" }),
+      url: `/mcp?token=${MCP_TOKEN}`,
+    });
+
+    // assert
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("rejects an invalid database access token", async () => {
+    // arrange
+    const app = await startServer();
+
+    // act
+    const response = await app.inject(
+      modernRequest("tools/list", { authorization: "Bearer invalid" }),
+    );
+
+    // assert
+    expect(response.statusCode).toBe(401);
+  });
+
   it("checks the method before authentication", async () => {
     const app = await startServer({ withAuth: true });
 
@@ -355,6 +418,33 @@ describe("MCP endpoint authentication", () => {
 });
 
 describe("Deprecated HTTP+SSE transport", () => {
+  it.each([
+    { name: "a missing token", token: "", revoke: false, status: 401 },
+    { name: "a revoked token", token: MCP_TOKEN, revoke: true, status: 401 },
+    { name: "another caller's token", token: "other-token", revoke: false, status: 403 },
+  ])("rejects SSE messages with $name", async ({ token, revoke, status }) => {
+    // arrange
+    const baseUrl = await listen(await startServer());
+    const stream = await openSseStream(baseUrl);
+    if (revoke) revoked.add(MCP_TOKEN);
+    try {
+      // act
+      const response = await fetch(new URL(stream.endpoint, baseUrl), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: token ? `Bearer ${token}` : "",
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }),
+      });
+
+      // assert
+      expect(response.status).toBe(status);
+    } finally {
+      stream.close();
+    }
+  });
+
   it("answers a message for an unknown session with 404", async () => {
     const app = await startServer();
 
@@ -397,7 +487,9 @@ describe("Deprecated HTTP+SSE transport", () => {
     );
 
     try {
-      const response = await fetch(`${baseUrl}${BASE_PATH}/sse`);
+      const response = await fetch(`${baseUrl}${BASE_PATH}/sse`, {
+        headers: { authorization: `Bearer ${MCP_TOKEN}` },
+      });
 
       expect(response.status).toBe(503);
       expect(response.headers.get("retry-after")).toBe("30");

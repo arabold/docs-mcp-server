@@ -2,7 +2,7 @@
  * tRPC router exposing document data store operations via the worker API.
  * Only procedures actually used externally are included to keep surface minimal.
  */
-import { initTRPC } from "@trpc/server";
+import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import { z } from "zod";
 import type {
@@ -10,6 +10,9 @@ import type {
   EmbeddingConfigInfo,
   FindVersionResult,
   ListPagesOptions,
+  McpRecentCallsOptions,
+  McpStatsFilterOptions,
+  McpToolCallInput,
   PageContentOptions,
   StoreSearchResult,
   VersionStatus,
@@ -19,6 +22,8 @@ import type { IDocumentManagement } from "./interfaces";
 // Context carries the document management API
 export interface DataTrpcContext {
   docService: IDocumentManagement;
+  /** Authorizes administrative operations for the current HTTP request. */
+  requireMcpAdmin?: () => void;
 }
 
 const t = initTRPC.context<DataTrpcContext>().create({
@@ -37,6 +42,16 @@ export const optionalVersion = z
 
 export function createDataRouter(trpc: unknown) {
   const tt = trpc as typeof t;
+  const adminProcedure = tt.procedure.use(({ ctx, next }) => {
+    if (!ctx.requireMcpAdmin) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Administrative access is required.",
+      });
+    }
+    ctx.requireMcpAdmin();
+    return next();
+  });
   return tt.router({
     ping: tt.procedure.query(async () => ({ status: "ok", ts: Date.now() })),
 
@@ -394,8 +409,124 @@ export function createDataRouter(trpc: unknown) {
         },
       ),
 
-    // Lets a web process report its remote worker's embedding config in the
-    // system-health snapshot (the worker, not the web process, holds it).
+    listMcpTokens: adminProcedure.query(async ({ ctx }: { ctx: DataTrpcContext }) => {
+      return await ctx.docService.listMcpTokens();
+    }),
+
+    createMcpToken: adminProcedure
+      .input(
+        z.object({
+          comment: z.string().trim().min(1).max(100),
+          token: z.string().trim().min(32).max(256).optional(),
+        }),
+      )
+      .mutation(
+        async ({
+          ctx,
+          input,
+        }: {
+          ctx: DataTrpcContext;
+          input: { comment: string; token?: string };
+        }) => {
+          return await ctx.docService.createMcpToken(input.comment, input.token);
+        },
+      ),
+
+    deleteMcpToken: adminProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(
+        async ({ ctx, input }: { ctx: DataTrpcContext; input: { id: number } }) => {
+          await ctx.docService.deleteMcpToken(input.id);
+          return { ok: true } as const;
+        },
+      ),
+
+    validateMcpToken: adminProcedure
+      .input(z.object({ token: z.string().max(2048) }))
+      .mutation(
+        async ({ ctx, input }: { ctx: DataTrpcContext; input: { token: string } }) => {
+          return await ctx.docService.validateMcpToken(input.token);
+        },
+      ),
+
+    touchMcpToken: adminProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(
+        async ({ ctx, input }: { ctx: DataTrpcContext; input: { id: number } }) => {
+          await ctx.docService.touchMcpToken(input.id);
+          return { ok: true } as const;
+        },
+      ),
+
+    getMcpStatsOverview: adminProcedure
+      .input(
+        z
+          .object({
+            days: z.number().int().positive().max(3650).optional(),
+            tokenId: z.number().int().optional(),
+            tool: z.string().optional(),
+            library: z.string().optional(),
+          })
+          .optional(),
+      )
+      .query(
+        async ({
+          ctx,
+          input,
+        }: {
+          ctx: DataTrpcContext;
+          input: McpStatsFilterOptions | undefined;
+        }) => {
+          return await ctx.docService.getMcpStatsOverview(input);
+        },
+      ),
+
+    getMcpRecentCalls: adminProcedure
+      .input(
+        z
+          .object({
+            limit: z.number().int().positive().max(200).optional(),
+            offset: z.number().int().nonnegative().optional(),
+            days: z.number().int().positive().max(3650).optional(),
+            tokenId: z.number().int().optional(),
+            tool: z.string().optional(),
+            library: z.string().optional(),
+          })
+          .optional(),
+      )
+      .query(
+        async ({
+          ctx,
+          input,
+        }: {
+          ctx: DataTrpcContext;
+          input: McpRecentCallsOptions | undefined;
+        }) => {
+          return await ctx.docService.getMcpRecentCalls(input);
+        },
+      ),
+
+    recordMcpToolCall: adminProcedure
+      .input(
+        z.object({
+          tokenId: z.number().int().nullable().optional(),
+          tokenComment: z.string().max(100).nullable().optional(),
+          tool: z.string().min(1).max(64),
+          library: z.string().max(256).nullable().optional(),
+          version: z.string().max(64).nullable().optional(),
+          target: z.string().max(256).nullable().optional(),
+          protocol: z.enum(["http", "sse", "stdio"]).optional(),
+          success: z.boolean(),
+          durationMs: z.number(),
+        }),
+      )
+      .mutation(
+        async ({ ctx, input }: { ctx: DataTrpcContext; input: McpToolCallInput }) => {
+          await ctx.docService.recordMcpToolCall(input);
+          return { ok: true } as const;
+        },
+      ),
+
     getEmbeddingConfig: tt.procedure.query(
       async ({ ctx }: { ctx: DataTrpcContext }): Promise<EmbeddingConfigInfo | null> => {
         return ctx.docService.getEmbeddingConfigInfo();

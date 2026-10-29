@@ -54,6 +54,7 @@ in each file's types and TSDoc.
 | `Textarea` | `Textarea.tsx` | Multi-line input with optional label and hint |
 | `Checkbox` | `Checkbox.tsx` | Checkbox with label and optional hint |
 | `SegmentedControl` | `SegmentedControl.tsx` | Choice between a few options |
+| `McpAdminGate` | `McpAdminGate.tsx` | Operator-key sign-in for token management and usage statistics |
 
 ### Overlays
 
