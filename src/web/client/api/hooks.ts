@@ -131,3 +131,28 @@ export function useEventsSubscription(
 ) {
   return trpc.events.subscribe.useSubscription(input, { onData });
 }
+
+/** Lists all registered MCP access tokens. */
+export function useListMcpTokens() {
+  return trpc.listMcpTokens.useQuery();
+}
+
+/** Creates a new MCP access token with comment/label. */
+export function useCreateMcpToken() {
+  return trpc.createMcpToken.useMutation();
+}
+
+/** Deletes an MCP access token by ID. */
+export function useDeleteMcpToken() {
+  return trpc.deleteMcpToken.useMutation();
+}
+
+/** Fetches aggregated MCP usage statistics and breakdown by tool, user, and library. */
+export function useMcpStatsOverview(input?: RouterInputs["getMcpStatsOverview"]) {
+  return trpc.getMcpStatsOverview.useQuery(input);
+}
+
+/** Fetches recent MCP tool execution log. */
+export function useMcpRecentCalls(input?: RouterInputs["getMcpRecentCalls"]) {
+  return trpc.getMcpRecentCalls.useQuery(input);
+}

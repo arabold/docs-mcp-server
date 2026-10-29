@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { PipelineJobStatus } from "../pipeline/types";
+import type { IDocumentManagement } from "../store/trpc/interfaces";
 import { libraryNamesMatch } from "../store/types";
 import {
   extractHostname,
@@ -13,6 +14,7 @@ import type { JobInfo } from "../tools";
 import { ToolError } from "../tools/errors";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
+import { getCurrentMcpCaller } from "./context";
 import { buildDefaultInstructions } from "./defaultInstructions";
 import type { McpServerTools } from "./tools";
 import { createError, createResponse } from "./utils";
@@ -309,10 +311,11 @@ type ToolInputSchemas = ReturnType<typeof createToolInputSchemas>;
 export function createMcpServerFactory(
   tools: McpServerTools,
   config: AppConfig,
+  docService?: IDocumentManagement,
 ): () => McpServer {
   const instructions = resolveServerInstructions(config);
   const schemas = createToolInputSchemas(config);
-  return () => createMcpServerInstance(tools, config, instructions, schemas);
+  return () => createMcpServerInstance(tools, config, instructions, schemas, docService);
 }
 
 /**
@@ -329,6 +332,7 @@ function createMcpServerInstance(
   config: AppConfig,
   instructions: string,
   schemas: ToolInputSchemas,
+  docService?: IDocumentManagement,
 ): McpServer {
   const readOnly = config.app.readOnly;
   const { name, title } = config.server;
@@ -346,6 +350,74 @@ function createMcpServerInstance(
       instructions,
     },
   );
+
+  const rawRegisterTool = server.registerTool.bind(server);
+  // Wrap tools to track execution duration, success, and caller statistics
+  // biome-ignore lint/suspicious/noExplicitAny: generic tool wrapper
+  (server as any).registerTool = (
+    name: string,
+    meta: unknown,
+    handler: (...args: unknown[]) => unknown,
+  ) => {
+    // biome-ignore lint/suspicious/noExplicitAny: internal tool wrapper delegation
+    return (rawRegisterTool as any)(name, meta, async (args: unknown, extra: unknown) => {
+      const startTime = Date.now();
+      const caller = getCurrentMcpCaller();
+      let success = true;
+      let errorMessage: string | null = null;
+      let result: unknown;
+      try {
+        result = await handler(args, extra);
+        if (
+          result &&
+          typeof result === "object" &&
+          "isError" in result &&
+          (result as { isError: boolean }).isError
+        ) {
+          success = false;
+        }
+        return result;
+      } catch (err: unknown) {
+        success = false;
+        errorMessage = err instanceof Error ? err.message : String(err);
+        throw err;
+      } finally {
+        if (docService) {
+          const durationMs = Date.now() - startTime;
+          const toolArgs =
+            typeof args === "object" && args !== null
+              ? (args as Record<string, unknown>)
+              : undefined;
+          const library =
+            typeof toolArgs?.library === "string" ? toolArgs.library : undefined;
+          const query =
+            typeof toolArgs?.query === "string"
+              ? toolArgs.query
+              : typeof toolArgs?.url === "string"
+                ? toolArgs.url
+                : typeof toolArgs?.page === "string"
+                  ? toolArgs.page
+                  : typeof toolArgs?.topic === "string"
+                    ? toolArgs.topic
+                    : undefined;
+          docService
+            .recordMcpToolCall({
+              tokenId: caller?.tokenId,
+              tokenComment: caller?.tokenComment,
+              tool: name,
+              library,
+              query,
+              durationMs,
+              success,
+              errorMessage,
+            })
+            .catch((e: unknown) => {
+              logger.debug(`Failed to log stats for tool ${name}: ${e}`);
+            });
+        }
+      }
+    });
+  };
 
   // --- Tool Definitions ---
 

@@ -72,6 +72,10 @@ export function Sidebar() {
         <Icon name="i-search" size="sm" />
         Search Playground
       </NavLink>
+      <NavLink to="/statistics" className={navClass}>
+        <Icon name="i-chart" size="sm" />
+        Statistics
+      </NavLink>
 
       <div className="nav-label">System</div>
       <NavLink to="/settings" className={navClass}>

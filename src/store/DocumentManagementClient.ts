@@ -17,6 +17,12 @@ import type {
   ListPagesResult,
   ListVersionChunksOptions,
   ListVersionChunksResult,
+  McpRecentCallsOptions,
+  McpStatsFilterOptions,
+  McpStatsOverview,
+  McpTokenRecord,
+  McpToolCallInput,
+  McpToolCallRecord,
   PageContentOptions,
   PageContentResult,
   StoredScraperOptions,
@@ -202,5 +208,37 @@ export class DocumentManagementClient implements IDocumentManagement {
       library: ref.library,
       version: ref.version,
     });
+  }
+
+  async listMcpTokens(): Promise<McpTokenRecord[]> {
+    return this.client.listMcpTokens.query();
+  }
+
+  async createMcpToken(comment: string, customToken?: string): Promise<McpTokenRecord> {
+    return this.client.createMcpToken.mutate({ comment, token: customToken });
+  }
+
+  async deleteMcpToken(id: number): Promise<void> {
+    await this.client.deleteMcpToken.mutate({ id });
+  }
+
+  async validateMcpToken(token: string): Promise<McpTokenRecord | null> {
+    return this.client.validateMcpToken.query({ token });
+  }
+
+  async touchMcpToken(id: number): Promise<void> {
+    await this.client.touchMcpToken.mutate({ id });
+  }
+
+  async recordMcpToolCall(call: McpToolCallInput): Promise<void> {
+    await this.client.recordMcpToolCall.mutate(call);
+  }
+
+  async getMcpStatsOverview(options?: McpStatsFilterOptions): Promise<McpStatsOverview> {
+    return this.client.getMcpStatsOverview.query(options);
+  }
+
+  async getMcpRecentCalls(options?: McpRecentCallsOptions): Promise<McpToolCallRecord[]> {
+    return this.client.getMcpRecentCalls.query(options);
   }
 }

@@ -10,6 +10,9 @@ import type {
   EmbeddingConfigInfo,
   FindVersionResult,
   ListPagesOptions,
+  McpRecentCallsOptions,
+  McpStatsFilterOptions,
+  McpToolCallInput,
   PageContentOptions,
   StoreSearchResult,
   VersionStatus,
@@ -396,6 +399,126 @@ export function createDataRouter(trpc: unknown) {
 
     // Lets a web process report its remote worker's embedding config in the
     // system-health snapshot (the worker, not the web process, holds it).
+    // MCP Tokens
+    listMcpTokens: tt.procedure.query(async ({ ctx }: { ctx: DataTrpcContext }) => {
+      return await ctx.docService.listMcpTokens();
+    }),
+
+    createMcpToken: tt.procedure
+      .input(
+        z.object({
+          comment: z.string().trim().min(1),
+          token: z.string().trim().optional(),
+        }),
+      )
+      .mutation(
+        async ({
+          ctx,
+          input,
+        }: {
+          ctx: DataTrpcContext;
+          input: { comment: string; token?: string };
+        }) => {
+          return await ctx.docService.createMcpToken(input.comment, input.token);
+        },
+      ),
+
+    deleteMcpToken: tt.procedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(
+        async ({ ctx, input }: { ctx: DataTrpcContext; input: { id: number } }) => {
+          await ctx.docService.deleteMcpToken(input.id);
+          return { ok: true } as const;
+        },
+      ),
+
+    validateMcpToken: tt.procedure
+      .input(z.object({ token: z.string() }))
+      .query(
+        async ({ ctx, input }: { ctx: DataTrpcContext; input: { token: string } }) => {
+          return await ctx.docService.validateMcpToken(input.token);
+        },
+      ),
+
+    touchMcpToken: tt.procedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(
+        async ({ ctx, input }: { ctx: DataTrpcContext; input: { id: number } }) => {
+          await ctx.docService.touchMcpToken(input.id);
+          return { ok: true } as const;
+        },
+      ),
+
+    // MCP Stats
+    getMcpStatsOverview: tt.procedure
+      .input(
+        z
+          .object({
+            days: z.number().int().positive().optional(),
+            tokenId: z.number().int().optional(),
+            tool: z.string().optional(),
+            library: z.string().optional(),
+          })
+          .optional(),
+      )
+      .query(
+        async ({
+          ctx,
+          input,
+        }: {
+          ctx: DataTrpcContext;
+          input: McpStatsFilterOptions | undefined;
+        }) => {
+          return await ctx.docService.getMcpStatsOverview(input);
+        },
+      ),
+
+    getMcpRecentCalls: tt.procedure
+      .input(
+        z
+          .object({
+            limit: z.number().int().positive().max(200).optional(),
+            offset: z.number().int().nonnegative().optional(),
+            days: z.number().int().positive().optional(),
+            tokenId: z.number().int().optional(),
+            tool: z.string().optional(),
+            library: z.string().optional(),
+          })
+          .optional(),
+      )
+      .query(
+        async ({
+          ctx,
+          input,
+        }: {
+          ctx: DataTrpcContext;
+          input: McpRecentCallsOptions | undefined;
+        }) => {
+          return await ctx.docService.getMcpRecentCalls(input);
+        },
+      ),
+
+    recordMcpToolCall: tt.procedure
+      .input(
+        z.object({
+          tokenId: z.number().int().nullable().optional(),
+          tokenComment: z.string().nullable().optional(),
+          tool: z.string(),
+          library: z.string().nullable().optional(),
+          query: z.string().nullable().optional(),
+          detail: z.string().nullable().optional(),
+          success: z.boolean(),
+          durationMs: z.number(),
+          errorMessage: z.string().nullable().optional(),
+        }),
+      )
+      .mutation(
+        async ({ ctx, input }: { ctx: DataTrpcContext; input: McpToolCallInput }) => {
+          await ctx.docService.recordMcpToolCall(input);
+          return { ok: true } as const;
+        },
+      ),
+
     getEmbeddingConfig: tt.procedure.query(
       async ({ ctx }: { ctx: DataTrpcContext }): Promise<EmbeddingConfigInfo | null> => {
         return ctx.docService.getEmbeddingConfigInfo();

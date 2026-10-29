@@ -1,3 +1,5 @@
+import { mcpRequestContextStore } from "../mcp/context";
+import type { McpTokenRecord } from "../store/types";
 /**
  * MCP service: registers the Streamable HTTP MCP endpoint on the application's
  * Fastify instance. It serves protocol revision 2026-07-28, and serves clients
@@ -154,13 +156,42 @@ function createPreflightChecks(originPolicy: OriginPolicy) {
  * @param deps - Services and policy the endpoint needs.
  * @param auth - Authentication for the endpoint; omit to serve it without authentication.
  */
+
+/**
+ * Extracts bearer token or API key from Authorization header, x-api-key header, or URL query parameters.
+ */
+function extractMcpToken(request: FastifyRequest): string | undefined {
+  const authorization = request.headers.authorization;
+  if (authorization) {
+    const match = authorization.match(/^Bearer\s+(\S+)$/i);
+    if (match) return match[1];
+    if (!authorization.includes(" ") && authorization.trim().length > 0) {
+      return authorization.trim();
+    }
+  }
+  const apiKey = request.headers["x-api-key"];
+  if (typeof apiKey === "string" && apiKey.trim()) {
+    return apiKey.trim();
+  }
+  const query = request.query as Record<string, unknown> | undefined;
+  if (query) {
+    if (typeof query.token === "string" && query.token.trim()) {
+      return query.token.trim();
+    }
+    if (typeof query.apiKey === "string" && query.apiKey.trim()) {
+      return query.apiKey.trim();
+    }
+  }
+  return undefined;
+}
+
 export async function registerMcpService(
   server: FastifyInstance,
   deps: McpServiceDeps,
   auth?: McpEndpointAuth,
 ): Promise<void> {
   const tools = await initializeTools(deps.docService, deps.pipeline, deps.config);
-  const createServer = createMcpServerFactory(tools, deps.config);
+  const createServer = createMcpServerFactory(tools, deps.config, deps.docService);
   const onerror = (error: Error) => logger.error(`❌ Error in MCP endpoint: ${error}`);
   const handleMcpRequest = toNodeHandler(
     createMcpHandler(createServer, { legacy: "stateless", onerror }),
@@ -172,6 +203,10 @@ export async function registerMcpService(
     { onRequest: createPreflightChecks(deps.originPolicy) },
     async (request, reply) => {
       let authInfo: AuthInfo | undefined;
+      let callerToken: McpTokenRecord | null = null;
+
+      const rawToken = extractMcpToken(request);
+
       if (auth) {
         const authorization = request.headers.authorization;
         if (!authorization || !/^Bearer\s+\S/i.test(authorization)) {
@@ -186,6 +221,21 @@ export async function registerMcpService(
           logger.debug(`MCP request rejected by token verification: ${error}`);
           return reply.send(bearerAuthChallengeResponse(error, auth));
         }
+      } else {
+        if (!rawToken) {
+          return reply
+            .code(401)
+            .header("WWW-Authenticate", 'Bearer realm="MCP Access Token required"')
+            .send({ error: "Unauthorized", message: "MCP access token is required." });
+        }
+        callerToken = await deps.docService.validateMcpToken(rawToken);
+        if (!callerToken) {
+          return reply
+            .code(401)
+            .header("WWW-Authenticate", 'Bearer error="invalid_token"')
+            .send({ error: "Unauthorized", message: "Invalid MCP access token." });
+        }
+        deps.docService.touchMcpToken(callerToken.id).catch(() => {});
       }
 
       reply.hijack();
@@ -194,7 +244,15 @@ export async function registerMcpService(
         raw.auth = authInfo;
       }
       // The adapter answers 500 itself and reports the failure to `onerror`.
-      await handleMcpRequest(raw, reply.raw, request.body);
+      await mcpRequestContextStore.run(
+        {
+          tokenId: callerToken?.id,
+          tokenComment: callerToken?.comment,
+        },
+        async () => {
+          await handleMcpRequest(raw, reply.raw, request.body);
+        },
+      );
     },
   );
 
@@ -215,7 +273,10 @@ function registerLegacySseTransport(
   deps: McpServiceDeps,
   createServer: ReturnType<typeof createMcpServerFactory>,
 ): void {
-  const sessions = new Map<string, SSEServerTransport>();
+  const sessions = new Map<
+    string,
+    { transport: SSEServerTransport; caller?: McpTokenRecord }
+  >();
   const messagesPath = `${deps.location.basePath}/messages`;
   let warned = false;
   let capWarned = false;
@@ -224,6 +285,22 @@ function registerLegacySseTransport(
     LEGACY_SSE_PATH,
     { onRequest: createOriginCheck(deps.originPolicy) },
     async (request, reply) => {
+      const rawToken = extractMcpToken(request);
+      if (!rawToken) {
+        return reply
+          .code(401)
+          .header("WWW-Authenticate", 'Bearer realm="MCP Access Token required"')
+          .send({ error: "Unauthorized", message: "MCP access token is required." });
+      }
+      const callerToken = await deps.docService.validateMcpToken(rawToken);
+      if (!callerToken) {
+        return reply
+          .code(401)
+          .header("WWW-Authenticate", 'Bearer error="invalid_token"')
+          .send({ error: "Unauthorized", message: "Invalid MCP access token." });
+      }
+      deps.docService.touchMcpToken(callerToken.id).catch(() => {});
+
       // Each stream holds an MCP server instance until the client leaves, so
       // cap them rather than let one client exhaust the process.
       if (sessions.size >= LEGACY_SSE_MAX_SESSIONS) {
@@ -250,7 +327,7 @@ function registerLegacySseTransport(
       res.setHeader("X-Accel-Buffering", "no");
       const transport = new SSEServerTransport(messagesPath, res);
       const mcpServer = createServer();
-      sessions.set(transport.sessionId, transport);
+      sessions.set(transport.sessionId, { transport, caller: callerToken });
 
       const keepAlive = setInterval(() => {
         if (!res.writableEnded) {
@@ -281,13 +358,25 @@ function registerLegacySseTransport(
     onRequest: createPreflightChecks(deps.originPolicy),
     handler: async (request, reply) => {
       const { sessionId } = request.query as { sessionId?: string };
-      const transport = sessionId ? sessions.get(sessionId) : undefined;
-      if (!transport) {
+      const session = sessionId ? sessions.get(sessionId) : undefined;
+      if (!session) {
         return reply.code(404).send(jsonRpcError("Unknown session."));
       }
       reply.hijack();
       try {
-        await transport.handlePostMessage(request.raw, reply.raw, request.body);
+        await mcpRequestContextStore.run(
+          {
+            tokenId: session.caller?.id,
+            tokenComment: session.caller?.comment,
+          },
+          async () => {
+            await session.transport.handlePostMessage(
+              request.raw,
+              reply.raw,
+              request.body,
+            );
+          },
+        );
       } catch (error) {
         logger.error(`❌ Error in legacy SSE message endpoint: ${error}`);
         endWithServerError(reply.raw);
@@ -298,6 +387,6 @@ function registerLegacySseTransport(
   // Open streams never finish on their own, so end them before Fastify waits
   // for in-flight requests on shutdown.
   server.addHook("preClose", async () => {
-    await Promise.all([...sessions.values()].map((transport) => transport.close()));
+    await Promise.all([...sessions.values()].map((s) => s.transport.close()));
   });
 }
