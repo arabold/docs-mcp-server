@@ -660,6 +660,13 @@ describe("Database Migrations", () => {
     expect(db.pragma("journal_size_limit", { simple: true })).toBe(64 * 1024 * 1024);
   });
 
+  it("leaves temp storage on disk, where VACUUM copies the store", async () => {
+    await expect(applyMigrations(db)).resolves.toBeUndefined();
+
+    // 2 is MEMORY; the connection keeps its default otherwise.
+    expect(db.pragma("temp_store", { simple: true })).not.toBe(2);
+  });
+
   describe("017 library display names", () => {
     const MIGRATION_017 = "017-add-library-display-name.sql";
 
