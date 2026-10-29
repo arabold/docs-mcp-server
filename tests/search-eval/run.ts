@@ -26,7 +26,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { loadConfig } from "../../src/utils/config";
-import { judgeFromEnv } from "./judges";
+import { judgeApiKeyVar, isJudgeKeyAvailable, judgeFromEnv } from "./judges";
 import { runPreflight, scrapeCommandFor } from "./preflight";
 import { aggregate } from "./aggregate";
 import { compare, loadBaseline, renderSummary, writeBaseline } from "./compare";
@@ -49,6 +49,7 @@ function parseMode(argv: string[]): Mode {
 const PATHS = {
   evalDir: resolve("tests/search-eval"),
   promptfooConfig: resolve("tests/search-eval/promptfoo.yaml"),
+  runtimeConfig: resolve("tests/search-eval/results/promptfoo.runtime.yaml"),
   resultsDir: resolve("tests/search-eval/results"),
   flatDataset: resolve("tests/search-eval/results/dataset.flat.yaml"),
   rawOutput: resolve("tests/search-eval/results/promptfoo-raw.json"),
@@ -95,6 +96,48 @@ function resolveProvider(): { name: string; spec: ProviderSpec } {
     process.exit(2);
   }
   return { name, spec };
+}
+
+/**
+ * Build a runtime promptfoo config that mirrors promptfoo.yaml but
+ * conditionally omits LLM-rubric assertions when the judge API key is absent.
+ * This prevents the entire test from being marked as "error" (wiping out all
+ * namedScores, including the deterministic IR metrics) just because the judge
+ * credentials are not available.
+ *
+ * The generated YAML is written to PATHS.runtimeConfig before each run so
+ * that promptfoo always reads a fresh copy consistent with the current env.
+ */
+function buildRuntimeConfig(judgeAvailable: boolean): string {
+  const assert: Array<Record<string, unknown>> = [
+    { type: "javascript", value: "file://assertions/ir-metrics.cjs", metric: "ir" },
+    { type: "javascript", value: "file://assertions/structural.cjs", metric: "structural" },
+  ];
+  if (judgeAvailable) {
+    assert.push(
+      { type: "llm-rubric", value: "file://rubrics/chunk-coherence.txt", metric: "chunk_coherence" },
+      { type: "llm-rubric", value: "file://rubrics/content-faithfulness.txt", metric: "content_faithfulness" },
+      { type: "llm-rubric", value: "file://rubrics/answerability.txt", metric: "answerability" },
+    );
+  }
+
+  const defaultTest: Record<string, unknown> = { assert };
+  if (judgeAvailable) {
+    defaultTest.options = {
+      provider: { id: "{{env.DOCS_EVAL_JUDGE_RESOLVED}}", config: { temperature: 0 } },
+    };
+  }
+
+  return stringifyYaml({
+    description: "docs-mcp-server search benchmark",
+    prompts: ["{{query}}"],
+    providers: [
+      { id: "{{env.DOCS_EVAL_PROMPTFOO_PROVIDER}}", label: "{{env.DOCS_EVAL_PROMPTFOO_LABEL}}" },
+    ],
+    defaultTest,
+    tests: "results/dataset.flat.yaml",
+    outputPath: "results/promptfoo-raw.json",
+  });
 }
 
 /**
@@ -193,6 +236,21 @@ async function main() {
     DOCS_EVAL_PROMPTFOO_PROVIDER: providerSpec.promptfooId,
     DOCS_EVAL_PROMPTFOO_LABEL: providerSpec.label,
   };
+
+  // Check whether the judge API key is actually available. If not, generate a
+  // runtime config that omits llm-rubric assertions — a missing key causes
+  // promptfoo to throw in every assertion grading call, which wipes out
+  // namedScores for the whole test (including the deterministic IR metrics)
+  // and marks all tests as errors, producing a spurious 100% regression.
+  const judgeAvailable = isJudgeKeyAvailable(judge);
+  if (!judgeAvailable) {
+    console.warn(
+      `⚠  ${judgeApiKeyVar(judge)} is not set — LLM-judged metrics (chunk_coherence, ` +
+        `content_faithfulness, answerability) will be skipped for this run.`,
+    );
+  }
+  writeFileSync(PATHS.runtimeConfig, buildRuntimeConfig(judgeAvailable), "utf8");
+
   // Default concurrency 1: each provider invocation cold-starts vite-node AND
   // re-initialises docService (which runs a schema-migration write through
   // better-sqlite3). Running 4 of those in parallel deadlocks on the write lock.
@@ -213,7 +271,7 @@ async function main() {
       "promptfoo@0.121.11",
       "eval",
       "-c",
-      PATHS.promptfooConfig,
+      PATHS.runtimeConfig,
       "-o",
       PATHS.rawOutput,
       "--max-concurrency",

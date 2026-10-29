@@ -13,6 +13,13 @@ import type { JudgeAllowlistEntry } from "./types";
 /** Default judge — see design.md Decision 4. */
 export const DEFAULT_JUDGE = "openai:gpt-5.4-mini";
 
+/** Maps each supported judge provider to its required API key env-var name. */
+const PROVIDER_API_KEY_VAR = {
+  openai: "OPENAI_API_KEY",
+  anthropic: "ANTHROPIC_API_KEY",
+  google: "GOOGLE_API_KEY",
+} as const;
+
 export const JUDGE_ALLOWLIST: readonly JudgeAllowlistEntry[] = [
   // OpenAI
   { id: "openai:gpt-5.4-mini", provider: "openai" },
@@ -86,4 +93,25 @@ export function pickDefaultCrossJudge(primary: ResolvedJudge): string | null {
 export function judgeFromEnv(env: NodeJS.ProcessEnv = process.env): ResolvedJudge {
   const requested = env.DOCS_EVAL_JUDGE?.trim() || DEFAULT_JUDGE;
   return resolveJudge(requested);
+}
+
+/**
+ * Returns the name of the environment variable that holds the API key for
+ * `judge`'s provider (e.g. `"OPENAI_API_KEY"` for an OpenAI judge).
+ */
+export function judgeApiKeyVar(judge: ResolvedJudge): string {
+  return PROVIDER_API_KEY_VAR[judge.provider];
+}
+
+/**
+ * Returns `true` iff the API key required by `judge` is present and non-empty
+ * in `env`. Used by the benchmark runner to decide whether LLM-judged
+ * assertions can be included in the promptfoo config.
+ */
+export function isJudgeKeyAvailable(
+  judge: ResolvedJudge,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const varName = PROVIDER_API_KEY_VAR[judge.provider];
+  return Boolean(env[varName]?.trim());
 }
