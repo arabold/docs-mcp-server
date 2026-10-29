@@ -505,12 +505,14 @@ export class DocumentStore {
           -- the *first*-index time and never moves on refresh. Fall back to the
           -- oldest page for versions that predate status tracking.
           COALESCE(v.updated_at, MIN(p.created_at)) as indexedAt,
-          COUNT(d.id) as documentCount,
-          COUNT(DISTINCT p.url) as uniqueUrlCount
+          -- Counts kept per page by migration 020's triggers, so the listing
+          -- never reads the documents table. UNIQUE(version_id, url) makes
+          -- each page of a version a distinct URL.
+          COALESCE(SUM(p.chunk_count), 0) as documentCount,
+          COUNT(p.id) as uniqueUrlCount
         FROM versions v
         JOIN libraries l ON v.library_id = l.id
         LEFT JOIN pages p ON p.version_id = v.id
-        LEFT JOIN documents d ON d.page_id = p.id
         GROUP BY v.id
         ORDER BY l.name, version`,
       ),
