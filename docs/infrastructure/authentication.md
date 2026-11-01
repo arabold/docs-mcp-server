@@ -2,28 +2,41 @@
 
 ## Overview
 
-The Docs MCP Server can require an OAuth 2.0 access token on its MCP endpoint. Authentication is off by default, so local use stays frictionless.
+Every HTTP MCP request requires credentials. By default, the server accepts client access tokens stored in its database. With `auth.enabled: true`, it accepts OAuth 2.0 access tokens from the configured identity provider instead; database client tokens are not accepted in that mode.
 
-When enabled, the server is an OAuth 2.0 **resource server**. It does not issue tokens, register clients, or host sign-in pages. An external identity provider (Clerk, Auth0, Keycloak, Microsoft Entra ID, and others) does all of that. MCP clients discover the provider from the server, sign the user in there, and send the token they receive with every request. The server accepts a token only when it is a JWT that the configured provider issued for this server.
+In OAuth mode, the server is an OAuth 2.0 **resource server**. It does not issue OAuth tokens, register OAuth clients, or host provider sign-in pages. An external identity provider (Clerk, Auth0, Keycloak, Microsoft Entra ID, and others) does all of that. MCP clients discover the provider from the server, sign the user in there, and send the token they receive with every request. The server accepts a token only when it is a JWT that the configured provider issued for this server.
 
-This follows the [MCP authorization specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization) (protocol revision 2026-07-28).
+OAuth mode follows the [MCP authorization specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization) (protocol revision 2026-07-28).
 
 ## What Authentication Protects
 
 | Surface | Protected by authentication | How to protect it |
 |---|---|---|
 | MCP endpoint (`/mcp`) over HTTP | Yes | Bearer token, as described here |
-| Deprecated SSE transport (`/sse`, `/messages`) | Not served | Only available while authentication is off |
+| Deprecated SSE transport (`/sse`, `/messages`) | Yes | Database client token on the stream and every message; unavailable in OAuth mode |
 | MCP over stdio | No | The host that launches the process is the trust boundary. Enabling auth logs a warning. |
 | Web UI | No | A reverse proxy with its own sign-in (OAuth2-Proxy, Authelia, Traefik forward-auth, Cloudflare Access), or a private network |
-| HTTP API (`/api`) and its WebSocket | No | Same as the web UI. On a loopback bind the server also rejects requests from foreign browser origins. |
-| Worker link (`--server-url`) | No | A private network between coordinator and worker |
+| MCP token and statistics procedures under `/api` | Yes | Separate administrative key; these operations use HTTP only |
+| Other HTTP API procedures and subscriptions | No | Same as the web UI. On a loopback bind the server also rejects requests from foreign browser origins. |
+| Worker link (`--server-url`) | MCP management procedures only | The worker and coordinators share `DOCS_MCP_ADMIN_TOKEN`; other procedures require a private network |
 
-At startup the server states this boundary, naming the protected MCP endpoint. When authentication is enabled on a command that serves no MCP endpoint over HTTP (`web`, `worker`), it warns that authentication protects nothing in that process.
+At startup the server states this boundary, naming the protected MCP endpoint. When authentication is enabled on a command that serves no MCP endpoint over HTTP (`web`, `worker`), it warns that OAuth protects no MCP endpoint in that process. The separate administrative key still protects MCP management procedures.
 
 For putting the web UI and API behind a reverse proxy, see [Reverse Proxy Deployment](./reverse-proxy.md).
 
-## How Clients Authenticate
+## Database Client Tokens and Administration
+
+`DOCS_MCP_ADMIN_TOKEN` (or `auth.adminToken`) configures a separate operator key. An unset key disables all MCP token-management and statistics procedures. A client access token never grants administrative access. The operator key travels in an `Authorization: Bearer <ADMIN_KEY>` header and is not accepted as a database client token on `/mcp`.
+
+In **Settings**, the operator unlocks MCP administration with this key, creates client tokens with comments, copies them and revokes them. The browser keeps the operator key only in tab memory. Reloading the page locks administration again. Initial client-token creation logs only its database ID, never the secret.
+
+Clients send `Authorization: Bearer <CLIENT_TOKEN>` or `x-api-key: <CLIENT_TOKEN>` on every HTTP request. Tokens in URL parameters are not accepted. The legacy SSE transport checks the message token against the stream owner on every message, so revocation prevents further calls on an existing session.
+
+The coordinator and remote worker use the same administrative key in distributed deployments. The coordinator sends it in HTTP headers when verifying client tokens and recording statistics. Administrative operations over the API WebSocket are denied.
+
+MCP over stdio retains the host process as its authentication boundary. Its tool calls are recorded as local stdio activity.
+
+## How OAuth Clients Authenticate
 
 ```mermaid
 sequenceDiagram
@@ -50,7 +63,8 @@ sequenceDiagram
 
 | Setting | CLI | Environment | Required | Description |
 |---|---|---|---|---|
-| `auth.enabled` | `--auth-enabled` | `DOCS_MCP_AUTH_ENABLED` | – | Turns authentication on for the MCP endpoint. |
+| `auth.enabled` | `--auth-enabled` | `DOCS_MCP_AUTH_ENABLED` | – | Selects OAuth mode instead of database client tokens. |
+| `auth.adminToken` | – | `DOCS_MCP_ADMIN_TOKEN` | for administration | Separate operator key protecting token management and statistics. |
 | `auth.issuerUrl` | `--auth-issuer-url` | `DOCS_MCP_AUTH_ISSUER_URL` | yes | The provider's issuer identifier, an `https` URL. It must match the `issuer` the provider publishes exactly, including any trailing slash. |
 | `server.publicUrl` | `--public-url` | `DOCS_MCP_SERVER_PUBLIC_URL` | yes | The URL clients use to reach the server, e.g. `https://docs.example.com` or `https://example.com/docs`. |
 | `auth.audience` | `--auth-audience` | `DOCS_MCP_AUTH_AUDIENCE` | no | The audience tokens must carry, an absolute URL or a URN. It defaults to `<public URL>/mcp`. |
@@ -109,7 +123,7 @@ The server accepts a request only when its bearer token:
 - has an `aud` that contains the expected audience,
 - and has not expired.
 
-There is no other path to access. A token issued for another application on the same provider is rejected, and so is any opaque token. If the provider's keys can't be retrieved, the request fails with `500` rather than `401`, so clients don't restart sign-in because of a provider outage.
+In OAuth mode there is no other path to MCP access. A token issued for another application on the same provider is rejected, and so is any opaque token. If the provider's keys can't be retrieved, the request fails with `500` rather than `401`, so clients don't restart sign-in because of a provider outage.
 
 Access is binary: any valid token for this server grants every MCP tool.
 

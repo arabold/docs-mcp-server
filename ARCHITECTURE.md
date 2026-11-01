@@ -272,7 +272,7 @@ The browser builds its links with `createApiLinks()` from `src/services/apiClien
 
 With `--server-url`, the web server's `/api` answers through its remote backend: `DocumentManagementClient` and `PipelineClient` forward calls to the worker, and `RemoteEventProxy` relays the worker's events onto the local `EventBus` that the subscription reads. The browser talks only to the web server.
 
-Every request and WebSocket upgrade passes the host check (see [MCP Protocol Integration](#mcp-protocol-integration)). On a loopback bind, the API and its WebSocket also refuse foreign browser origins. Upgrades are accepted only at `/api`, and at the root for coordinators of earlier releases. Authentication covers the MCP endpoint only, never the web interface or the API.
+Every request and WebSocket upgrade passes the host check (see [MCP Protocol Integration](#mcp-protocol-integration)). On a loopback bind, the API and its WebSocket also refuse foreign browser origins. Upgrades are accepted only at `/api`, and at the root for coordinators of earlier releases. MCP authentication covers the MCP endpoint. Administrative token and statistics procedures under `/api` require a separate operator key; other API procedures and the web interface retain their existing network trust boundary. Administrative procedures are denied over the API WebSocket.
 
 See [Web Client Conventions](src/web/client/CONVENTIONS.md) for the client's directory layout, adding pages and routes, data hooks, and the shared component library.
 
@@ -281,11 +281,11 @@ See [Web Client Conventions](src/web/client/CONVENTIONS.md) for the client's dir
 The MCP server publishes the tools layer as MCP tools. It is built on the MCP TypeScript SDK v2 and has these transports and checks:
 
 - stdio transport: for AI tools that launch the server as a child process. It serves clients on protocol revision 2026-07-28 and on earlier, handshake-based revisions.
-- HTTP transport: Streamable HTTP at `/mcp`, for protocol revision 2026-07-28 and, statelessly, for clients on earlier handshake-based revisions. The SDK's per-request handler is mounted on the application's Fastify route. Before it, the route checks the browser `Origin`, answers CORS preflights and non-POST methods, and verifies bearer tokens when authentication is enabled.
+- HTTP transport: Streamable HTTP at `/mcp`, for protocol revision 2026-07-28 and, statelessly, for clients on earlier handshake-based revisions. The SDK's per-request handler is mounted on the application's Fastify route. Before it, the route checks the browser `Origin`, answers CORS preflights and non-POST methods, and verifies a database access token or an OAuth bearer token on every request.
 - Host check: a global hook refuses (`403`) every request and WebSocket upgrade whose `Host` names an unknown host, which stops DNS rebinding. Accepted are IP literals, `localhost`, single-label names, the public URL's host and the hosts of `server.allowedOrigins` (`createHostPolicy` in `src/app/originPolicy.ts`).
-- Deprecated HTTP+SSE transport: `GET /sse` and `POST /messages`, registered only while authentication is off, for handshake-era clients. It uses the SDK's frozen `SSEServerTransport` from `@modelcontextprotocol/server-legacy`, with one MCP server instance per stream, and goes away in a future major release.
+- Deprecated HTTP+SSE transport: `GET /sse` and `POST /messages`, registered only while OAuth is off, with database token validation on both the stream and every message, for handshake-era clients. It uses the SDK's frozen `SSEServerTransport` from `@modelcontextprotocol/server-legacy`, with one MCP server instance per stream, and goes away in a future major release.
 
-When authentication is enabled, the HTTP transport acts as an OAuth 2.0 resource server. It publishes protected resource metadata and accepts only JWTs the configured identity provider issued for its public URL; see [Authentication](docs/infrastructure/authentication.md).
+When OAuth is enabled, the HTTP transport acts as an OAuth 2.0 resource server. It publishes protected resource metadata and accepts only JWTs the configured identity provider issued for its public URL; see [Authentication](docs/infrastructure/authentication.md).
 
 All advertised URLs derive from one resolved public location (`server.publicUrl`). The server answers every route with or without that URL's path prefix, so it runs behind reverse proxies that strip the prefix or forward it; see [Reverse Proxy Deployment](docs/infrastructure/reverse-proxy.md).
 
@@ -329,3 +329,11 @@ The headline metrics fail the run when they regress against a checked-in baselin
 - [Configuration](docs/setup/configuration.md) - Configuration layers, options and environment variables
 - [Embedding Models](docs/guides/embedding-models.md) - Choosing and configuring an embedding provider
 - [Benchmarking](docs/guides/benchmarking.md) - Running the search-quality benchmark
+
+## Local MCP Usage Statistics
+
+MCP tool registration wraps callbacks without replacing SDK methods. The HTTP and SSE request context carries the authenticated caller identity; stdio calls use a local identity. Only the tool, caller, library/version, transport, bounded document address, duration and success flag reach the statistics store. Request arguments, search text, responses and error messages are excluded.
+
+Each completed call atomically writes compact recent metadata to `mcp_stats` and increments `mcp_stats_daily`. Daily keys contain the UTC date, caller, tool, library/version and transport. Page addresses remain in recent metadata only, keeping the daily key cardinality independent of page reads and search text. Aggregates retain caller IDs after token deletion.
+
+Overview totals, breakdowns and activity charts read the daily table with shared filters. Recent-call cleanup never changes historical counters. Migration 021 aggregates retained legacy calls before rebuilding the recent table without payload columns. See [MCP Statistics](docs/guides/mcp-statistics.md).

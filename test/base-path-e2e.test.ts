@@ -29,6 +29,7 @@ import {
 } from "./test-helpers";
 
 const BASE_PATH = "/docs";
+const MCP_TOKEN = "dmcp_base_path_client_access_token_for_e2e";
 
 describe("Serving under a base path behind a reverse proxy", () => {
   let issuer: LocalIssuer;
@@ -238,7 +239,7 @@ describe("Serving under a base path behind a reverse proxy", () => {
   });
 });
 
-describe("Deprecated SSE transport under a base path, without authentication", () => {
+describe("Deprecated SSE transport under a base path, with database tokens", () => {
   let proxy: Awaited<ReturnType<typeof startPrefixProxy>>;
   let docsServer: Awaited<ReturnType<typeof startInProcessServer>> | undefined;
   let publicUrl = "";
@@ -248,7 +249,7 @@ describe("Deprecated SSE transport under a base path, without authentication", (
     const upstreamPort = await getFreePort();
     proxy = await startPrefixProxy(upstreamPort, BASE_PATH);
     publicUrl = `http://127.0.0.1:${proxy.port}${BASE_PATH}`;
-    docsServer = await startInProcessServer({ port: upstreamPort, publicUrl });
+    docsServer = await startInProcessServer({ port: upstreamPort, publicUrl, clientToken: MCP_TOKEN });
   }, 30000);
 
   afterAll(async () => {
@@ -263,7 +264,7 @@ describe("Deprecated SSE transport under a base path, without authentication", (
 
     it("names the message URL under the path in the endpoint event", async () => {
       const abort = new AbortController();
-      const response = await fetch(`${publicUrl}/sse`, { signal: abort.signal });
+      const response = await fetch(`${publicUrl}/sse`, { signal: abort.signal, headers: { authorization: `Bearer ${MCP_TOKEN}` } });
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
       let received = "";
@@ -283,7 +284,13 @@ describe("Deprecated SSE transport under a base path, without authentication", (
 
     it("serves a handshake-era client through the proxy", async () => {
       const client = new Client({ name: "base-path-legacy-sse", version: "1.0.0" });
-      await client.connect(new SSEClientTransport(new URL(`${publicUrl}/sse`)));
+      await client.connect(new SSEClientTransport(new URL(`${publicUrl}/sse`), {
+        fetch: (input, init) => {
+          const headers = new Headers(init?.headers);
+          headers.set("authorization", `Bearer ${MCP_TOKEN}`);
+          return fetch(input, { ...init, headers });
+        },
+      }));
       try {
         const tools = await client.listTools();
         expect(tools.tools.map((tool) => tool.name)).toContain("search_docs");

@@ -13,13 +13,16 @@ It is an open-source alternative to Context7, Nia and Ref.Tools.
 - Stores each library version separately, so a search targets the version your project uses.
 - Combines full-text search with optional vector search through OpenAI, Ollama, Gemini, Vertex AI, AWS Bedrock, Azure OpenAI or any OpenAI-compatible server.
 - Runs on your machine and keeps its index in a local SQLite database. Document text goes only to the embedding provider you configure; with a local one, such as Ollama, it stays on your machine. Usage telemetry is on by default; [Telemetry](docs/infrastructure/telemetry.md) lists what it sends and how to turn it off.
-- Works with any MCP client, over stdio or Streamable HTTP.
+- Works with any MCP client, over stdio or Streamable HTTP. HTTP MCP requests require an access token.
+- Tracks local tool usage with compact recent metadata and durable daily counters. The Statistics page shows usage by caller, tool and library.
 
 ## Quick Start
 
 You need Node.js 22 or later, or Docker. [Installation](docs/setup/installation.md) covers both in detail, along with Docker Compose and running the server inside your AI client.
 
 ### 1. Start the server
+
+Set `DOCS_MCP_ADMIN_TOKEN` to a long random operator key before starting the HTTP server. This key unlocks client-token management and usage statistics in the web UI.
 
 ```bash
 npx @arabold/docs-mcp-server@latest
@@ -47,11 +50,15 @@ With Docker, add `-e OPENAI_API_KEY="sk-proj-..."`. [Embedding Models](docs/guid
 
 Do this before you add documentation. Embeddings are computed when a page is indexed, so documentation indexed without a model gets no vectors until you scrape it again with `--replace`.
 
-### 3. Add documentation
+### 3. Create an MCP access token
+
+Set `DOCS_MCP_ADMIN_TOKEN` to a long random operator key in the server's environment, or set `auth.adminToken` in its configuration. In **Settings**, unlock MCP administration with that key and create a client token with a comment identifying its recipient. The operator key is separate from client tokens. [Authentication](docs/infrastructure/authentication.md) describes both access modes.
+
+### 4. Add documentation
 
 Open the web UI at [http://localhost:6280](http://localhost:6280) and choose **Add library**.
 
-### 4. Connect your AI client
+### 5. Connect your AI client
 
 Add the server's MCP endpoint, `http://localhost:6280/mcp`, to your client. Most clients accept an entry like this:
 
@@ -59,7 +66,8 @@ Add the server's MCP endpoint, `http://localhost:6280/mcp`, to your client. Most
 {
   "mcpServers": {
     "docs-mcp-server": {
-      "url": "http://localhost:6280/mcp"
+      "url": "http://localhost:6280/mcp",
+      "headers": { "Authorization": "Bearer <YOUR_MCP_TOKEN>" }
     }
   }
 }
@@ -109,7 +117,8 @@ Deployment:
 
 - [Deployment Modes](docs/infrastructure/deployment-modes.md): one process, or a worker with separate MCP and web services.
 - [Reverse Proxy Deployment](docs/infrastructure/reverse-proxy.md): serve the server under a path such as `https://example.com/docs`.
-- [Authentication](docs/infrastructure/authentication.md): protect the MCP endpoint with OAuth2/OIDC.
+- [Authentication](docs/infrastructure/authentication.md): client access tokens, administrative access and optional OAuth2/OIDC.
+- [MCP Statistics](docs/guides/mcp-statistics.md): usage history, filters and retention.
 - [Security](docs/infrastructure/security.md): trust boundaries and limits on what the scraper may reach.
 - [Telemetry](docs/infrastructure/telemetry.md): the usage events the server sends, and how to turn them off.
 

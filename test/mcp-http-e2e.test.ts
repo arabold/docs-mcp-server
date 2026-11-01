@@ -31,6 +31,8 @@ import {
 } from "./test-helpers";
 
 /** The library seeded into the server's store, and a phrase only its page contains. */
+const MCP_TOKEN = "dmcp_http_e2e_client_token_at_least_32_chars";
+
 const SEEDED_LIBRARY = "http-e2e-lib";
 const SEEDED_PHRASE = "The flux capacitor needs exactly 1.21 gigawatts.";
 
@@ -38,8 +40,9 @@ const SEEDED_PHRASE = "The flux capacitor needs exactly 1.21 gigawatts.";
 async function seedStore(storePath: string, configPath: string): Promise<void> {
   await withStore(
     storePath,
-    (store) =>
-      store.addScrapeResult(SEEDED_LIBRARY, "1.0.0", 1, {
+    async (store) => {
+      await store.createMcpToken("HTTP E2E", MCP_TOKEN);
+      return store.addScrapeResult(SEEDED_LIBRARY, "1.0.0", 1, {
         url: "https://example.com/docs/flux",
         title: "Flux",
         sourceContentType: "text/markdown",
@@ -51,7 +54,8 @@ async function seedStore(storePath: string, configPath: string): Promise<void> {
           { types: ["text"], content: "# Flux", section: { level: 1, path: ["Flux"] } },
           { types: ["text"], content: SEEDED_PHRASE, section: { level: 1, path: ["Flux"] } },
         ],
-      }),
+      });
+    },
     { configPath },
   );
 }
@@ -75,12 +79,18 @@ function textOf(result: Awaited<ReturnType<Client["callTool"]>>): string {
   return (result.content as Array<{ text: string }>).map((part) => part.text).join("\n");
 }
 
+function httpTransport(baseUrl: string): StreamableHTTPClientTransport {
+  return new StreamableHTTPClientTransport(new URL("/mcp", baseUrl), {
+    requestInit: { headers: { authorization: `Bearer ${MCP_TOKEN}` } },
+  });
+}
+
 async function connectClient(baseUrl: string): Promise<Client> {
   const client = new Client(
     { name: "e2e-client", version: "1.0.0" },
     { versionNegotiation: { mode: { pin: "2026-07-28" } } },
   );
-  await client.connect(new StreamableHTTPClientTransport(new URL("/mcp", baseUrl)));
+  await client.connect(httpTransport(baseUrl));
   return client;
 }
 
@@ -107,7 +117,7 @@ describe("MCP HTTP server E2E", () => {
       name: "a 2026-07-28 client on /mcp",
       era: "modern",
       connect: (client: Client) =>
-        client.connect(new StreamableHTTPClientTransport(new URL("/mcp", baseUrl))),
+        client.connect(httpTransport(baseUrl)),
       pinned: true,
     },
     {
@@ -116,14 +126,20 @@ describe("MCP HTTP server E2E", () => {
       name: "a handshake-era client on /mcp",
       era: "legacy",
       connect: (client: Client) =>
-        client.connect(new StreamableHTTPClientTransport(new URL("/mcp", baseUrl))),
+        client.connect(httpTransport(baseUrl)),
       pinned: false,
     },
     {
       name: "a handshake-era client over the deprecated SSE transport",
       era: "legacy",
       connect: (client: Client) =>
-        client.connect(new SSEClientTransport(new URL("/sse", baseUrl))),
+        client.connect(new SSEClientTransport(new URL("/sse", baseUrl), {
+          fetch: (input, init) => {
+            const headers = new Headers(init?.headers);
+            headers.set("authorization", `Bearer ${MCP_TOKEN}`);
+            return fetch(input, { ...init, headers });
+          },
+        })),
       pinned: false,
     },
   ])("serves $name: tools and a tool call", async ({ era, connect, pinned }) => {

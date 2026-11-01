@@ -11,7 +11,7 @@ A client connects in one of two ways:
 
 Both transports serve MCP protocol revision 2026-07-28, and clients on the earlier revisions from 2024-11-05 to 2025-11-25.
 
-Behind a reverse proxy, the endpoint is the public URL plus `/mcp`, for example `https://example.com/docs/mcp`. See [Reverse Proxy Deployment](../infrastructure/reverse-proxy.md). With authentication enabled, clients need a bearer token for the HTTP endpoint; see [Authentication](../infrastructure/authentication.md).
+Behind a reverse proxy, the endpoint is the public URL plus `/mcp`, for example `https://example.com/docs/mcp`. See [Reverse Proxy Deployment](../infrastructure/reverse-proxy.md). Clients always need a bearer token for the HTTP endpoint. Database access tokens are managed in Settings; OAuth mode uses the configured issuer instead; see [Authentication](../infrastructure/authentication.md).
 
 ## Standard Configuration
 
@@ -231,4 +231,4 @@ In read-only mode (`--read-only` or `DOCS_MCP_READ_ONLY=true`), the server regis
 
 ## Legacy SSE Transport (Deprecated)
 
-Older clients that only speak the HTTP+SSE transport can connect at `http://localhost:6280/sse` (or the public URL plus `/sse`). The server offers this transport only while authentication is disabled, and a future major release removes it. Move these clients to `/mcp` or stdio. The server logs a deprecation warning when the first such client connects.
+Older clients that only speak the HTTP+SSE transport can connect at `http://localhost:6280/sse` (or the public URL plus `/sse`). The server offers this transport only while OAuth is disabled. The stream and every message require a database access token in a header. A future major release removes this transport. Move these clients to `/mcp` or stdio. The server logs a deprecation warning when the first such client connects.

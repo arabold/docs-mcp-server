@@ -99,16 +99,16 @@ function McpRow({ url }: { url: string }) {
   );
 }
 
-/** Renders the auth row: an enabled/disabled Pill plus the OIDC issuer when configured. */
+/** Renders the MCP authentication mode and the OIDC issuer when configured. */
 function AuthRow({ auth }: { auth: SystemHealth["auth"] }) {
   return (
     <div className="health__row">
       <Icon name="i-settings" size="sm" style={{ color: "var(--text-faint)" }} />
-      <span className="name">Auth</span>
+      <span className="name">MCP auth</span>
       <span className="meta" style={{ display: "flex", alignItems: "center", gap: 6 }}>
         {auth.issuer ? <span>{auth.issuer}</span> : null}
-        <Pill variant={auth.enabled ? "ok" : "idle"} withDot={false}>
-          {auth.enabled ? "enabled" : "disabled"}
+        <Pill variant="ok" withDot={false}>
+          {auth.enabled ? "OAuth" : "access token"}
         </Pill>
       </span>
     </div>

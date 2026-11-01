@@ -1,7 +1,16 @@
 import fs from "node:fs";
-import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
+import {
+  type CallToolResult,
+  McpServer,
+  ResourceTemplate,
+  type ServerContext,
+  type ToolAnnotations,
+  type ToolCallback,
+} from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { PipelineJobStatus } from "../pipeline/types";
+import { compactMcpCall } from "../store/mcpStats";
+import type { IDocumentManagement } from "../store/trpc/interfaces";
 import { libraryNamesMatch } from "../store/types";
 import {
   extractHostname,
@@ -13,6 +22,7 @@ import type { JobInfo } from "../tools";
 import { ToolError } from "../tools/errors";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
+import { getCurrentMcpCaller } from "./context";
 import { buildDefaultInstructions } from "./defaultInstructions";
 import type { McpServerTools } from "./tools";
 import { createError, createResponse } from "./utils";
@@ -303,16 +313,18 @@ type ToolInputSchemas = ReturnType<typeof createToolInputSchemas>;
  * per request or connection. Both are resolved here, once, at startup.
  * @param tools The shared tool instances to use for server operations.
  * @param config The application configuration.
+ * @param docService The optional backend for persisting compact tool usage statistics.
  * @returns A function that creates a configured McpServer instance.
  * @throws {Error} If the configured instructions cannot be resolved.
  */
 export function createMcpServerFactory(
   tools: McpServerTools,
   config: AppConfig,
+  docService?: IDocumentManagement,
 ): () => McpServer {
   const instructions = resolveServerInstructions(config);
   const schemas = createToolInputSchemas(config);
-  return () => createMcpServerInstance(tools, config, instructions, schemas);
+  return () => createMcpServerInstance(tools, config, instructions, schemas, docService);
 }
 
 /**
@@ -329,6 +341,7 @@ function createMcpServerInstance(
   config: AppConfig,
   instructions: string,
   schemas: ToolInputSchemas,
+  docService?: IDocumentManagement,
 ): McpServer {
   const readOnly = config.app.readOnly;
   const { name, title } = config.server;
@@ -347,12 +360,60 @@ function createMcpServerInstance(
     },
   );
 
+  function registerTool<S extends z.ZodObject>(
+    name: string,
+    meta: { description?: string; inputSchema: S; annotations?: ToolAnnotations },
+    handler: (args: z.infer<S>, extra: ServerContext) => Promise<CallToolResult>,
+  ) {
+    const tracked = async (args: z.infer<S>, extra: ServerContext) => {
+      const startTime = performance.now();
+      const caller = getCurrentMcpCaller();
+      let success = false;
+      try {
+        const result = await handler(args, extra);
+        success = result.isError !== true;
+        return result;
+      } finally {
+        if (docService) {
+          const fields = args as Record<string, unknown>;
+          const call = compactMcpCall({
+            tokenId: caller?.tokenId,
+            tokenComment: caller?.tokenComment ?? "Local stdio",
+            protocol: caller?.protocol ?? "stdio",
+            tool: name,
+            library: typeof fields.library === "string" ? fields.library : null,
+            version:
+              typeof fields.version === "string"
+                ? fields.version
+                : typeof fields.targetVersion === "string"
+                  ? fields.targetVersion
+                  : null,
+            target:
+              typeof fields.pathOrUrl === "string"
+                ? fields.pathOrUrl
+                : typeof fields.url === "string"
+                  ? fields.url
+                  : null,
+            durationMs: performance.now() - startTime,
+            success,
+          });
+          try {
+            await docService.recordMcpToolCall(call);
+          } catch {
+            logger.debug(`Failed to record statistics for MCP tool ${name}`);
+          }
+        }
+      }
+    };
+    return server.registerTool(name, meta, tracked as ToolCallback<S>);
+  }
+
   // --- Tool Definitions ---
 
   // Only register write/job tools if not in read-only mode
   if (!readOnly) {
     // Scrape docs tool - suppress deep inference issues
-    server.registerTool(
+    registerTool(
       "scrape_docs",
       {
         description:
@@ -427,7 +488,7 @@ function createMcpServerInstance(
     );
 
     // Refresh version tool - suppress deep inference issues
-    server.registerTool(
+    registerTool(
       "refresh_version",
       {
         description:
@@ -474,7 +535,7 @@ function createMcpServerInstance(
   }
 
   // Search docs tool
-  server.registerTool(
+  registerTool(
     "search_docs",
     {
       description:
@@ -531,7 +592,7 @@ ${r.content}\n`,
   );
 
   // Read page tool
-  server.registerTool(
+  registerTool(
     "read_page",
     {
       description:
@@ -582,7 +643,7 @@ ${r.content}\n`,
   );
 
   // List pages tool
-  server.registerTool(
+  registerTool(
     "list_pages",
     {
       description:
@@ -640,7 +701,7 @@ ${r.content}\n`,
   );
 
   // List libraries tool
-  server.registerTool(
+  registerTool(
     "list_libraries",
     {
       description:
@@ -675,7 +736,7 @@ ${r.content}\n`,
   );
 
   // Find version tool
-  server.registerTool(
+  registerTool(
     "find_version",
     {
       description:
@@ -713,7 +774,7 @@ ${r.content}\n`,
   // Job and write tools - only available when not in read-only mode
   if (!readOnly) {
     // List jobs tool - suppress deep inference issues
-    server.registerTool(
+    registerTool(
       "list_jobs",
       {
         description: "List all indexing jobs. Optionally filter by status.",
@@ -755,7 +816,7 @@ ${r.content}\n`,
     );
 
     // Get job info tool
-    server.registerTool(
+    registerTool(
       "get_job_info",
       {
         description:
@@ -789,7 +850,7 @@ ${r.content}\n`,
     );
 
     // Cancel job tool
-    server.registerTool(
+    registerTool(
       "cancel_job",
       {
         description:
@@ -820,7 +881,7 @@ ${r.content}\n`,
     );
 
     // Remove docs tool
-    server.registerTool(
+    registerTool(
       "remove_docs",
       {
         description:
@@ -854,7 +915,7 @@ ${r.content}\n`,
   }
 
   // Fetch URL tool
-  server.registerTool(
+  registerTool(
     "fetch_url",
     {
       description:

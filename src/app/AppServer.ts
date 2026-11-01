@@ -447,6 +447,7 @@ export class AppServer {
       this.backend.eventBus,
       this.systemInfo,
       this.backend.isWorkerConnected,
+      this.appConfig.auth.adminToken,
     );
     logger.debug("API server (tRPC) enabled");
   }
@@ -495,6 +496,7 @@ export class AppServer {
       this.backend.eventBus,
       this.systemInfo,
       this.backend.isWorkerConnected,
+      this.appConfig.auth.adminToken,
     );
 
     logger.debug("WebSocket server initialized for tRPC subscriptions");
@@ -582,7 +584,7 @@ export class AppServer {
     }
     if (!this.serverConfig.enableMcpServer) {
       logger.warn(
-        "⚠️  Authentication is enabled, but this process serves no MCP endpoint, so it protects nothing here. The web UI and API are never protected by authentication.",
+        "⚠️  OAuth is enabled, but this process serves no MCP endpoint, so OAuth protects nothing here. MCP administration uses its separate operator key.",
       );
       return;
     }
@@ -696,7 +698,7 @@ export class AppServer {
     // Authentication boundary: say exactly what is and isn't protected
     if (this.mcpAuth) {
       enabledServices.push(
-        `Authentication: protects ${this.mcpEndpointUrl} only; the web UI and API are not protected`,
+        `OAuth: protects ${this.mcpEndpointUrl}; MCP administrative API procedures require the separate operator key`,
       );
     }
 

@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { statSync } from "node:fs";
 import type { Embeddings } from "@langchain/core/embeddings";
 import Database, { type Database as DatabaseType } from "better-sqlite3";
@@ -28,6 +29,12 @@ import {
   StoreError,
   VersionAlreadyExistsError,
 } from "./errors";
+import {
+  pruneMcpCalls,
+  readMcpOverview,
+  readMcpRecent,
+  recordMcpCall,
+} from "./McpStatistics";
 import type {
   ActivityHistory,
   CompactResult,
@@ -36,6 +43,12 @@ import type {
   LibraryVersionSummary,
   ListVersionChunksOptions,
   ListVersionChunksResult,
+  McpRecentCallsOptions,
+  McpStatsFilterOptions,
+  McpStatsOverview,
+  McpTokenRecord,
+  McpToolCallInput,
+  McpToolCallRecord,
   PageListItem,
   ResolvedVersion,
   StoredScraperOptions,
@@ -1148,6 +1161,12 @@ export class DocumentStore {
       // 7. Initialize embeddings client (await to catch errors)
       //    On success, persists model identity to metadata table.
       await this.initializeEmbeddings();
+
+      // 8. Ensure initial default MCP token exists if table is empty
+      await this.ensureDefaultMcpToken();
+
+      // 9. Prune old MCP stats on startup to keep telemetry lean
+      await this.pruneOldMcpStats();
     } catch (error) {
       // Re-throw StoreError, ModelConfigurationError, and UnsupportedProviderError directly
       if (
@@ -3331,6 +3350,213 @@ export class DocumentStore {
       };
     } catch (error) {
       throw new ConnectionError("Failed to get version composition", error);
+    }
+  }
+
+  /**
+   * Lists all registered MCP access tokens ordered by creation date descending.
+   */
+  async listMcpTokens(): Promise<McpTokenRecord[]> {
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT
+             id,
+             token,
+             comment,
+             strftime('%Y-%m-%dT%H:%M:%fZ', created_at) as createdAt,
+             strftime('%Y-%m-%dT%H:%M:%fZ', last_used_at) as lastUsedAt
+           FROM mcp_tokens
+           ORDER BY created_at DESC`,
+        )
+        .all() as McpTokenRecord[];
+      return rows;
+    } catch (error) {
+      throw new ConnectionError("Failed to list MCP access tokens", error);
+    }
+  }
+
+  /**
+   * Creates a new MCP access token with the given comment and optional custom token string.
+   */
+  async createMcpToken(comment: string, customToken?: string): Promise<McpTokenRecord> {
+    try {
+      const trimmedComment =
+        (typeof comment === "string" ? comment.trim() : "") || "Default Token";
+      const token =
+        typeof customToken === "string" && customToken.trim().length > 0
+          ? customToken.trim()
+          : `dmcp_${randomBytes(24).toString("hex")}`;
+      const info = this.db
+        .prepare(
+          `INSERT INTO mcp_tokens (token, comment, created_at)
+           VALUES (?, ?, CURRENT_TIMESTAMP)`,
+        )
+        .run(token, trimmedComment);
+
+      const row = this.db
+        .prepare(
+          `SELECT
+             id,
+             token,
+             comment,
+             strftime('%Y-%m-%dT%H:%M:%fZ', created_at) as createdAt,
+             strftime('%Y-%m-%dT%H:%M:%fZ', last_used_at) as lastUsedAt
+           FROM mcp_tokens
+           WHERE id = ?`,
+        )
+        .get(Number(info.lastInsertRowid)) as McpTokenRecord;
+
+      return row;
+    } catch (error) {
+      throw new ConnectionError("Failed to create MCP access token", error);
+    }
+  }
+
+  /**
+   * Deletes an MCP access token by its primary key ID.
+   */
+  async deleteMcpToken(id: number): Promise<void> {
+    try {
+      const countRow = this.db
+        .prepare("SELECT COUNT(*) as count FROM mcp_tokens")
+        .get() as { count: number };
+      if (countRow.count <= 1) {
+        throw new Error("Cannot delete the last remaining MCP access token");
+      }
+      this.db.prepare("DELETE FROM mcp_tokens WHERE id = ?").run(id);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.includes("Cannot delete the last remaining")
+      ) {
+        throw error;
+      }
+      throw new ConnectionError("Failed to delete MCP access token", error);
+    }
+  }
+
+  /**
+   * Validates an access token and returns its record if found.
+   */
+  async validateMcpToken(token: string): Promise<McpTokenRecord | null> {
+    try {
+      const trimmed = token.trim();
+      if (!trimmed) return null;
+      const row = this.db
+        .prepare(
+          `SELECT
+             id,
+             token,
+             comment,
+             strftime('%Y-%m-%dT%H:%M:%fZ', created_at) as createdAt,
+             strftime('%Y-%m-%dT%H:%M:%fZ', last_used_at) as lastUsedAt
+           FROM mcp_tokens
+           WHERE token = ?`,
+        )
+        .get(trimmed) as McpTokenRecord | undefined;
+      return row ?? null;
+    } catch (error) {
+      throw new ConnectionError("Failed to validate MCP access token", error);
+    }
+  }
+
+  /**
+   * Updates last_used_at timestamp of an access token.
+   */
+  async touchMcpToken(id: number): Promise<void> {
+    try {
+      this.db
+        .prepare("UPDATE mcp_tokens SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?")
+        .run(id);
+    } catch (error) {
+      logger.debug(`Failed to touch MCP token ${id}: ${error}`);
+    }
+  }
+
+  /**
+   * Generates an initial client access token if no tokens exist in the database.
+   */
+  async ensureDefaultMcpToken(): Promise<McpTokenRecord | null> {
+    try {
+      const countRow = this.db
+        .prepare("SELECT COUNT(*) as count FROM mcp_tokens")
+        .get() as { count: number };
+      if (countRow.count === 0) {
+        const created = await this.createMcpToken("Default Access Token");
+        logger.info(`🔑 Created initial MCP access token (id: ${created.id})`);
+        return created;
+      }
+      return null;
+    } catch (error) {
+      logger.warn(`⚠️ Could not ensure default MCP token: ${error}`);
+      return null;
+    }
+  }
+
+  private mcpStatsWriteCount = 0;
+
+  private maybePruneMcpStats(): void {
+    this.mcpStatsWriteCount++;
+    if (this.mcpStatsWriteCount >= 100) {
+      this.mcpStatsWriteCount = 0;
+      this.pruneOldMcpStats().catch((err) => {
+        logger.debug(`Auto-pruning MCP stats failed: ${err}`);
+      });
+    }
+  }
+
+  /**
+   * Prunes recent invocation metadata without deleting historical daily counters.
+   * @param retentionDays - Retention period for recent calls.
+   * @param maxRows - Maximum number of recent calls.
+   * @returns A promise resolved after pruning.
+   */
+  async pruneOldMcpStats(retentionDays = 30, maxRows = 20000): Promise<void> {
+    pruneMcpCalls(this.db, retentionDays, maxRows);
+  }
+
+  /**
+   * Records compact invocation metadata and updates durable daily counters atomically.
+   * @param call - Metadata for the completed tool call.
+   * @returns A promise resolved after the write attempt.
+   */
+  async recordMcpToolCall(call: McpToolCallInput): Promise<void> {
+    try {
+      recordMcpCall(this.db, call);
+      this.maybePruneMcpStats();
+    } catch (error) {
+      logger.debug(`Failed to record MCP tool call stats: ${error}`);
+    }
+  }
+
+  /**
+   * Retrieves historical aggregates with consistent filters across all breakdowns.
+   * @param options - UTC calendar period and usage filters.
+   * @returns The historical usage overview.
+   */
+  async getMcpStatsOverview(
+    options: McpStatsFilterOptions = {},
+  ): Promise<McpStatsOverview> {
+    try {
+      return readMcpOverview(this.db, options);
+    } catch (error) {
+      throw new ConnectionError("Failed to get MCP stats overview", error);
+    }
+  }
+
+  /**
+   * Retrieves recent compact invocation metadata.
+   * @param options - UTC calendar period, filters and pagination.
+   * @returns Recent invocations without request or response bodies.
+   */
+  async getMcpRecentCalls(
+    options: McpRecentCallsOptions = {},
+  ): Promise<McpToolCallRecord[]> {
+    try {
+      return readMcpRecent(this.db, options);
+    } catch (error) {
+      throw new ConnectionError("Failed to get recent MCP calls", error);
     }
   }
 }

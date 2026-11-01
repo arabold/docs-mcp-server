@@ -151,7 +151,13 @@ async function openRemote(
   const { eventBus, jobs = false } = options;
   const withPipeline = jobs !== false;
 
-  const { api, close } = createApiClient(workerUrl, { subscriptions: withPipeline });
+  const { api, close } = createApiClient(workerUrl, {
+    subscriptions: withPipeline,
+    headers: (): Record<string, string> =>
+      options.appConfig.auth.adminToken
+        ? { authorization: `Bearer ${options.appConfig.auth.adminToken}` }
+        : {},
+  });
   closer.add(close);
   await pingApi(api, workerUrl);
   const docService = new DocumentManagementClient(api);

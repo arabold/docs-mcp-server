@@ -157,6 +157,7 @@ export const DEFAULT_CONFIG = {
     enabled: false,
     issuerUrl: "",
     audience: "",
+    adminToken: "",
   },
   scraper: {
     maxPages: 1000,
@@ -286,6 +287,7 @@ export const AppConfigSchema = z.object({
       enabled: envBoolean.default(DEFAULT_CONFIG.auth.enabled),
       issuerUrl: z.string().default(DEFAULT_CONFIG.auth.issuerUrl),
       audience: z.string().default(DEFAULT_CONFIG.auth.audience),
+      adminToken: z.string().trim().default(DEFAULT_CONFIG.auth.adminToken),
     })
     .default(DEFAULT_CONFIG.auth),
   scraper: z
@@ -561,6 +563,7 @@ const configMappings: ConfigMapping[] = [
     cli: "embeddingModel",
   },
   { path: ["auth", "enabled"], env: ["DOCS_MCP_AUTH_ENABLED"], cli: "authEnabled" },
+  { path: ["auth", "adminToken"], env: ["DOCS_MCP_ADMIN_TOKEN"] },
   {
     path: ["auth", "issuerUrl"],
     env: ["DOCS_MCP_AUTH_ISSUER_URL"],

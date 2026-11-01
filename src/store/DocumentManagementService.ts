@@ -43,6 +43,12 @@ import type {
   ListPagesResult,
   ListVersionChunksOptions,
   ListVersionChunksResult,
+  McpRecentCallsOptions,
+  McpStatsFilterOptions,
+  McpStatsOverview,
+  McpTokenRecord,
+  McpToolCallInput,
+  McpToolCallRecord,
   PageContentOptions,
   PageContentResult,
   ResolvedVersion,
@@ -1072,5 +1078,43 @@ export class DocumentManagementService {
   async getVersionComposition(ref: VersionRef): Promise<VersionComposition> {
     const normalized = normalizeVersionRef(ref);
     return this.store.getVersionComposition(normalized.library, normalized.version);
+  }
+
+  // MCP Access Tokens management
+  async listMcpTokens(): Promise<McpTokenRecord[]> {
+    return this.store.listMcpTokens();
+  }
+
+  async createMcpToken(comment: string, customToken?: string): Promise<McpTokenRecord> {
+    return this.store.createMcpToken(comment, customToken);
+  }
+
+  async deleteMcpToken(id: number): Promise<void> {
+    return this.store.deleteMcpToken(id);
+  }
+
+  async validateMcpToken(token: string): Promise<McpTokenRecord | null> {
+    return this.store.validateMcpToken(token);
+  }
+
+  async touchMcpToken(id: number): Promise<void> {
+    return this.store.touchMcpToken(id);
+  }
+
+  // MCP Usage Analytics & Statistics
+  async recordMcpToolCall(call: McpToolCallInput): Promise<void> {
+    return this.store.recordMcpToolCall(call);
+  }
+
+  async getMcpStatsOverview(options?: McpStatsFilterOptions): Promise<McpStatsOverview> {
+    return this.store.getMcpStatsOverview(options);
+  }
+
+  async getMcpRecentCalls(options?: McpRecentCallsOptions): Promise<McpToolCallRecord[]> {
+    return this.store.getMcpRecentCalls(options);
+  }
+
+  async pruneOldMcpStats(retentionDays?: number, maxRows?: number): Promise<void> {
+    return this.store.pruneOldMcpStats(retentionDays, maxRows);
   }
 }

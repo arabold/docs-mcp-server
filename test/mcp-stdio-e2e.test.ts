@@ -158,6 +158,23 @@ describe("MCP stdio server E2E", () => {
     expect(client.getProtocolEra()).toBe("legacy");
   }, 30000);
 
+  it("records stdio tool usage in the shared store", async () => {
+    // arrange
+    transport = createStdioTransport();
+    client = new Client({ name: "stats-client", version: "1.0.0" });
+    await client.connect(transport);
+
+    // act
+    await client.callTool({ name: "list_libraries", arguments: {} });
+    await client.close();
+    client = null;
+    const overview = await withStore(suite.storePath, store => store.getMcpStatsOverview({ tool: "list_libraries" }), { configPath: suite.configPath });
+
+    // assert
+    expect(overview.totalCalls).toBeGreaterThan(0);
+    expect(overview.byToken.some(row => row.comment === "Local stdio")).toBe(true);
+  }, 30000);
+
   it("serves a client on protocol revision 2026-07-28", async () => {
     transport = createStdioTransport();
     client = new Client(

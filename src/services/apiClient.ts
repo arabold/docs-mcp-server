@@ -53,14 +53,19 @@ export function toWebSocketUrl(httpUrl: string): string {
  *
  * @param apiUrl The API's URL, e.g. `http://localhost:8080/api`.
  * @param options.subscriptions Whether the client will subscribe to events.
+ * @param options.headers Supplies credentials for HTTP API requests.
  * @returns The links and a function that closes their WebSocket.
  */
 export function createApiLinks(
   apiUrl: string,
-  options: { subscriptions: boolean },
+  options: { subscriptions: boolean; headers?: () => Record<string, string> },
 ): ApiLinks {
   const url = apiUrl.replace(/\/$/, "");
-  const httpLink = httpBatchLink({ url, transformer: superjson });
+  const httpLink = httpBatchLink({
+    url,
+    transformer: superjson,
+    headers: options.headers,
+  });
   if (!options.subscriptions) {
     return { links: [httpLink], close: () => {} };
   }
@@ -86,11 +91,12 @@ export function createApiLinks(
  *
  * @param apiUrl The API's URL, e.g. `http://localhost:8080/api`.
  * @param options.subscriptions Whether the client will subscribe to events.
+ * @param options.headers Supplies credentials for HTTP API requests.
  * @returns The client and a function that closes its WebSocket.
  */
 export function createApiClient(
   apiUrl: string,
-  options: { subscriptions: boolean },
+  options: { subscriptions: boolean; headers?: () => Record<string, string> },
 ): { api: ApiClient; close(): void } {
   const { links, close } = createApiLinks(apiUrl, options);
   return { api: createTRPCClient<AppRouter>({ links }), close };
