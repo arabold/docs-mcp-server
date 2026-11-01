@@ -443,9 +443,9 @@ export class PipelineManager implements IPipeline {
     const policy =
       options.clean === false && requested === "reject-version" ? "replace" : requested;
     // Reserve the version as queued inside the claim transaction, so a rename
-    // racing the enqueue sees an active status and refuses (copilot review on
-    // #594). If the enqueue fails before the job is registered, the catch below
-    // puts the previous status back.
+    // racing the enqueue sees an active status and refuses. If the enqueue
+    // fails before the job is registered, the catch below puts the previous
+    // status back.
     const claimed = await this.store.claimVersion(library, normalizedVersion, policy, {
       markQueued: true,
     });
@@ -515,10 +515,12 @@ export class PipelineManager implements IPipeline {
     } catch (error) {
       // The claim reserved the version as queued; without a registered job
       // behind it the reservation must not stick, or the library stays busy
-      // forever. A registered job owns the status from here on.
+      // forever. A registered job owns the status from here on. The status is put
+      // back only while it is still queued: a job that stopJobsFor cancelled has
+      // already written its own final status, which must stay.
       if (!registered && claimed.previousStatus) {
         await this.store
-          .updateVersionStatus(claimed.versionId, claimed.previousStatus as VersionStatus)
+          .restoreVersionStatusIfQueued(claimed.versionId, claimed.previousStatus)
           .catch(() => {});
       }
       throw error;

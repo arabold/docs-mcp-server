@@ -60,7 +60,7 @@ import {
   normalizeVersionLabel,
   normalizeVersionName,
   type VersionScraperOptions,
-  type VersionStatus,
+  VersionStatus,
 } from "./types";
 
 /**
@@ -1516,7 +1516,7 @@ export class DocumentStore {
         return {
           versionId: versionIdRow.id,
           library: libraryRow.displayName,
-          previousStatus: current.status,
+          previousStatus: current.status as VersionStatus,
         };
       }
       return { versionId: versionIdRow.id, library: libraryRow.displayName };
@@ -1604,6 +1604,26 @@ export class DocumentStore {
       this.statements.updateVersionStatus.run(status, errorMessage ?? null, versionId);
     } catch (error) {
       throw new StoreError(`Failed to update version status: ${error}`);
+    }
+  }
+
+  /**
+   * Puts a version's status back, but only while it is still `queued`.
+   * Used to undo the reservation a claim made when the enqueue fails before a
+   * job is registered, without overwriting a status a job wrote in the meantime.
+   */
+  async restoreVersionStatusIfQueued(
+    versionId: number,
+    status: VersionStatus,
+  ): Promise<void> {
+    try {
+      this.db
+        .prepare(
+          "UPDATE versions SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = ?",
+        )
+        .run(status, versionId, VersionStatus.QUEUED);
+    } catch (error) {
+      throw new StoreError(`Failed to restore version status: ${error}`);
     }
   }
 

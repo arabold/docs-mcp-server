@@ -172,7 +172,7 @@ export interface ResolvedVersion {
    * Set only when the claim used `markQueued`, so a failed enqueue can put
    * the status back instead of leaving the version busy forever.
    */
-  previousStatus?: string;
+  previousStatus?: VersionStatus;
 }
 
 /**

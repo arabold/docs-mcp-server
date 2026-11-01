@@ -209,6 +209,18 @@ export class DocumentManagementService {
   }
 
   /**
+   * Puts a version's status back, but only while it is still `queued`, and tells
+   * views the library list changed.
+   */
+  async restoreVersionStatusIfQueued(
+    versionId: number,
+    status: VersionStatus,
+  ): Promise<void> {
+    await this.store.restoreVersionStatusIfQueued(versionId, status);
+    this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
+  }
+
+  /**
    * Updates the status of a version, and tells views the library list changed.
    */
   async updateVersionStatus(
@@ -404,7 +416,6 @@ export class DocumentManagementService {
   ): Promise<{ oldName: string; newName: string }> {
     logger.info(`✏️ Renaming library: ${library} -> ${newName}`);
 
-    await this.requireLibrary(library);
     const renamed = await this.store.renameLibrary(library, newName);
     if (!renamed) {
       throw await this.libraryNotFound(library);
