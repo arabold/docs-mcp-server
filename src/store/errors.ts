@@ -74,6 +74,21 @@ export class LibraryNotFoundInStoreError extends StoreError {
 }
 
 /**
+ * Error thrown when a rename targets a library with an indexing job in flight.
+ * The rename is refused rather than letting the job keep writing under the old name.
+ */
+export class LibraryBusyError extends StoreError {
+  constructor(
+    public readonly library: string,
+    public readonly activeStatuses: string[],
+  ) {
+    super(
+      `Library ${escapeControlCharacters(library)} has an indexing job in flight (${activeStatuses.join(", ")}); retry the rename when it finishes.`,
+    );
+  }
+}
+
+/**
  * Error thrown when a specific version of a library cannot be found in the store.
  * Includes the list of available versions for better context.
  */

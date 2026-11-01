@@ -24,6 +24,7 @@ import {
   EmbeddingModelChangedError,
   InvalidLibraryNameError,
   LibraryAlreadyExistsError,
+  LibraryBusyError,
   quoteName,
   StoreError,
   VersionAlreadyExistsError,
@@ -59,7 +60,7 @@ import {
   normalizeVersionLabel,
   normalizeVersionName,
   type VersionScraperOptions,
-  type VersionStatus,
+  VersionStatus,
 } from "./types";
 
 /**
@@ -269,9 +270,12 @@ export class DocumentStore {
     getParentChunk: Database.Statement<[string, string, string, string, bigint]>;
     insertLibrary: Database.Statement<[string, string]>;
     getLibraryIdByName: Database.Statement<[string]>;
+    renameLibrary: Database.Statement<[string, string, number]>;
+    getActiveVersionStatusesByLibraryId: Database.Statement<[number]>;
     getLibraryById: Database.Statement<[number]>;
     // New version-related statements
     insertVersion: Database.Statement<[number, string | null]>;
+    markVersionQueued: Database.Statement<[number]>;
     resolveVersionId: Database.Statement<[number, string | null]>;
     getVersionById: Database.Statement<[number]>;
     queryVersionsByLibraryId: Database.Statement<[number]>;
@@ -428,10 +432,19 @@ export class DocumentStore {
       getLibraryIdByName: this.db.prepare<[string]>(
         "SELECT id, display_name FROM libraries WHERE name = ?",
       ),
+      renameLibrary: this.db.prepare<[string, string, number]>(
+        "UPDATE libraries SET name = ?, display_name = ? WHERE id = ?",
+      ),
+      getActiveVersionStatusesByLibraryId: this.db.prepare<[number]>(
+        "SELECT DISTINCT status FROM versions WHERE library_id = ? AND status IN ('queued', 'running', 'updating')",
+      ),
       getLibraryById: this.db.prepare<[number]>("SELECT * FROM libraries WHERE id = ?"),
       // New version-related statements
       insertVersion: this.db.prepare<[number, string]>(
         "INSERT INTO versions (library_id, name, status) VALUES (?, ?, 'not_indexed') ON CONFLICT(library_id, name) DO NOTHING",
+      ),
+      markVersionQueued: this.db.prepare<[number]>(
+        "UPDATE versions SET status = 'queued' WHERE id = ?",
       ),
       resolveVersionId: this.db.prepare<[number, string]>(
         "SELECT id FROM versions WHERE library_id = ? AND name = ?",
@@ -1465,6 +1478,7 @@ export class DocumentStore {
     library: string,
     version: string,
     policy: ExistingTargetPolicy,
+    options?: { markQueued?: boolean },
   ): Promise<ResolvedVersion> {
     // Last point every write passes through: apply the single version label
     // contract here so an entry point that forgets to normalize cannot create a
@@ -1490,6 +1504,20 @@ export class DocumentStore {
         throw new StoreError(
           `Failed to resolve version_id for library: ${quoteName(library)}, version: ${quoteName(version)}`,
         );
+      }
+      if (options?.markQueued) {
+        // Reserve the version for the job being enqueued, inside the claim
+        // transaction: a concurrent renameLibrary sees an active status and
+        // refuses, instead of letting the resumed job recreate the old library.
+        const current = this.statements.getVersionById.get(versionIdRow.id) as {
+          status: string;
+        };
+        this.statements.markVersionQueued.run(versionIdRow.id);
+        return {
+          versionId: versionIdRow.id,
+          library: libraryRow.displayName,
+          previousStatus: current.status as VersionStatus,
+        };
       }
       return { versionId: versionIdRow.id, library: libraryRow.displayName };
     });
@@ -1576,6 +1604,26 @@ export class DocumentStore {
       this.statements.updateVersionStatus.run(status, errorMessage ?? null, versionId);
     } catch (error) {
       throw new StoreError(`Failed to update version status: ${error}`);
+    }
+  }
+
+  /**
+   * Puts a version's status back, but only while it is still `queued`.
+   * Used to undo the reservation a claim made when the enqueue fails before a
+   * job is registered, without overwriting a status a job wrote in the meantime.
+   */
+  async restoreVersionStatusIfQueued(
+    versionId: number,
+    status: VersionStatus,
+  ): Promise<void> {
+    try {
+      this.db
+        .prepare(
+          "UPDATE versions SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = ?",
+        )
+        .run(status, versionId, VersionStatus.QUEUED);
+    } catch (error) {
+      throw new StoreError(`Failed to restore version status: ${error}`);
     }
   }
 
@@ -1705,6 +1753,65 @@ export class DocumentStore {
     } catch (error) {
       throw new StoreError(`Failed to get library by name: ${error}`);
     }
+  }
+
+  /**
+   * Renames a library in place: one transaction updates the lookup key and the
+   * display name, leaving versions, pages, chunks and embeddings untouched.
+   *
+   * Runs as one IMMEDIATE transaction with no `await` inside, mirroring
+   * {@link claimVersion}: the database decides a race, and a rename cannot
+   * interleave with a concurrent claim or another rename.
+   *
+   * @param library Current library name, in any casing or padding.
+   * @param newName New name as entered; the trimmed form becomes the display name.
+   * @returns The previous and new display names, or `null` when the library does not exist.
+   * @throws {InvalidLibraryNameError} The new name fails validation.
+   * @throws {LibraryAlreadyExistsError} A different library already uses the new name.
+   * @throws {LibraryBusyError} The library has an indexing job in flight.
+   */
+  async renameLibrary(
+    library: string,
+    newName: string,
+  ): Promise<{ oldName: string; newName: string } | null> {
+    const displayName = normalizeLibraryDisplayName(newName);
+    const problem = describeLibraryNameProblem(displayName);
+    if (problem) {
+      throw new InvalidLibraryNameError(displayName, problem);
+    }
+    const oldKey = normalizeLibraryName(library);
+    const newKey = normalizeLibraryName(newName);
+
+    const rename = this.db.transaction(
+      (): { oldName: string; newName: string } | null => {
+        const row = this.statements.getLibraryIdByName.get(oldKey) as
+          | { id: number; display_name: string }
+          | undefined;
+        if (!row) {
+          return null;
+        }
+        const active = this.statements.getActiveVersionStatusesByLibraryId.all(
+          row.id,
+        ) as Array<{ status: string }>;
+        if (active.length > 0) {
+          throw new LibraryBusyError(
+            row.display_name,
+            active.map((a) => a.status),
+          );
+        }
+        if (newKey !== oldKey) {
+          const conflict = this.statements.getLibraryIdByName.get(newKey) as
+            | { id: number; display_name: string }
+            | undefined;
+          if (conflict) {
+            throw new LibraryAlreadyExistsError(conflict.display_name);
+          }
+        }
+        this.statements.renameLibrary.run(newKey, displayName, row.id);
+        return { oldName: row.display_name, newName: displayName };
+      },
+    );
+    return rename.immediate();
   }
 
   /**

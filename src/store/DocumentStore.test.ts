@@ -24,6 +24,7 @@ import {
   EmbeddingModelChangedError,
   InvalidLibraryNameError,
   LibraryAlreadyExistsError,
+  LibraryBusyError,
 } from "./errors";
 import { VersionStatus } from "./types";
 
@@ -1168,6 +1169,107 @@ describe("DocumentStore - Common Functionality", () => {
       vi.restoreAllMocks();
 
       expect(await store.getLibrary("Atomic")).toBeNull();
+    });
+
+    describe("renameLibrary", () => {
+      it("renames a library in place, keeping versions and documents", async () => {
+        await store.addDocuments(
+          "React",
+          "18.0.0",
+          0,
+          createScrapeResult("Doc", "https://example.com/18", "content"),
+        );
+        const versionId = await store.resolveVersionId("react", "18.0.0");
+
+        const renamed = await store.renameLibrary(" react ", "Next.js Docs");
+
+        expect(renamed).toEqual({ oldName: "React", newName: "Next.js Docs" });
+        expect(await listedLibraries()).toEqual(["Next.js Docs"]);
+        // Lookups under the new name resolve, in any casing
+        expect(await store.findVersion("next.js docs", "18.0.0")).toEqual({
+          versionId,
+          library: "Next.js Docs",
+        });
+        expect(await store.checkDocumentExists("NEXT.JS DOCS", "18.0.0")).toBe(true);
+        // The old name is gone
+        expect(await store.findVersion("react", "18.0.0")).toBeNull();
+      });
+
+      it("returns null for an unknown library and creates nothing", async () => {
+        expect(await store.renameLibrary("vue", "Nuxt")).toBeNull();
+        expect(await listedLibraries()).toEqual([]);
+      });
+
+      it("updates only the display name when just the casing changes", async () => {
+        await store.resolveVersionId("react", "");
+
+        const renamed = await store.renameLibrary("react", "React");
+
+        expect(renamed).toEqual({ oldName: "react", newName: "React" });
+        expect(await listedLibraries()).toEqual(["React"]);
+        expect(await store.findVersion("REACT", "")).toBeTruthy();
+      });
+
+      it("refuses a name another library already uses, in any casing", async () => {
+        await store.resolveVersionId("React", "");
+        await store.resolveVersionId("Vue", "");
+
+        await expect(store.renameLibrary("react", " VUE ")).rejects.toThrow(
+          new LibraryAlreadyExistsError("Vue"),
+        );
+        expect(await listedLibraries()).toEqual(["React", "Vue"]);
+      });
+
+      it("rejects an invalid new name without touching the library", async () => {
+        await store.resolveVersionId("React", "");
+
+        await expect(
+          store.renameLibrary("react", "a".repeat(101)),
+        ).rejects.toBeInstanceOf(InvalidLibraryNameError);
+        await expect(store.renameLibrary("react", "bad\nname")).rejects.toBeInstanceOf(
+          InvalidLibraryNameError,
+        );
+        expect(await listedLibraries()).toEqual(["React"]);
+      });
+
+      it("refuses the rename while an indexing job is in flight", async () => {
+        const versionId = await store.resolveVersionId("React", "18.0.0");
+        await store.updateVersionStatus(versionId, VersionStatus.RUNNING);
+
+        await expect(store.renameLibrary("react", "next")).rejects.toThrow(
+          new LibraryBusyError("React", ["running"]),
+        );
+        expect(await listedLibraries()).toEqual(["React"]);
+
+        // A failed or completed version does not block the rename
+        await store.updateVersionStatus(versionId, VersionStatus.COMPLETED);
+        expect(await store.renameLibrary("react", "next")).toEqual({
+          oldName: "React",
+          newName: "next",
+        });
+      });
+
+      it("refuses the rename right after a job claim, before the job status update", async () => {
+        // A rename between the claim and the job's first status update would let
+        // the job recreate the old library, so the claim reserves the version as
+        // queued in the same transaction.
+        const claimed = await store.claimVersion("react", "19.0.0", "replace", {
+          markQueued: true,
+        });
+        expect(claimed.previousStatus).toBe(VersionStatus.NOT_INDEXED);
+
+        await expect(store.renameLibrary("react", "next")).rejects.toThrow(
+          LibraryBusyError,
+        );
+        expect(await listedLibraries()).toEqual(["react"]);
+
+        // An existing version reports the status to put back if the enqueue fails
+        await store.updateVersionStatus(claimed.versionId, VersionStatus.COMPLETED);
+        const reclaimed = await store.claimVersion("react", "19.0.0", "replace", {
+          markQueued: true,
+        });
+        expect(reclaimed.previousStatus).toBe(VersionStatus.COMPLETED);
+      });
     });
 
     describe("findVersion", () => {
