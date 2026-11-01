@@ -654,6 +654,63 @@ describe("Database Migrations", () => {
     });
   });
 
+  describe("020 page chunk counts", () => {
+    /** Each page's stored count beside the count of its documents. */
+    function counts() {
+      return db
+        .prepare(
+          `SELECT p.chunk_count AS stored,
+            (SELECT COUNT(*) FROM documents d WHERE d.page_id = p.id) AS actual
+          FROM pages p ORDER BY p.id`,
+        )
+        .all() as Array<{ stored: number; actual: number }>;
+    }
+
+    it("backfills existing pages and keeps counts through inserts, deletes and moves", async () => {
+      await applyMigrations(db);
+      db.exec(`
+        DROP INDEX idx_pages_version_listing;
+        DROP TRIGGER pages_chunk_count_after_insert;
+        DROP TRIGGER pages_chunk_count_after_delete;
+        DROP TRIGGER pages_chunk_count_after_update;
+        ALTER TABLE pages DROP COLUMN chunk_count;
+        DELETE FROM _schema_migrations WHERE id = '020-add-page-chunk-count.sql';
+      `);
+      db.prepare(
+        "INSERT INTO libraries (name, display_name) VALUES ('lib', 'lib')",
+      ).run();
+      db.prepare(
+        "INSERT INTO versions (library_id, name) SELECT id, '1.0.0' FROM libraries",
+      ).run();
+      const addPage = db.prepare(
+        "INSERT INTO pages (version_id, url, title) SELECT id, ?, 'T' FROM versions",
+      );
+      const first = Number(addPage.run("https://example.com/a").lastInsertRowid);
+      const second = Number(addPage.run("https://example.com/b").lastInsertRowid);
+      const addChunk = db.prepare(
+        "INSERT INTO documents (page_id, content, metadata, sort_order) VALUES (?, 'c', '{}', ?)",
+      );
+      for (const order of [0, 1, 2]) addChunk.run(first, order);
+      addChunk.run(second, 0);
+
+      await expect(applyMigrations(db)).resolves.toBeUndefined();
+      expect(counts()).toEqual([
+        { stored: 3, actual: 3 },
+        { stored: 1, actual: 1 },
+      ]);
+
+      addChunk.run(second, 1);
+      db.prepare("DELETE FROM documents WHERE page_id = ? AND sort_order = 0").run(first);
+      db.prepare(
+        "UPDATE documents SET page_id = ? WHERE page_id = ? AND sort_order = 1",
+      ).run(second, first);
+      expect(counts()).toEqual([
+        { stored: 1, actual: 1 },
+        { stored: 3, actual: 3 },
+      ]);
+    });
+  });
+
   it("should cap the WAL file size kept after checkpoints", async () => {
     await expect(applyMigrations(db)).resolves.toBeUndefined();
 
