@@ -55,8 +55,12 @@ export class MarkdownPipeline extends BasePipeline {
   ): Promise<PipelineResult> {
     const contentString = convertToString(rawContent.content, rawContent.charset);
 
+    const sourceMimeType = rawContent.mimeType || "text/markdown";
+    const contentType =
+      sourceMimeType.toLowerCase() === "text/plain" ? "text/markdown" : sourceMimeType;
+
     const context: MiddlewareContext = {
-      contentType: rawContent.mimeType || "text/markdown",
+      contentType,
       content: contentString,
       source: rawContent.source,
       links: [],

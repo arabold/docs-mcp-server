@@ -148,6 +148,24 @@ Both values SHALL be stored on the `pages` table. Chunks inherit the page-level 
 - **THEN** `source_content_type` is `text/markdown`
 - **AND** `content_type` is `text/markdown`
 
+### Requirement: Markdown Semantics for Web Plain-Text Responses
+Web content served with MIME type `text/plain` SHALL be interpreted using Markdown semantics. This includes extracting Markdown metadata and applying Markdown chunking. The original `text/plain` MIME type SHALL remain the source content type, while the processed content type SHALL be `text/markdown`. Plain text with no Markdown syntax SHALL retain its text. Binary content served as `text/plain` SHALL remain unprocessable.
+
+#### Scenario: Content-negotiated Markdown served as plain text
+- **GIVEN** an HTTP documentation page with YAML frontmatter title `React Community` and a Markdown heading
+- **AND** the response has MIME type `text/plain`
+- **WHEN** the page is indexed
+- **THEN** its title is `React Community`
+- **AND** its source content type is `text/plain`
+- **AND** its processed content type is `text/markdown`
+- **AND** Markdown heading annotations are handled as Markdown rather than retained as plain text
+
+#### Scenario: Plain text without Markdown syntax
+- **GIVEN** text content with MIME type `text/plain` and no Markdown syntax
+- **WHEN** the content is processed
+- **THEN** its text is retained unchanged
+- **AND** its processed content type is `text/markdown`
+
 ### Requirement: Consistent Content Type Propagation
 
 All scraper strategies SHALL populate both `sourceContentType` and `contentType` fields in their `ProcessItemResult`. The values SHALL be derived as follows:
