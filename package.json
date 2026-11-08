@@ -162,6 +162,15 @@
   "engines": {
     "node": ">=22"
   },
+  "allowScripts": {
+    "better-sqlite3": true,
+    "fsevents": false,
+    "msw": false,
+    "tree-sitter": true,
+    "tree-sitter-javascript": true,
+    "tree-sitter-python": true,
+    "tree-sitter-typescript": true
+  },
   "lint-staged": {
     "*.{js,ts,jsx,tsx,json,md}": [
       "biome check --write --no-errors-on-unmatched",

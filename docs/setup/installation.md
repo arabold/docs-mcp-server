@@ -31,6 +31,19 @@ npm install -g @arabold/docs-mcp-server
 docs-mcp-server
 ```
 
+#### Install scripts (npm 12 and later)
+
+The database runs on [better-sqlite3](https://github.com/WiseLibs/better-sqlite3), which downloads its compiled SQLite binary in an install script. npm 12 and later skip the install scripts of dependencies unless you allow them. When the binary is missing, the server downloads it on its first start with the same tool the install script uses. It leaves the binary missing when npm's `ignore-scripts` is set.
+
+If the download fails, for example without network access or in a global install folder you cannot write to, the server stops with "The SQLite native module (better-sqlite3) is missing and could not be downloaded". Older versions, which do not download it, stop with "Could not locate the bindings file" instead. Allow the script, clear the npx cache so npx installs the package again, and start the server again:
+
+```bash
+npm config set allow-scripts=better-sqlite3 --location=user
+npm cache npx rm --force
+```
+
+Clearing the cache removes every package npx has cached; npx downloads them again when it needs them. For a global install, run the `npm install -g` command above again after the first command. In a project that depends on the package, run `npm approve-scripts better-sqlite3`, then `npm rebuild better-sqlite3`.
+
 ### Option 2: Docker
 
 ```bash

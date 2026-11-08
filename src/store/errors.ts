@@ -202,6 +202,41 @@ export class DimensionError extends StoreError {
 export class ConnectionError extends StoreError {}
 
 /**
+ * Error thrown when the compiled binary of better-sqlite3 is missing and the
+ * server could not download it. npm 12 and later skip dependency install
+ * scripts unless they are allowed, which leaves the package installed without
+ * the binary its install script fetches. The message names the commands that
+ * allow the script and reinstall.
+ */
+export class NativeModuleMissingError extends StoreError {
+  constructor() {
+    super(
+      "The SQLite native module (better-sqlite3) is missing and could not be downloaded, so the database cannot open. " +
+        "npm 12 and later skip dependency install scripts unless they are allowed. " +
+        "Allow its script and clear the npx cache:\n" +
+        "  npm config set allow-scripts=better-sqlite3 --location=user\n" +
+        "  npm cache npx rm --force\n" +
+        "Then start the server again. For a global install, run " +
+        "npm install -g @arabold/docs-mcp-server after the first command instead.",
+    );
+  }
+}
+
+/**
+ * Tells whether an error means a native module's compiled binary is missing,
+ * as thrown by the `bindings` package that better-sqlite3 loads it with.
+ *
+ * @param error - The error thrown while loading the module
+ * @returns True when the binary was not found on disk
+ */
+export function isMissingNativeBinding(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.startsWith("Could not locate the bindings file")
+  );
+}
+
+/**
  * Error thrown when the embedding provider fails to embed a page's chunks.
  * Nothing of the page is written when this is thrown.
  */

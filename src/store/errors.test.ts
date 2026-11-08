@@ -1,5 +1,5 @@
 /**
- * Unit tests for the library conflict and naming errors.
+ * Unit tests for the library conflict, naming and native module errors.
  */
 
 import { describe, expect, it } from "vitest";
@@ -7,8 +7,10 @@ import {
   AmbiguousPageInStoreError,
   formatVersionLabel,
   InvalidLibraryNameError,
+  isMissingNativeBinding,
   LibraryAlreadyExistsError,
   LibraryNotFoundInStoreError,
+  NativeModuleMissingError,
   PageNotFoundInStoreError,
   VersionAlreadyExistsError,
   VersionNotFoundInStoreError,
@@ -77,5 +79,26 @@ describe("library identity errors", () => {
   it("escapes both the library and the version in a version label", () => {
     expect(formatVersionLabel(NAME, NAME)).toBe(`${ESCAPED}@${ESCAPED}`);
     expect(formatVersionLabel("React", "")).toBe("React@latest");
+  });
+});
+
+describe("missing native module", () => {
+  it("recognizes the error the bindings package throws for a missing binary", () => {
+    const missing = new Error(
+      "Could not locate the bindings file. Tried:\n → /tmp/node_modules/better-sqlite3/build/better_sqlite3.node",
+    );
+    expect(isMissingNativeBinding(missing)).toBe(true);
+    expect(
+      isMissingNativeBinding(new Error("SQLITE_CANTOPEN: unable to open database file")),
+    ).toBe(false);
+    expect(isMissingNativeBinding("Could not locate the bindings file")).toBe(false);
+  });
+
+  it("names the commands that allow the install script and clear the npx cache", () => {
+    const { message } = new NativeModuleMissingError();
+    expect(message).toContain(
+      "npm config set allow-scripts=better-sqlite3 --location=user",
+    );
+    expect(message).toContain("npm cache npx rm --force");
   });
 });
