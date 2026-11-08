@@ -33,7 +33,15 @@ docs-mcp-server
 
 #### Install scripts (npm 12 and later)
 
-The database runs on [better-sqlite3](https://github.com/WiseLibs/better-sqlite3), which downloads its compiled SQLite binary in an install script. npm 12 and later skip the install scripts of dependencies unless you allow them. When the binary is missing, the server downloads it on its first start with the same tool the install script uses. It leaves the binary missing when npm's `ignore-scripts` is set.
+The database runs on [better-sqlite3](https://github.com/WiseLibs/better-sqlite3), which downloads its compiled SQLite binary in an install script. npm 12 and later skip the install scripts of dependencies unless you allow them. When the binary is missing, the server downloads it on its first start with the same tool the install script uses.
+
+When npm's `ignore-scripts` setting is on, the server leaves the binary missing and stops. The setting also overrides `allow-scripts`, so turn it off for one start to let the server download the binary into the existing install:
+
+```bash
+npx --ignore-scripts=false @arabold/docs-mcp-server@latest
+```
+
+In an MCP client's settings, add `"--ignore-scripts=false"` to `args` before the package name.
 
 If the download fails, for example without network access or in a global install folder you cannot write to, the server stops with "The SQLite native module (better-sqlite3) is missing and could not be downloaded". Older versions, which do not download it, stop with "Could not locate the bindings file" instead. Allow the script, clear the npx cache so npx installs the package again, and start the server again:
 

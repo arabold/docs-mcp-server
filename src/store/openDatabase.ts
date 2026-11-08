@@ -63,7 +63,10 @@ export function openDatabase(dbPath: string): DatabaseType {
   }
 
   // npm exports its config to the processes it starts, including npx's
-  if (process.env.npm_config_ignore_scripts === "true" || !downloadBinary()) {
+  if (process.env.npm_config_ignore_scripts === "true") {
+    throw new NativeModuleMissingError({ ignoreScripts: true });
+  }
+  if (!downloadBinary()) {
     throw new NativeModuleMissingError();
   }
 

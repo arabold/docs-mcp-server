@@ -67,11 +67,11 @@ describe("openDatabase", () => {
     expect(MockDatabase).toHaveBeenCalledOnce();
   });
 
-  it("downloads nothing when npm's ignore-scripts is set", () => {
+  it("downloads nothing when npm's ignore-scripts is set, and says how to turn it off", () => {
     vi.stubEnv("npm_config_ignore_scripts", "true");
     MockDatabase.mockImplementation(throwing(missingBinding()));
 
-    expect(() => openDatabase(":memory:")).toThrow(NativeModuleMissingError);
+    expect(() => openDatabase(":memory:")).toThrow(/--ignore-scripts=false/);
     expect(download).not.toHaveBeenCalled();
   });
 

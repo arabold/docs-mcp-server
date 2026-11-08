@@ -101,4 +101,13 @@ describe("missing native module", () => {
     );
     expect(message).toContain("npm cache npx rm --force");
   });
+
+  it("names the one-off override when npm's ignore-scripts skipped the download", () => {
+    const { message } = new NativeModuleMissingError({ ignoreScripts: true });
+    expect(message).toContain(
+      "npx --ignore-scripts=false @arabold/docs-mcp-server@latest",
+    );
+    // ignore-scripts overrides allow-scripts, so that remedy would not help
+    expect(message).not.toContain("allow-scripts=better-sqlite3");
+  });
 });

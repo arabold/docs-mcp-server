@@ -203,21 +203,32 @@ export class ConnectionError extends StoreError {}
 
 /**
  * Error thrown when the compiled binary of better-sqlite3 is missing and the
- * server could not download it. npm 12 and later skip dependency install
+ * server did not download it. npm 12 and later skip dependency install
  * scripts unless they are allowed, which leaves the package installed without
  * the binary its install script fetches. The message names the commands that
- * allow the script and reinstall.
+ * get the binary: allowing the script and reinstalling after a failed
+ * download, or turning `ignore-scripts` off for one start when that setting
+ * skipped the download, since it also overrides `allow-scripts`.
  */
 export class NativeModuleMissingError extends StoreError {
-  constructor() {
+  /**
+   * @param options.ignoreScripts - True when npm's `ignore-scripts` setting skipped the download
+   */
+  constructor({ ignoreScripts = false }: { ignoreScripts?: boolean } = {}) {
     super(
-      "The SQLite native module (better-sqlite3) is missing and could not be downloaded, so the database cannot open. " +
-        "npm 12 and later skip dependency install scripts unless they are allowed. " +
-        "Allow its script and clear the npx cache:\n" +
-        "  npm config set allow-scripts=better-sqlite3 --location=user\n" +
-        "  npm cache npx rm --force\n" +
-        "Then start the server again. For a global install, run " +
-        "npm install -g @arabold/docs-mcp-server after the first command instead.",
+      ignoreScripts
+        ? "The SQLite native module (better-sqlite3) is missing, so the database cannot open. " +
+            "npm's ignore-scripts setting is on, so the server does not download it. " +
+            "Start the server once with the setting off:\n" +
+            "  npx --ignore-scripts=false @arabold/docs-mcp-server@latest\n" +
+            'In an MCP client\'s settings, add "--ignore-scripts=false" before the package name.'
+        : "The SQLite native module (better-sqlite3) is missing and could not be downloaded, so the database cannot open. " +
+            "npm 12 and later skip dependency install scripts unless they are allowed. " +
+            "Allow its script and clear the npx cache:\n" +
+            "  npm config set allow-scripts=better-sqlite3 --location=user\n" +
+            "  npm cache npx rm --force\n" +
+            "Then start the server again. For a global install, run " +
+            "npm install -g @arabold/docs-mcp-server after the first command instead.",
     );
   }
 }
