@@ -8,6 +8,7 @@
 import { initTRPC } from "@trpc/server";
 import superjson from "superjson";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
+import { logger } from "../utils/logger";
 import type { SystemInfo } from "./systemInfo";
 
 /**
@@ -82,8 +83,14 @@ export function createSystemHealthRouter(trpc: unknown) {
 
         // Async so a remote worker's embedding config is fetched over the wire;
         // the local config is null for a remote worker and would misreport it.
-        const embeddings: SystemHealthEmbeddings | null =
-          await ctx.docService.getEmbeddingConfigInfo();
+        // An unreachable worker must not hide the rest of the report, which is
+        // what says the worker is disconnected.
+        let embeddings: SystemHealthEmbeddings | null = null;
+        try {
+          embeddings = await ctx.docService.getEmbeddingConfigInfo();
+        } catch (error) {
+          logger.debug(`Embedding config unavailable for the health report: ${error}`);
+        }
 
         return {
           version: systemInfo.version,

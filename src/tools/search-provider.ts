@@ -1,6 +1,6 @@
 import envPaths from "env-paths";
 import { EventBusService } from "../events/EventBusService";
-import { createDocumentManagement } from "../store";
+import { openBackend } from "../services/backend";
 import { SearchTool } from "../tools";
 import { loadConfig } from "../utils/config";
 import { LogLevel, setLogLevel } from "../utils/logger";
@@ -83,10 +83,8 @@ async function main() {
   const eventBus = new EventBusService();
 
   // Create service (headless)
-  const docService = await createDocumentManagement({
-    appConfig,
-    eventBus,
-  });
+  const backend = await openBackend({ appConfig, eventBus });
+  const { docService } = backend;
 
   try {
     // 5. Verify Library Exists (Fast Fail)
@@ -165,7 +163,7 @@ async function main() {
     process.exit(1);
   } finally {
     // 9. Cleanup
-    await docService.shutdown();
+    await backend.close();
   }
 }
 

@@ -1,4 +1,5 @@
 import type {
+  APIResponse,
   Browser,
   BrowserContext,
   ElementHandle,
@@ -8,14 +9,12 @@ import type {
 } from "playwright";
 import { ScraperAccessPolicy } from "../../utils/accessPolicy";
 import { type AppConfig, defaults } from "../../utils/config";
+import { firstErrorLine, RenderError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
-import { BrowserFetcher } from "../fetcher";
-import {
-  DEFAULT_BROWSER_USER_AGENT,
-  getHeader,
-  withMarkdownPreferredAccept,
-} from "../fetcher/headers";
+import { withTimeout } from "../../utils/timeout";
+import { ManagedBrowser } from "../fetcher";
+import { DEFAULT_BROWSER_USER_AGENT, getHeader } from "../fetcher/headers";
 import { ScrapeMode } from "../types";
 import { SimpleMemoryCache } from "../utils/SimpleMemoryCache";
 import { isBlockedSubresource } from "./subresourceBlocklist";
@@ -44,14 +43,17 @@ interface CachedResource {
   contentType: string;
 }
 
-interface BrowserProcessHandle {
-  killed: boolean;
-  pid?: number;
-  kill(signal?: NodeJS.Signals | number): boolean;
-}
+/**
+ * Most redirects a sub-resource fetch follows. Matches Playwright's own default
+ * (20): the renderer follows redirects itself only to check every hop against
+ * the access policy, not to change the allowed depth.
+ */
+const MAX_SUBRESOURCE_REDIRECTS = 20;
 
-interface BrowserWithProcessHandle extends Browser {
-  process(): BrowserProcessHandle | null;
+/** The Playwright objects a render opens, held where the caller can close them. */
+interface RenderHandles {
+  page: Page | null;
+  browserContext: BrowserContext | null;
 }
 
 /**
@@ -66,7 +68,7 @@ interface BrowserWithProcessHandle extends Browser {
  * Additionally, all custom headers from context.options?.headers are forwarded to Playwright requests.
  */
 export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
-  private browser: Browser | null = null;
+  private readonly managedBrowser: ManagedBrowser;
   private readonly config: AppConfig["scraper"];
   private readonly accessPolicy: ScraperAccessPolicy;
 
@@ -75,8 +77,14 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     defaults.scraper.fetcher.maxCacheItems,
   );
 
-  constructor(config: AppConfig["scraper"]) {
+  /**
+   * @param config - Scraper settings (timeouts, network policy).
+   * @param managedBrowser - The browser to render with; pass one to share it
+   * with the browser fetcher.
+   */
+  constructor(config: AppConfig["scraper"], managedBrowser = new ManagedBrowser(config)) {
     this.config = config;
+    this.managedBrowser = managedBrowser;
     this.accessPolicy = new ScraperAccessPolicy(config.security);
   }
 
@@ -114,22 +122,6 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     return true;
   }
 
-  /**
-   * Initializes the Playwright browser instance.
-   * Consider making this more robust (e.g., lazy initialization, singleton).
-   */
-  private async ensureBrowser(): Promise<Browser> {
-    if (!this.browser?.isConnected()) {
-      logger.debug("Launching new Playwright browser instance (Chromium)");
-      this.browser = await BrowserFetcher.launchBrowser();
-      this.browser.on("disconnected", () => {
-        logger.debug("Playwright browser instance disconnected.");
-        this.browser = null;
-      });
-    }
-    return this.browser;
-  }
-
   private getPageTimeoutMs(): number {
     return this.config.pageTimeoutMs ?? defaults.scraper.pageTimeoutMs;
   }
@@ -138,125 +130,72 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     return this.config.browserTimeoutMs ?? defaults.scraper.browserTimeoutMs;
   }
 
-  private async withTimeout<T>(
-    operation: Promise<T>,
-    timeoutMs: number,
-    description: string,
-  ): Promise<T> {
-    let timeout: NodeJS.Timeout | undefined;
-    try {
-      return await Promise.race([
-        operation,
-        new Promise<T>((_resolve, reject) => {
-          timeout = setTimeout(() => {
-            reject(new Error(`${description} timed out after ${timeoutMs}ms`));
-          }, timeoutMs);
-        }),
-      ]);
-    } finally {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-    }
-  }
-
-  private getBrowserProcess(browser: Browser): BrowserProcessHandle | null {
-    if (!("process" in browser) || typeof browser.process !== "function") {
-      return null;
-    }
-
-    return (browser as BrowserWithProcessHandle).process();
-  }
-
-  private killBrowserProcess(browser: Browser, reason: string): void {
-    const browserProcess = this.getBrowserProcess(browser);
-    if (!browserProcess || browserProcess.killed) {
-      return;
-    }
-
-    const pid = browserProcess.pid ? ` pid=${browserProcess.pid}` : "";
-    logger.warn(`⚠️  Force killing Playwright browser process${pid}: ${reason}`);
-    try {
-      if (!browserProcess.kill("SIGKILL")) {
-        logger.warn(`⚠️  Failed to force kill Playwright browser process${pid}`);
-      }
-    } catch (error) {
-      logger.warn(`⚠️  Failed to force kill Playwright browser process${pid}: ${error}`);
-    }
+  /**
+   * Upper bound for one page render. Navigation has its own timeout; the waits
+   * and extraction after it share six page timeouts of headroom. Several of those
+   * Playwright calls take no timeout at all, and a wedged Chromium leaves them
+   * pending, so the whole render runs under this bound.
+   */
+  private getRenderTimeoutMs(): number {
+    return this.getBrowserTimeoutMs() + 6 * this.getPageTimeoutMs();
   }
 
   /**
-   * Closes the Playwright browser instance if it exists.
+   * Closes the browser this middleware renders with.
    * Should be called during application shutdown.
-   * Attempts to close even if the browser is disconnected to ensure proper cleanup of zombie processes.
    */
-  async closeBrowser(reason = "shutdown"): Promise<void> {
-    if (this.browser) {
-      const browser = this.browser;
-      try {
-        logger.debug(`Closing Playwright browser instance (${reason})...`);
-        // Always attempt to close, even if disconnected, to reap zombie processes
-        await this.withTimeout(
-          browser.close(),
-          this.getPageTimeoutMs(),
-          "Playwright browser close",
-        );
-      } catch (error) {
-        logger.warn(`⚠️  Error closing Playwright browser (${reason}): ${error}`);
-        this.killBrowserProcess(browser, reason);
-      } finally {
-        // Always set to null to allow fresh browser on next request
-        this.browser = null;
-      }
-    }
+  async closeBrowser(): Promise<void> {
+    await this.managedBrowser.close();
   }
 
+  /**
+   * Removes the page's routes and closes the page and its context, each within
+   * the page timeout.
+   *
+   * @returns Whether the page and context closed. A route that fails to clear
+   * is only logged: it says nothing about whether Chromium still responds.
+   */
   private async cleanupPageAndContext(
     page: Page | null,
     browserContext: BrowserContext | null,
     source: string,
   ): Promise<boolean> {
-    let cleanupSucceeded = true;
+    let closed = true;
     const timeoutMs = this.getPageTimeoutMs();
 
     if (page) {
       try {
-        await this.withTimeout(
+        await withTimeout(
           page.unroute("**/*"),
           timeoutMs,
           `Playwright route cleanup for ${source}`,
         );
       } catch (error) {
-        cleanupSucceeded = false;
         logger.warn(`⚠️  Playwright route cleanup failed for ${source}: ${error}`);
       }
 
       try {
-        await this.withTimeout(
-          page.close(),
-          timeoutMs,
-          `Playwright page close for ${source}`,
-        );
+        await withTimeout(page.close(), timeoutMs, `Playwright page close for ${source}`);
       } catch (error) {
-        cleanupSucceeded = false;
+        closed = false;
         logger.warn(`⚠️  Playwright page cleanup failed for ${source}: ${error}`);
       }
     }
 
     if (browserContext) {
       try {
-        await this.withTimeout(
+        await withTimeout(
           browserContext.close(),
           timeoutMs,
           `Playwright browser context close for ${source}`,
         );
       } catch (error) {
-        cleanupSucceeded = false;
+        closed = false;
         logger.warn(`⚠️  Playwright context cleanup failed for ${source}: ${error}`);
       }
     }
 
-    return cleanupSucceeded;
+    return closed;
   }
 
   /**
@@ -433,7 +372,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
       // Wait for all iframes to load in parallel
       const iframePromises = iframes.map((iframe, index) =>
-        this.processIframe(page, iframe, index),
+        this.processIframe(iframe, index),
       );
 
       await Promise.all(iframePromises);
@@ -446,13 +385,11 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
   /**
    * Processes a single iframe: validates, extracts content, and replaces in main page.
    *
-   * @param page The main page containing the iframe
    * @param iframe The iframe element handle
-   * @param index The iframe index for logging/identification
+   * @param index The iframe index for logging
    */
   private async processIframe(
-    page: Page,
-    iframe: ElementHandle,
+    iframe: ElementHandle<HTMLIFrameElement>,
     index: number,
   ): Promise<void> {
     try {
@@ -502,7 +439,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       }
 
       if (content && content.trim().length > 0) {
-        await this.replaceIframeWithContent(page, index, content);
+        await this.replaceIframeWithContent(iframe, content);
         logger.debug(
           `Successfully extracted and replaced content for iframe ${index + 1}: ${src}`,
         );
@@ -549,30 +486,21 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
   /**
    * Replaces an iframe element with its extracted content in the main page.
    *
-   * @param page The main page containing the iframe
-   * @param index The iframe index (0-based)
+   * Acts on the iframe's own handle: iframes are processed in parallel, and
+   * each replacement shifts the position of the iframes after it.
+   *
+   * @param iframe The iframe element handle
    * @param content The extracted content to replace the iframe with
    */
   private async replaceIframeWithContent(
-    page: Page,
-    index: number,
+    iframe: ElementHandle<HTMLIFrameElement>,
     content: string,
   ): Promise<void> {
-    await page.evaluate(
-      (args: [number, string]) => {
-        const [iframeIndex, bodyContent] = args;
-        const iframe = document.querySelectorAll("iframe")[iframeIndex];
-        if (iframe && bodyContent) {
-          // Create a replacement div with the iframe content
-          const replacement = document.createElement("div");
-          replacement.innerHTML = bodyContent;
-
-          // Replace the iframe with the extracted content
-          iframe.parentNode?.replaceChild(replacement, iframe);
-        }
-      },
-      [index, content] as [number, string],
-    );
+    await iframe.evaluate((element, bodyContent) => {
+      const replacement = document.createElement("div");
+      replacement.innerHTML = bodyContent;
+      element.replaceWith(replacement);
+    }, content);
   }
 
   /**
@@ -694,11 +622,6 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     return error.message.includes("Target page, context or browser has been closed");
   }
 
-  private formatRouteError(error: unknown): string {
-    const message = error instanceof Error ? error.message : String(error);
-    return message.split("\n")[0] || message;
-  }
-
   private isSpeculativePrefetch(route: Route): boolean {
     const headers = route.request().headers();
     return (
@@ -786,7 +709,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
         return;
       }
 
-      const errorMessage = this.formatRouteError(error);
+      const errorMessage = firstErrorLine(error);
       logger.debug(`Error continuing ${resourceType} ${reqUrl}: ${errorMessage}`);
       await this.abortRoute(route, reqUrl, "abort after continue error", "failed");
     }
@@ -889,7 +812,13 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     }
 
     try {
-      const response = await route.fetch({ headers });
+      const response = await this.fetchFollowingAllowedRedirects(route, headers);
+      if (response === null) {
+        await this.abortRoute(route, reqUrl, "redirect policy abort", "blockedbyclient");
+        return;
+      }
+      // Cached under the URL the page asked for, which is what the next page
+      // looks up; every hop to this response passed the access policy.
       await this.cacheResponseIfEligible(reqUrl, resourceType, response);
       await this.fulfillRoute(route, reqUrl, { response }, "fulfill");
     } catch (error) {
@@ -897,9 +826,59 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
         return;
       }
 
-      const errorMessage = this.formatRouteError(error);
+      const errorMessage = firstErrorLine(error);
       logger.debug(`Network error fetching ${resourceType} ${reqUrl}: ${errorMessage}`);
       await this.abortRoute(route, reqUrl, "abort after error", "failed");
+    }
+  }
+
+  /**
+   * Fetches a routed request in Node, following its redirects one hop at a time
+   * so that the access policy checks each target before it is requested.
+   *
+   * `route.fetch` would follow the redirects unchecked, and Chromium follows a
+   * redirect it is handed without Playwright routing the next request, so no
+   * 3xx response may leave this method.
+   *
+   * @param route - The intercepted request.
+   * @param headers - The headers to send with the first hop.
+   * @returns The final response, or null when the policy denies a redirect target.
+   */
+  private async fetchFollowingAllowedRedirects(
+    route: Route,
+    headers: Record<string, string>,
+  ): Promise<APIResponse | null> {
+    let url = route.request().url();
+    let hopHeaders = headers;
+
+    for (let redirectCount = 0; ; redirectCount++) {
+      const response = await route.fetch({ url, headers: hopHeaders, maxRedirects: 0 });
+      const status = response.status();
+      const location = response.headers().location;
+      if (status < 300 || status >= 400 || !location) {
+        return response;
+      }
+      await response.dispose();
+
+      if (redirectCount >= MAX_SUBRESOURCE_REDIRECTS) {
+        throw new Error(`Too many redirects while fetching ${route.request().url()}`);
+      }
+
+      const redirectUrl = new URL(location, url).href;
+      if (!(await this.isRequestAllowed(redirectUrl))) {
+        logger.debug(`Blocked redirect from ${url} to ${redirectUrl}`);
+        return null;
+      }
+      // Playwright's rule when it follows redirects itself: credentials do not
+      // follow a redirect to another origin.
+      if (new URL(redirectUrl).origin !== new URL(url).origin) {
+        hopHeaders = Object.fromEntries(
+          Object.entries(hopHeaders).filter(
+            ([name]) => name.toLowerCase() !== "authorization",
+          ),
+        );
+      }
+      url = redirectUrl;
     }
   }
 
@@ -925,9 +904,16 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
   private async fetchFrameContent(parentPage: Page, frameUrl: string): Promise<string> {
     // Resolve relative URLs against the parent page URL
     const resolvedUrl = new URL(frameUrl, parentPage.url()).href;
+    // The route handler caches the frame's raw document under its URL; this
+    // entry holds the body the frame rendered.
+    const cacheKey = `frame:${resolvedUrl}`;
 
-    // Check cache first
-    const cached = HtmlPlaywrightMiddleware.resourceCache.get(resolvedUrl);
+    // The cache is shared by every instance, so the policy is checked first.
+    if (!(await this.isRequestAllowed(resolvedUrl))) {
+      return "";
+    }
+
+    const cached = HtmlPlaywrightMiddleware.resourceCache.get(cacheKey);
     if (cached !== undefined) {
       logger.debug(`✓ Cache hit for frame: ${resolvedUrl}`);
       return cached.body;
@@ -937,10 +923,6 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
     let framePage: Page | null = null;
     try {
-      if (!(await this.isRequestAllowed(resolvedUrl))) {
-        return "";
-      }
-
       // Create a new page in the same browser context for consistency
       framePage = await parentPage.context().newPage();
 
@@ -973,7 +955,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       const contentSizeBytes = Buffer.byteLength(content, "utf8");
       if (contentSizeBytes <= this.config.fetcher.maxCacheItemSizeBytes) {
         // Frame content is always HTML
-        HtmlPlaywrightMiddleware.resourceCache.set(resolvedUrl, {
+        HtmlPlaywrightMiddleware.resourceCache.set(cacheKey, {
           body: content,
           contentType: "text/html",
         });
@@ -1059,9 +1041,11 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
    * - Injects Authorization header for all same-origin requests if credentials are present and not already set.
    * - Forwards all custom headers from context.options?.headers to Playwright requests.
    * - Waits for common loading indicators to disappear before extracting HTML.
+   * - When rendering fails, `auto` mode records the error and keeps the fetched HTML.
    *
    * @param context The middleware context containing the HTML and source URL.
    * @param next The next middleware function in the pipeline.
+   * @throws {RenderError} When rendering fails in `playwright` mode.
    */
   async process(context: MiddlewareContext, next: () => Promise<void>): Promise<void> {
     // Check if we have a MIME type from the raw content and if it's suitable for HTML processing
@@ -1098,136 +1082,53 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       `Running Playwright rendering for ${context.source} (scrapeMode: '${scrapeMode}')`,
     );
 
-    let page: Page | null = null;
-    let browserContext: BrowserContext | null = null;
+    const handles: RenderHandles = { page: null, browserContext: null };
     let renderedHtml: string | null = null;
-    let shouldResetBrowser = false;
-    let renderFailed = false;
-
-    // Extract credentials and origin using helper
-    const { credentials, origin } = extractCredentialsAndOrigin(context.source);
-
-    // Extract custom headers (Record<string, string>)
-    const customHeaders: Record<string, string> = context.options?.headers ?? {};
+    let browser: Browser | null = null;
 
     try {
-      const browser = await this.ensureBrowser();
-
-      // Always create a browser context (with or without credentials)
-      browserContext = await browser.newContext({
-        userAgent: getHeader(customHeaders, "user-agent") || DEFAULT_BROWSER_USER_AGENT,
-        viewport: { width: 1920, height: 1080 },
-        ignoreHTTPSErrors: this.accessPolicy.shouldAllowInvalidTls(
-          "https://browser-context.local",
-        ),
-        ...(credentials ? { httpCredentials: credentials } : {}),
-      });
-      page = await browserContext.newPage();
-
-      logger.debug(`Playwright: Processing ${context.source}`);
-
-      // Inject shadow DOM extractor script early
-      await this.injectShadowDOMExtractor(page);
-
-      const initialRequestUrl = (() => {
-        try {
-          const initialUrl = new URL(context.source);
-          initialUrl.hash = "";
-          return initialUrl.toString();
-        } catch {
-          return context.source;
-        }
-      })();
-
-      // Set up route interception with special handling for the initial page load
-      await page.route("**/*", async (route) => {
-        const reqUrl = route.request().url();
-
-        // Serve the initial HTML for the main page (bypass cache and fetch)
-        if (reqUrl === initialRequestUrl) {
-          try {
-            return await route.fulfill({
-              status: 200,
-              contentType: "text/html; charset=utf-8",
-              body: context.content,
-            });
-          } catch (error) {
-            if (this.isRouteAlreadyHandledError(error)) {
-              logger.debug(`Route already handled (initial page): ${reqUrl}`);
-              return;
-            }
-            // Re-throw other errors
-            throw error;
-          }
-        }
-
-        // For all other requests, use the standard caching logic
-        await this.handleSubresourceRoute(
-          route,
-          customHeaders,
-          credentials ?? undefined,
-          origin ?? undefined,
-        );
-      });
-
-      // Wait for either body (normal HTML) or frameset (frameset documents) to appear
-      const pageTimeoutMs = this.getPageTimeoutMs();
-
-      // Load initial HTML content
-      await page.goto(context.source, {
-        waitUntil: "load",
-        timeout: this.getBrowserTimeoutMs(),
-      });
-
-      await page.waitForSelector("body, frameset", {
-        timeout: pageTimeoutMs,
-      });
-
-      // Wait for network idle to let dynamic content initialize
-      try {
-        await page.waitForLoadState("networkidle", {
-          timeout: pageTimeoutMs,
-        });
-      } catch {
-        logger.debug("Network idle timeout, proceeding anyway");
-      }
-
-      await this.waitForLoadingToComplete(page);
-      await this.waitForIframesToLoad(page);
-      await this.waitForFramesetsToLoad(page);
-
-      // Extract content using shadow DOM-aware method
-      const { content, method } = await this.extractContentWithShadowDOMSupport(page);
-      renderedHtml = content;
-      logger.debug(
-        `Playwright: Successfully rendered content for ${context.source} using ${method}`,
+      // Outside the deadline: launching has its own timeout, and a browser that
+      // finished launching after the deadline would have no owner to close it.
+      browser = await this.managedBrowser.get();
+      renderedHtml = await withTimeout(
+        this.renderPage(browser, context, handles),
+        this.getRenderTimeoutMs(),
+        `Playwright render for ${context.source}`,
       );
     } catch (error) {
-      renderFailed = true;
-      shouldResetBrowser = true;
       logger.error(`❌ Playwright failed to render ${context.source}: ${error}`);
-      context.errors.push(
+      const renderError =
         error instanceof Error
           ? error
-          : new Error(`Playwright rendering failed: ${String(error)}`),
-      );
+          : new Error(`Playwright rendering failed: ${String(error)}`);
+      // Only `auto` falls back to the page as fetched. `playwright` mode asked
+      // for the rendered page, and indexing the fetched HTML in its place would
+      // report success for content the browser never produced. The cleanup
+      // below still runs first.
+      if (scrapeMode === ScrapeMode.Playwright) {
+        throw new RenderError(context.source, renderError);
+      }
+      context.errors.push(renderError);
     } finally {
-      const cleanupSucceeded = await this.cleanupPageAndContext(
-        page,
-        browserContext,
+      const closed = await this.cleanupPageAndContext(
+        handles.page,
+        handles.browserContext,
         context.source,
       );
-      const cleanupFailed = !cleanupSucceeded;
-      if (cleanupFailed) {
-        shouldResetBrowser = true;
-      }
-      if (shouldResetBrowser) {
-        const resetReason = renderFailed
-          ? cleanupFailed
-            ? `reset after Playwright render and cleanup failure for ${context.source}`
-            : `reset after Playwright render failure for ${context.source}`
-          : `reset after Playwright cleanup failure for ${context.source}`;
-        await this.closeBrowser(resetReason);
+      // A page or context that will not close may have left Chromium stuck, and
+      // so may a render that failed before it had a context of its own: that
+      // call was waiting on the browser itself. Either way, replace it. A failed
+      // render alone does not: its context closed cleanly, and other pages may be
+      // using the same browser.
+      const failedBeforeContext =
+        renderedHtml === null && handles.browserContext === null;
+      if (browser && (!closed || failedBeforeContext)) {
+        await this.managedBrowser.retire(
+          browser,
+          closed
+            ? `reset after Playwright could not open a context for ${context.source}`
+            : `reset after Playwright cleanup failure for ${context.source}`,
+        );
       }
     }
 
@@ -1236,13 +1137,116 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       logger.debug(
         `Playwright middleware updated content for ${context.source}. Proceeding.`,
       );
-    } else {
-      logger.warn(
-        `⚠️  Playwright rendering resulted in null content for ${context.source}. Proceeding without content update.`,
-      );
     }
 
     await next();
+  }
+
+  /**
+   * Renders `context.content` in a new browser context and returns the result.
+   *
+   * Records the context and page in `handles` as soon as they exist, so the caller
+   * can close them even when it abandons the render midway.
+   */
+  private async renderPage(
+    browser: Browser,
+    context: MiddlewareContext,
+    handles: RenderHandles,
+  ): Promise<string> {
+    const { credentials, origin } = extractCredentialsAndOrigin(context.source);
+    const customHeaders: Record<string, string> = context.options?.headers ?? {};
+
+    // Always create a browser context (with or without credentials)
+    const browserContext = await browser.newContext({
+      userAgent: getHeader(customHeaders, "user-agent") || DEFAULT_BROWSER_USER_AGENT,
+      viewport: { width: 1920, height: 1080 },
+      ignoreHTTPSErrors: this.accessPolicy.shouldAllowInvalidTls(
+        "https://browser-context.local",
+      ),
+      ...(credentials ? { httpCredentials: credentials } : {}),
+    });
+    handles.browserContext = browserContext;
+    const page = await browserContext.newPage();
+    handles.page = page;
+
+    logger.debug(`Playwright: Processing ${context.source}`);
+
+    // Inject shadow DOM extractor script early
+    await this.injectShadowDOMExtractor(page);
+
+    const initialRequestUrl = (() => {
+      try {
+        const initialUrl = new URL(context.source);
+        initialUrl.hash = "";
+        return initialUrl.toString();
+      } catch {
+        return context.source;
+      }
+    })();
+
+    // Set up route interception with special handling for the initial page load
+    await page.route("**/*", async (route) => {
+      const reqUrl = route.request().url();
+
+      // Serve the initial HTML for the main page (bypass cache and fetch)
+      if (reqUrl === initialRequestUrl) {
+        try {
+          return await route.fulfill({
+            status: 200,
+            contentType: "text/html; charset=utf-8",
+            body: context.content,
+          });
+        } catch (error) {
+          if (this.isRouteAlreadyHandledError(error)) {
+            logger.debug(`Route already handled (initial page): ${reqUrl}`);
+            return;
+          }
+          // Re-throw other errors
+          throw error;
+        }
+      }
+
+      // For all other requests, use the standard caching logic
+      await this.handleSubresourceRoute(
+        route,
+        customHeaders,
+        credentials ?? undefined,
+        origin ?? undefined,
+      );
+    });
+
+    // Wait for either body (normal HTML) or frameset (frameset documents) to appear
+    const pageTimeoutMs = this.getPageTimeoutMs();
+
+    // Load initial HTML content
+    await page.goto(context.source, {
+      waitUntil: "load",
+      timeout: this.getBrowserTimeoutMs(),
+    });
+
+    await page.waitForSelector("body, frameset", {
+      timeout: pageTimeoutMs,
+    });
+
+    // Wait for network idle to let dynamic content initialize
+    try {
+      await page.waitForLoadState("networkidle", {
+        timeout: pageTimeoutMs,
+      });
+    } catch {
+      logger.debug("Network idle timeout, proceeding anyway");
+    }
+
+    await this.waitForLoadingToComplete(page);
+    await this.waitForIframesToLoad(page);
+    await this.waitForFramesetsToLoad(page);
+
+    // Extract content using shadow DOM-aware method
+    const { content, method } = await this.extractContentWithShadowDOMSupport(page);
+    logger.debug(
+      `Playwright: Successfully rendered content for ${context.source} using ${method}`,
+    );
+    return content;
   }
 
   /**
@@ -1333,5 +1337,5 @@ export function mergePlaywrightHeaders(
       Authorization: `Basic ${basic}`,
     };
   }
-  return withMarkdownPreferredAccept(headers, customHeaders);
+  return headers;
 }

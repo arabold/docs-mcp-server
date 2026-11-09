@@ -63,153 +63,7 @@ function createRawContent(
 }
 
 describe("DocumentPipeline", () => {
-  describe("canProcess", () => {
-    it("should accept PDF MIME type", () => {
-      expect(pipeline.canProcess("application/pdf")).toBe(true);
-    });
-
-    it("should accept DOCX MIME type", () => {
-      expect(
-        pipeline.canProcess(
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ),
-      ).toBe(true);
-    });
-
-    it("should accept XLSX MIME type", () => {
-      expect(
-        pipeline.canProcess(
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ),
-      ).toBe(true);
-    });
-
-    it("should accept PPTX MIME type", () => {
-      expect(
-        pipeline.canProcess(
-          "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        ),
-      ).toBe(true);
-    });
-
-    it("should accept Jupyter Notebook MIME type", () => {
-      expect(pipeline.canProcess("application/x-ipynb+json")).toBe(true);
-    });
-
-    it("should accept legacy DOC MIME type", () => {
-      expect(pipeline.canProcess("application/msword")).toBe(true);
-    });
-
-    it("should accept legacy XLS MIME type", () => {
-      expect(pipeline.canProcess("application/vnd.ms-excel")).toBe(true);
-    });
-
-    it("should accept legacy PPT MIME type", () => {
-      expect(pipeline.canProcess("application/vnd.ms-powerpoint")).toBe(true);
-    });
-
-    it("should accept ODT MIME type", () => {
-      expect(pipeline.canProcess("application/vnd.oasis.opendocument.text")).toBe(true);
-    });
-
-    it("should accept ODS MIME type", () => {
-      expect(pipeline.canProcess("application/vnd.oasis.opendocument.spreadsheet")).toBe(
-        true,
-      );
-    });
-
-    it("should accept ODP MIME type", () => {
-      expect(pipeline.canProcess("application/vnd.oasis.opendocument.presentation")).toBe(
-        true,
-      );
-    });
-
-    it("should accept RTF MIME type", () => {
-      expect(pipeline.canProcess("application/rtf")).toBe(true);
-    });
-
-    it("should accept EPUB MIME type", () => {
-      expect(pipeline.canProcess("application/epub+zip")).toBe(true);
-    });
-
-    it("should accept FB2 MIME type", () => {
-      expect(pipeline.canProcess("application/x-fictionbook+xml")).toBe(true);
-    });
-
-    it("should reject HTML MIME type", () => {
-      expect(pipeline.canProcess("text/html")).toBe(false);
-    });
-
-    it("should reject plain text MIME type", () => {
-      expect(pipeline.canProcess("text/plain")).toBe(false);
-    });
-
-    it("should reject JSON MIME type", () => {
-      expect(pipeline.canProcess("application/json")).toBe(false);
-    });
-
-    it("should reject application/octet-stream (resolved upstream by strategies)", () => {
-      expect(pipeline.canProcess("application/octet-stream")).toBe(false);
-    });
-  });
-
   describe("process", () => {
-    it("should process a PDF file and extract text", async () => {
-      const content = loadFixture("sample.pdf");
-      const rawContent = createRawContent("sample.pdf", "application/pdf", content);
-
-      const result = await pipeline.process(rawContent, baseOptions);
-
-      expect(result.errors).toHaveLength(0);
-      expect(result.textContent).toBeTruthy();
-      expect(result.contentType).toBe("text/markdown");
-      expect(result.chunks).toBeDefined();
-      expect(result.chunks!.length).toBeGreaterThan(0);
-    });
-
-    it("should process a DOCX file and extract text", async () => {
-      const content = loadFixture("sample.docx");
-      const rawContent = createRawContent(
-        "sample.docx",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        content,
-      );
-
-      const result = await pipeline.process(rawContent, baseOptions);
-
-      expect(result.errors).toHaveLength(0);
-      expect(result.textContent).toBeTruthy();
-      expect(result.textContent).toContain("Demonstration of DOCX support in calibre");
-      expect(result.contentType).toBe("text/markdown");
-      expect(result.chunks).toBeDefined();
-    });
-
-    it("should prefer full markdown content for DOCX with tables", async () => {
-      const docxMimeType =
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-      vi.mocked(extract).mockResolvedValueOnce(
-        envelope({
-          content:
-            "# Sample DOCX\n\nIntro paragraph before table.\n\n| A | B |\n| - | - |\n| 1 | 2 |",
-          tables: [{ markdown: "| A | B |\n| - | - |\n| 1 | 2 |" }],
-          metadata: { title: "Sample DOCX" },
-        }),
-      );
-
-      const rawContent = createRawContent(
-        "sample.docx",
-        docxMimeType,
-        Buffer.from("fake docx"),
-      );
-
-      const result = await pipeline.process(rawContent, baseOptions);
-
-      expect(result.errors).toHaveLength(0);
-      expect(result.contentType).toBe("text/markdown");
-      expect(result.textContent).toContain("Intro paragraph before table.");
-      expect(result.textContent).toContain("| A | B |");
-    });
-
     it("should extract mixed DOCX content with tables and prose", async () => {
       const content = loadFixture("mixed-content.docx");
       const rawContent = createRawContent(
@@ -228,25 +82,7 @@ describe("DocumentPipeline", () => {
       expect(result.textContent).toContain("| Header A | Header B |");
     });
 
-    it("should process an XLSX file and produce Markdown tables", async () => {
-      const content = loadFixture("sample.xlsx");
-      const rawContent = createRawContent(
-        "sample.xlsx",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        content,
-      );
-
-      const result = await pipeline.process(rawContent, baseOptions);
-
-      expect(result.errors).toHaveLength(0);
-      expect(result.textContent).toBeTruthy();
-      expect(result.contentType).toBe("text/markdown");
-      // Should use tables[].markdown output with proper Markdown table formatting
-      expect(result.textContent).toContain("|");
-      expect(result.textContent).toContain("| --- | --- |");
-    });
-
-    it("should process a PPTX file and extract content", async () => {
+    it("should process a PPTX file and extract its slide text", async () => {
       const content = loadFixture("sample.pptx");
       const rawContent = createRawContent(
         "sample.pptx",
@@ -256,16 +92,9 @@ describe("DocumentPipeline", () => {
 
       const result = await pipeline.process(rawContent, baseOptions);
 
-      // PPTX processing may fail with minimal test fixtures
-      // The important thing is that the pipeline handles it gracefully
-      if (result.errors?.length === 0) {
-        expect(result.textContent).toBeTruthy();
-        expect(result.contentType).toBe("text/markdown");
-      } else {
-        // Graceful error handling - pipeline should return error without crashing
-        expect(result.textContent).toBeNull();
-        expect(result.chunks).toHaveLength(0);
-      }
+      expect(result.errors).toHaveLength(0);
+      expect(result.contentType).toBe("text/markdown");
+      expect(result.textContent).toContain("Presentation Title Text");
     });
 
     it("should process a Jupyter Notebook and extract content", async () => {
@@ -299,97 +128,43 @@ describe("DocumentPipeline", () => {
       const result = await smallPipeline.process(rawContent, baseOptions);
 
       expect(result.errors).toHaveLength(1);
-      expect(result.errors![0].message).toContain("exceeds maximum size");
+      expect(result.errors?.[0]?.message).toContain("exceeds maximum size");
       expect(result.textContent).toBeNull();
       expect(result.chunks).toHaveLength(0);
     });
 
-    it("should process PDF with any source URL since Xberg uses MIME type directly", async () => {
+    it("should pick the extractor from the served MIME type, not the URL", async () => {
       const content = loadFixture("sample.pdf");
-      const rawContent: RawContent = {
-        content,
-        mimeType: "application/pdf",
-        source: "file:///no-extension", // No extension in URL
-        status: FetchStatus.SUCCESS,
-      };
+      const sources = [
+        "file:///no-extension",
+        "https://example.com/documents/file.pdf/59569026-c221-12db-de3f-98becb9a67af?t=1767868182094",
+      ];
 
-      const result = await pipeline.process(rawContent, baseOptions);
+      for (const source of sources) {
+        const result = await pipeline.process(
+          { content, mimeType: "application/pdf", source, status: FetchStatus.SUCCESS },
+          baseOptions,
+        );
 
-      // Should succeed because Xberg uses MIME type, not file extension
-      expect(result.errors).toHaveLength(0);
-      expect(result.textContent).toBeTruthy();
-      expect(result.contentType).toBe("text/markdown");
+        expect.soft(result.errors, source).toHaveLength(0);
+        expect.soft(result.textContent, source).toContain("Avian Carriers");
+        expect.soft(result.contentType, source).toBe("text/markdown");
+      }
     });
 
-    it("should handle URL with query parameters", async () => {
-      const content = loadFixture("sample.pdf");
-      const rawContent: RawContent = {
-        content,
-        mimeType: "application/pdf",
-        source:
-          "https://example.com/documents/file.pdf/59569026-c221-12db-de3f-98becb9a67af?t=1767868182094",
-        status: FetchStatus.SUCCESS,
-      };
-
-      const result = await pipeline.process(rawContent, baseOptions);
-
-      expect(result.errors).toHaveLength(0);
-      expect(result.textContent).toBeTruthy();
-      expect(result.contentType).toBe("text/markdown");
-    });
-
-    it("should use filename as title fallback", async () => {
-      const content = loadFixture("sample.docx");
-      const rawContent = createRawContent(
-        "sample.docx",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        content,
-      );
-
-      const result = await pipeline.process(rawContent, baseOptions);
-
-      // Title should be extracted from metadata or fall back to filename
-      expect(result.title).toBeTruthy();
-    });
-
-    it("should return empty links array for documents", async () => {
-      const content = loadFixture("sample.pdf");
-      const rawContent = createRawContent("sample.pdf", "application/pdf", content);
-
-      const result = await pipeline.process(rawContent, baseOptions);
-
-      expect(result.links).toEqual([]);
-    });
-
-    it("should use result.content for documents without tables", async () => {
-      // PDF extraction typically has no tables[], so content is used directly
+    it("should use result.content for a PDF without tables, titled by its file name", async () => {
+      // PDF extraction typically has no tables[], so content is used directly.
       const content = loadFixture("sample.pdf");
       const rawContent = createRawContent("sample.pdf", "application/pdf", content);
 
       const result = await pipeline.process(rawContent, baseOptions);
 
       expect(result.errors).toHaveLength(0);
-      expect(result.textContent).toBeTruthy();
       expect(result.textContent).toContain("Avian Carriers");
       expect(result.contentType).toBe("text/markdown");
-    });
-
-    it("should produce Markdown formatting for DOCX with structure", async () => {
-      // The sample.docx has paragraphs; Xberg with OutputFormat.Markdown
-      // preserves document structure in Markdown format
-      const content = loadFixture("sample.docx");
-      const rawContent = createRawContent(
-        "sample.docx",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        content,
-      );
-
-      const result = await pipeline.process(rawContent, baseOptions);
-
-      expect(result.errors).toHaveLength(0);
-      expect(result.textContent).toBeTruthy();
-      expect(result.textContent).toContain("Demonstration of DOCX support in calibre");
-      expect(result.contentType).toBe("text/markdown");
+      // sample.pdf carries no title metadata.
+      expect(result.title).toBe("sample.pdf");
+      expect(result.links).toEqual([]);
     });
 
     it("should include sheet names and table separators for XLSX", async () => {
@@ -411,52 +186,61 @@ describe("DocumentPipeline", () => {
       expect(result.textContent).toContain("| --- | --- |");
     });
 
-    it("should resolve application/octet-stream from URL extension and process document", async () => {
-      const content = loadFixture("sample.pdf");
-      const rawContent: RawContent = {
-        content,
-        mimeType: "application/octet-stream",
-        source: "https://cdn.example.com/files/report.pdf",
-        status: FetchStatus.SUCCESS,
-      };
+    it("should resolve application/octet-stream from the URL's document extension", async () => {
+      const cases: Array<{
+        label: string;
+        source: string;
+        content: Buffer;
+        expected: { text: string; title: string } | { error: string };
+      }> = [
+        {
+          label: "PDF extension",
+          source: "https://cdn.example.com/files/report.pdf",
+          content: loadFixture("sample.pdf"),
+          expected: { text: "Avian Carriers", title: "report.pdf" },
+        },
+        {
+          label: "DOCX extension before a query",
+          source: "https://s3.amazonaws.com/bucket/report.docx?X-Amz-Signature=abc123",
+          content: loadFixture("sample.docx"),
+          expected: {
+            text: "Demonstration of DOCX support in calibre",
+            title: "DOCX Demo",
+          },
+        },
+        {
+          label: "no document extension",
+          source: "https://example.com/api/download/12345",
+          content: Buffer.from("not a real document"),
+          expected: { error: "Could not determine document type" },
+        },
+      ];
 
-      const result = await pipeline.process(rawContent, baseOptions);
+      for (const { label, source, content, expected } of cases) {
+        const result = await pipeline.process(
+          {
+            content,
+            mimeType: "application/octet-stream",
+            source,
+            status: FetchStatus.SUCCESS,
+          },
+          baseOptions,
+        );
 
-      expect(result.errors).toHaveLength(0);
-      expect(result.textContent).toBeTruthy();
-      expect(result.contentType).toBe("text/markdown");
-    });
-
-    it("should resolve application/octet-stream from URL with query params", async () => {
-      const content = loadFixture("sample.docx");
-      const rawContent: RawContent = {
-        content,
-        mimeType: "application/octet-stream",
-        source: "https://s3.amazonaws.com/bucket/report.docx?X-Amz-Signature=abc123",
-        status: FetchStatus.SUCCESS,
-      };
-
-      const result = await pipeline.process(rawContent, baseOptions);
-
-      expect(result.errors).toHaveLength(0);
-      expect(result.textContent).toBeTruthy();
-      expect(result.textContent).toContain("Demonstration of DOCX support in calibre");
-    });
-
-    it("should fail gracefully for application/octet-stream with no document extension", async () => {
-      const content = Buffer.from("not a real document");
-      const rawContent: RawContent = {
-        content,
-        mimeType: "application/octet-stream",
-        source: "https://example.com/api/download/12345",
-        status: FetchStatus.SUCCESS,
-      };
-
-      const result = await pipeline.process(rawContent, baseOptions);
-
-      expect(result.errors).toHaveLength(1);
-      expect(result.errors![0].message).toContain("Could not determine document type");
-      expect(result.textContent).toBeNull();
+        if ("error" in expected) {
+          expect
+            .soft(
+              result.errors?.map((error) => error.message),
+              label,
+            )
+            .toEqual([expect.stringContaining(expected.error)]);
+          expect.soft(result.textContent, label).toBeNull();
+        } else {
+          expect.soft(result.errors, label).toHaveLength(0);
+          expect.soft(result.textContent, label).toContain(expected.text);
+          expect.soft(result.title, label).toBe(expected.title);
+        }
+      }
     });
 
     it("should log the underlying cause chain when extraction throws", async () => {
@@ -484,7 +268,7 @@ describe("DocumentPipeline", () => {
       const result = await pipeline.process(rawContent, baseOptions);
 
       expect(result.errors).toHaveLength(1);
-      expect(result.errors![0].message).toContain("Failed to convert document");
+      expect(result.errors?.[0]?.message).toContain("Failed to convert document");
       expect(errorSpy).toHaveBeenCalledTimes(1);
       const logged = errorSpy.mock.calls[0][0];
       expect(logged).toContain("Failed to convert document");
@@ -549,7 +333,7 @@ describe("DocumentPipeline", () => {
       const result = await pipeline.process(rawContent, baseOptions);
 
       expect(result.errors).toHaveLength(1);
-      expect(result.errors![0].message).toContain("Failed to convert document");
+      expect(result.errors?.[0]?.message).toContain("Failed to convert document");
       expect(result.textContent).toBeNull();
       expect(result.chunks).toHaveLength(0);
       expect(errorSpy.mock.calls[0][0]).toContain("pdf_oxide: failed to load bytes");

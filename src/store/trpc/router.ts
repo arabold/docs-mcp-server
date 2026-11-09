@@ -9,6 +9,8 @@ import type {
   DbVersionWithLibrary,
   EmbeddingConfigInfo,
   FindVersionResult,
+  ListPagesOptions,
+  PageContentOptions,
   StoreSearchResult,
   VersionStatus,
 } from "../types";
@@ -24,11 +26,10 @@ const t = initTRPC.context<DataTrpcContext>().create({
 });
 
 // Common schemas
-const nonEmpty = z
-  .string()
-  .min(1)
-  .transform((s) => s.trim());
-const optionalVersion = z
+/** A required name, trimmed. */
+export const nonEmpty = z.string().trim().min(1);
+/** An optional version label, trimmed; empty means unversioned. */
+export const optionalVersion = z
   .string()
   .optional()
   .nullable()
@@ -70,6 +71,9 @@ export function createDataRouter(trpc: unknown) {
         },
       ),
 
+    // Searches the given version bucket as is, with "" meaning unversioned.
+    // Remote clients send it versions that are already resolved, so CLI
+    // `--exact-match` keeps working; the web UI uses `searchDocs` instead.
     search: tt.procedure
       .input(
         z.object({
@@ -103,33 +107,73 @@ export function createDataRouter(trpc: unknown) {
         },
       ),
 
-    removeVersion: tt.procedure
-      .input(z.object({ library: nonEmpty, version: optionalVersion }))
-      .mutation(
+    getPageContent: tt.procedure
+      .input(
+        z.object({
+          library: nonEmpty,
+          version: optionalVersion,
+          pathOrUrl: nonEmpty,
+          options: z
+            .object({
+              startChunk: z.number().int().nonnegative().optional(),
+              maxChars: z.number().positive().optional(),
+            })
+            .optional(),
+        }),
+      )
+      .query(
         async ({
           ctx,
           input,
         }: {
           ctx: DataTrpcContext;
-          input: { library: string; version: string | null | undefined };
+          input: {
+            library: string;
+            version: string | null | undefined;
+            pathOrUrl: string;
+            options?: PageContentOptions;
+          };
         }) => {
-          await ctx.docService.removeVersion(input.library, input.version ?? null);
-          return { ok: true } as const;
+          return await ctx.docService.getPageContent(
+            input.library,
+            input.version ?? null,
+            input.pathOrUrl,
+            input.options,
+          );
         },
       ),
 
-    removeAllDocuments: tt.procedure
-      .input(z.object({ library: nonEmpty, version: optionalVersion }))
-      .mutation(
+    listPages: tt.procedure
+      .input(
+        z.object({
+          library: nonEmpty,
+          version: optionalVersion,
+          options: z
+            .object({
+              contains: z.string().optional(),
+              limit: z.number().int().positive().max(200).optional(),
+              offset: z.number().int().nonnegative().optional(),
+            })
+            .optional(),
+        }),
+      )
+      .query(
         async ({
           ctx,
           input,
         }: {
           ctx: DataTrpcContext;
-          input: { library: string; version: string | null | undefined };
+          input: {
+            library: string;
+            version: string | null | undefined;
+            options?: ListPagesOptions;
+          };
         }) => {
-          await ctx.docService.removeAllDocuments(input.library, input.version ?? null);
-          return { ok: true } as const;
+          return await ctx.docService.listPages(
+            input.library,
+            input.version ?? null,
+            input.options,
+          );
         },
       ),
 

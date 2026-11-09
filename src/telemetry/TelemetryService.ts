@@ -1,6 +1,8 @@
 /**
  * TelemetryService listens to events from the EventBusService and tracks them to analytics.
  * This decouples telemetry concerns from the PipelineManager, following the event-driven architecture.
+ * A local backend starts one with its pipeline, so only the process that runs a
+ * job reports it; relayed copies of a remote worker's events are not reported.
  */
 
 import type { EventBusService } from "../events/EventBusService";
@@ -8,6 +10,7 @@ import { EventType } from "../events/types";
 import { type PipelineJob, PipelineJobStatus } from "../pipeline/types";
 import type { ScraperProgressEvent } from "../scraper/types";
 import { logger } from "../utils/logger";
+import { sanitizeErrorMessage } from "./sanitizer";
 import { TelemetryEvent, telemetry } from "./telemetry";
 
 export class TelemetryService {
@@ -86,7 +89,7 @@ export class TelemetryService {
           maxPagesConfigured: job.scraperOptions?.maxPages ?? null,
           hasVersion: !!job.version,
           hasError: !!job.error,
-          errorMessage: job.error?.message,
+          errorMessage: job.error ? sanitizeErrorMessage(job.error.message) : undefined,
         });
         break;
 

@@ -7,7 +7,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { VersionStatus } from "../../../store/types";
+import { libraryNamesMatch, VersionStatus } from "../../../store/types";
 import { useEnqueueRefreshJob, useListLibraries } from "../api/hooks";
 import { trpc } from "../api/trpc";
 import { useDocumentationDrawer } from "../components/AddEditDocumentationDrawer";
@@ -36,7 +36,7 @@ export default function LibraryDetail() {
   const utils = trpc.useUtils();
 
   const lib = useMemo(
-    () => data?.find((l) => l.library.toLowerCase() === library.toLowerCase()),
+    () => data?.find((l) => libraryNamesMatch(l.library, library)),
     [data, library],
   );
 

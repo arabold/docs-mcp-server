@@ -9,23 +9,7 @@ describe("TableContentSplitter", () => {
   } satisfies ContentSplitterOptions;
   const splitter = new TableContentSplitter(options);
 
-  it("should preserve table headers in each chunk", async () => {
-    const table = `| Column 1 | Column 2 | Column 3 |
-|----------|-----------|-----------|
-| Data A1  | Data A2   | Data A3   |
-| Data B1  | Data B2   | Data B3   |`;
-
-    const chunks = await splitter.split(table);
-
-    for (const chunk of chunks) {
-      const lines = chunk.split("\n");
-      expect(lines[0]).toBe("| Column 1 | Column 2 | Column 3 |");
-      expect(lines[1]).toBe("|---|---|---|");
-    }
-  });
-
-  it("should split large tables by rows", async () => {
-    // Create a large table that *might* exceed chunkSize, depending on header length
+  it("splits a large table by rows and repeats the header in each chunk", async () => {
     const rows = Array(20)
       .fill(0)
       .map((_, i) => `| Data ${i}A | Data ${i}B |`);
@@ -34,7 +18,8 @@ describe("TableContentSplitter", () => {
 ${rows.join("\n")}`;
 
     const chunks = await splitter.split(table);
-    expect(chunks.length).toBeGreaterThan(0); // It will split, even if not > 1
+
+    expect(chunks.length).toBeGreaterThan(1);
     for (const chunk of chunks) {
       const lines = chunk.split("\n");
       expect(lines[0]).toBe("| Header A | Header B |");
@@ -65,23 +50,6 @@ ${rows.join("\n")}`;
     expect(chunks[0]).toBe("");
   });
 
-  it("should preserve special characters", async () => {
-    const splitter = new TableContentSplitter(options);
-    const table = `| Symbol | Description |
-|---------|-------------|
-| →       | Arrow       |
-| 👋      | Wave        |
-| &copy;  | Copyright   |
-| <tag>   | HTML Tag    |`;
-
-    const chunks = await splitter.split(table);
-    const allContent = chunks.join("");
-    expect(allContent).toContain("→");
-    expect(allContent).toContain("👋");
-    expect(allContent).toContain("&copy;");
-    expect(allContent).toContain("<tag>");
-  });
-
   // Characterisation test for issue #418: tables with cells containing
   // backticks or fenced-block-like text are unusual but possible. The current
   // splitter cuts on `|`-delimited row boundaries and does not descend into
@@ -98,6 +66,9 @@ ${rows.join("\n")}`;
       "| body | `const x = 1;` |",
       "| auth | `Authorization: Bearer <token>` |",
       "| ping | `curl -s https://example.com/healthz` |",
+      "| arrow | → |",
+      "| wave | 👋 |",
+      "| copyright | &copy; |",
     ].join("\n");
 
     const chunks = await splitter.split(table);
@@ -111,6 +82,11 @@ ${rows.join("\n")}`;
     for (const c of chunks) {
       const lines = c.split("\n");
       expect(lines[0]).toBe("| Name | Example |");
+    }
+    // Special characters in cells come through unchanged.
+    const allContent = chunks.join("\n");
+    for (const special of ["<token>", "→", "👋", "&copy;"]) {
+      expect(allContent).toContain(special);
     }
   });
 });

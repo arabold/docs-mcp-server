@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.4/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.6.3/schema.json",
   "vcs": {
     "enabled": true,
     "clientKind": "git",
@@ -37,6 +37,26 @@
                 "deniedGlobals": {
                   "crypto": "crypto.randomUUID and crypto.subtle exist only in secure contexts, and the web portal is often served over plain HTTP on a LAN address, where they throw."
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["**/src/services/apiClient.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["**", "!@trpc/client", "!superjson", "!./appRouter"],
+                    "message": "The web UI bundles this module, so it may import only @trpc/client, superjson and the AppRouter type."
+                  }
+                ]
               }
             }
           }

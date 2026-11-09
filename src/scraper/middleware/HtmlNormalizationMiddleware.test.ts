@@ -11,7 +11,6 @@ describe("HtmlNormalizationMiddleware", () => {
     htmlContent: string,
     source = "https://example.com/page",
   ): MiddlewareContext => {
-    const $ = cheerio.load(htmlContent);
     const options: ScraperOptions = {
       url: source,
       library: "test-library",
@@ -24,517 +23,282 @@ describe("HtmlNormalizationMiddleware", () => {
       links: [],
       errors: [],
       options,
-      dom: $,
+      dom: cheerio.load(htmlContent),
     };
   };
 
-  describe("process", () => {
-    it("should skip normalization when no DOM is available", async () => {
-      const options: ScraperOptions = {
-        url: "https://example.com",
-        library: "test-library",
-        version: "1.0.0",
-      };
-      const context: MiddlewareContext = {
-        content: "<p>test</p>",
-        contentType: "text/html",
-        source: "https://example.com",
-        links: [],
-        errors: [],
-        options,
-      };
+  /** Runs the middleware on the HTML and returns the normalized DOM. */
+  async function normalize(html: string, source?: string): Promise<cheerio.CheerioAPI> {
+    const context = createContext(html, source);
+    await middleware.process(context, async () => {});
+    expect(context.errors).toEqual([]);
+    if (!context.dom) throw new Error("the middleware dropped the DOM");
+    return context.dom;
+  }
 
-      let nextCalled = false;
-      await middleware.process(context, async () => {
-        nextCalled = true;
-      });
+  it("should skip normalization when no DOM is available", async () => {
+    const context: MiddlewareContext = {
+      ...createContext("<p>test</p>"),
+      dom: undefined,
+    };
 
-      expect(nextCalled).toBe(true);
-      expect(context.errors).toHaveLength(0);
+    let nextCalled = false;
+    await middleware.process(context, async () => {
+      nextCalled = true;
     });
 
-    it("should handle processing errors gracefully", async () => {
-      const context = createContext('<img src="test.jpg">');
-      // Intentionally break the DOM to cause an error
-      context.dom = null as any;
-
-      let nextCalled = false;
-      await middleware.process(context, async () => {
-        nextCalled = true;
-      });
-
-      expect(nextCalled).toBe(true);
-    });
+    expect(nextCalled).toBe(true);
+    expect(context.errors).toHaveLength(0);
   });
 
-  describe("image URL normalization", () => {
-    it("should convert relative image URLs to absolute URLs", async () => {
-      const context = createContext(
-        `
-        <div>
-          <img src="image1.jpg" alt="Image 1">
-          <img src="/images/image2.png" alt="Image 2">
-          <img src="./relative/image3.gif" alt="Image 3">
-          <img src="../parent/image4.svg" alt="Image 4">
-        </div>
-      `,
-        "https://example.com/docs/page.html",
-      );
+  it("resolves image and link URLs against the page URL", async () => {
+    const cases: Array<{
+      label: string;
+      tag: "img" | "a";
+      value: string;
+      source: string;
+      expected: string;
+    }> = [
+      {
+        label: "relative image",
+        tag: "img",
+        value: "image1.jpg",
+        source: "https://example.com/docs/page.html",
+        expected: "https://example.com/docs/image1.jpg",
+      },
+      {
+        label: "root-relative image",
+        tag: "img",
+        value: "/images/image2.png",
+        source: "https://example.com/docs/page.html",
+        expected: "https://example.com/images/image2.png",
+      },
+      {
+        label: "dot-relative image",
+        tag: "img",
+        value: "./relative/image3.gif",
+        source: "https://example.com/docs/page.html",
+        expected: "https://example.com/docs/relative/image3.gif",
+      },
+      {
+        label: "parent-relative image",
+        tag: "img",
+        value: "../parent/image4.svg",
+        source: "https://example.com/docs/page.html",
+        expected: "https://example.com/parent/image4.svg",
+      },
+      {
+        label: "absolute HTTPS image",
+        tag: "img",
+        value: "https://cdn.example.com/image1.jpg",
+        source: "https://example.com/page",
+        expected: "https://cdn.example.com/image1.jpg",
+      },
+      {
+        label: "absolute HTTP image",
+        tag: "img",
+        value: "http://other.com/image2.png",
+        source: "https://example.com/page",
+        expected: "http://other.com/image2.png",
+      },
+      {
+        // The URL constructor is permissive and resolves this as a relative path.
+        label: "malformed image URL",
+        tag: "img",
+        value: "::invalid::url",
+        source: "https://example.com/page",
+        expected: "https://example.com/::invalid::url",
+      },
+      {
+        label: "relative link",
+        tag: "a",
+        value: "page1.html",
+        source: "https://example.com/docs/current.html",
+        expected: "https://example.com/docs/page1.html",
+      },
+      {
+        label: "root-relative link",
+        tag: "a",
+        value: "/docs/page2.html",
+        source: "https://example.com/docs/current.html",
+        expected: "https://example.com/docs/page2.html",
+      },
+      {
+        label: "dot-relative link",
+        tag: "a",
+        value: "./section/page3.html",
+        source: "https://example.com/docs/current.html",
+        expected: "https://example.com/docs/section/page3.html",
+      },
+      {
+        label: "parent-relative link",
+        tag: "a",
+        value: "../other/page4.html",
+        source: "https://example.com/docs/current.html",
+        expected: "https://example.com/other/page4.html",
+      },
+      {
+        label: "absolute HTTPS link",
+        tag: "a",
+        value: "https://external.com/page",
+        source: "https://example.com/page",
+        expected: "https://external.com/page",
+      },
+      {
+        label: "absolute HTTP link",
+        tag: "a",
+        value: "http://other.com/page",
+        source: "https://example.com/page",
+        expected: "http://other.com/page",
+      },
+      {
+        // The URL constructor is permissive; the link is resolved, not unwrapped.
+        label: "malformed link URL",
+        tag: "a",
+        value: "::invalid::url",
+        source: "https://example.com/page",
+        expected: "https://example.com/::invalid::url",
+      },
+    ];
 
-      await middleware.process(context, async () => {});
+    for (const { label, tag, value, source, expected } of cases) {
+      const html =
+        tag === "img"
+          ? `<img src="${value}" alt="Image">`
+          : `<a href="${value}">Link</a>`;
 
-      const $ = context.dom!;
-      const images = $("img");
+      const $ = await normalize(html, source);
 
-      expect($(images[0]).attr("src")).toBe("https://example.com/docs/image1.jpg");
-      expect($(images[1]).attr("src")).toBe("https://example.com/images/image2.png");
-      expect($(images[2]).attr("src")).toBe(
-        "https://example.com/docs/relative/image3.gif",
-      );
-      expect($(images[3]).attr("src")).toBe("https://example.com/parent/image4.svg");
-    });
-
-    it("should leave absolute image URLs unchanged", async () => {
-      const context = createContext(`
-        <div>
-          <img src="https://cdn.example.com/image1.jpg" alt="Image 1">
-          <img src="http://other.com/image2.png" alt="Image 2">
-        </div>
-      `);
-
-      await middleware.process(context, async () => {});
-
-      const $ = context.dom!;
-      const images = $("img");
-
-      expect($(images[0]).attr("src")).toBe("https://cdn.example.com/image1.jpg");
-      expect($(images[1]).attr("src")).toBe("http://other.com/image2.png");
-    });
-
-    it("should remove images without src attribute", async () => {
-      const context = createContext(`
-        <div>
-          <img alt="No source">
-          <img src="" alt="Empty source">
-        </div>
-      `);
-
-      await middleware.process(context, async () => {});
-
-      const $ = context.dom!;
-      const images = $("img");
-
-      // Both images should be removed (no src or empty src)
-      expect(images).toHaveLength(0);
-    });
-
-    it("should handle malformed relative URLs gracefully", async () => {
-      const context = createContext(`
-        <img src="::invalid::url" alt="Invalid URL">
-      `);
-
-      await middleware.process(context, async () => {});
-
-      const $ = context.dom!;
-      const img = $("img");
-
-      // URL constructor is permissive and will resolve this as a relative path
-      expect(img.attr("src")).toBe("https://example.com/::invalid::url");
-    });
+      expect.soft($(tag).attr(tag === "img" ? "src" : "href"), label).toBe(expected);
+    }
   });
 
-  describe("link normalization", () => {
-    it("should convert relative link URLs to absolute URLs", async () => {
-      const context = createContext(
-        `
-        <div>
-          <a href="page1.html">Page 1</a>
-          <a href="/docs/page2.html">Page 2</a>
-          <a href="./section/page3.html">Page 3</a>
-          <a href="../other/page4.html">Page 4</a>
-        </div>
-      `,
-        "https://example.com/docs/current.html",
-      );
+  it("removes images without a source and tracking pixels, and keeps other images", async () => {
+    const cases: Array<{ src: string | null; kept: boolean }> = [
+      { src: null, kept: false },
+      { src: "", kept: false },
+      { src: "https://d.adroll.com/cm/pixel.gif", kept: false },
+      { src: "https://bat.bing.com/action/0?ti=123", kept: false },
+      { src: "https://analytics.twitter.com/1/i/adsct?bci=4", kept: false },
+      { src: "https://analytics.twitter.com/1/i/adsct", kept: false },
+      { src: "https://pixel.rubiconproject.com/tap.php?nid=5578", kept: false },
+      { src: "https://dsum-sec.casalemedia.com/rum?cm_dsp_id=18", kept: false },
+      { src: "https://partners.tremorhub.com/sync?UIDM=abc123", kept: false },
+      { src: "https://id.rlcdn.com/464526.gif", kept: false },
+      // Tracking hosts match case-insensitively.
+      { src: "https://D.ADROLL.COM/pixel.gif", kept: false },
+      { src: "https://Analytics.Twitter.com/track", kept: false },
+      { src: "logo.png", kept: true },
+      { src: "content-image.jpg", kept: true },
+      { src: "https://cdn.example.com/banner.jpg", kept: true },
+      // Paths that contain tracking keywords on hosts that do not track.
+      { src: "https://cdn.example.com/adroll-logo.png", kept: true },
+      { src: "https://images.site.com/pixel-art.png", kept: true },
+      {
+        src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        kept: true,
+      },
+      {
+        src: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3C/svg%3E",
+        kept: true,
+      },
+      { src: "data:image/png;base64,abc123", kept: true },
+    ];
 
-      await middleware.process(context, async () => {});
+    for (const { src, kept } of cases) {
+      const html = src === null ? '<img alt="Image">' : `<img src="${src}" alt="Image">`;
 
-      const $ = context.dom!;
-      const links = $("a");
+      const $ = await normalize(html);
 
-      expect($(links[0]).attr("href")).toBe("https://example.com/docs/page1.html");
-      expect($(links[1]).attr("href")).toBe("https://example.com/docs/page2.html");
-      expect($(links[2]).attr("href")).toBe(
-        "https://example.com/docs/section/page3.html",
-      );
-      expect($(links[3]).attr("href")).toBe("https://example.com/other/page4.html");
-    });
+      expect.soft($("img").length, String(src)).toBe(kept ? 1 : 0);
+    }
+  });
 
-    it("should leave absolute HTTP/HTTPS URLs unchanged", async () => {
-      const context = createContext(`
-        <div>
-          <a href="https://external.com/page">External HTTPS</a>
-          <a href="http://other.com/page">External HTTP</a>
-        </div>
-      `);
+  it("unwraps links that do not lead to a web page and keeps their content", async () => {
+    const cases: Array<{ label: string; anchor: string; inner: string }> = [
+      { label: "fragment", anchor: '<a href="#section1">', inner: "this section" },
+      { label: "top fragment", anchor: '<a href="#top">', inner: "Back to top" },
+      {
+        label: "javascript: call",
+        anchor: `<a href="javascript:alert('Hello')">`,
+        inner: "Click me",
+      },
+      {
+        label: "javascript: void",
+        anchor: '<a href="javascript:void(0)">',
+        inner: "Another action",
+      },
+      {
+        label: "mailto:",
+        anchor: '<a href="mailto:test@example.com">',
+        inner: "Email us",
+      },
+      { label: "tel:", anchor: '<a href="tel:+1234567890">', inner: "Call us" },
+      { label: "ftp:", anchor: '<a href="ftp://files.example.com">', inner: "FTP" },
+      { label: "missing href", anchor: "<a>", inner: "Link without href" },
+      { label: "empty href", anchor: '<a href="">', inner: "Link with empty href" },
+      {
+        label: "nested formatting",
+        anchor: '<a href="#test">',
+        inner: "<strong>Bold</strong> and <em>italic</em> text",
+      },
+    ];
 
-      await middleware.process(context, async () => {});
+    for (const { label, anchor, inner } of cases) {
+      const $ = await normalize(`<p>See ${anchor}${inner}</a> for details.</p>`);
 
-      const $ = context.dom!;
-      const links = $("a");
+      expect.soft($("a").length, label).toBe(0);
+      expect.soft($("p").html(), label).toBe(`See ${inner} for details.`);
+    }
+  });
 
-      expect($(links[0]).attr("href")).toBe("https://external.com/page");
-      expect($(links[1]).attr("href")).toBe("http://other.com/page");
-    });
-
-    it("should unwrap anchor links while preserving text content", async () => {
-      const context = createContext(`
-        <div>
-          <p>See <a href="#section1">this section</a> for details.</p>
-          <a href="#top">Back to top</a>
-        </div>
-      `);
-
-      await middleware.process(context, async () => {});
-
-      const $ = context.dom!;
-      const html = $.html();
-
-      expect(html).toContain("See this section for details.");
-      expect(html).toContain("Back to top");
-      expect(html).not.toContain('<a href="#section1">');
-      expect(html).not.toContain('<a href="#top">');
-    });
-
-    it("should unwrap javascript: links while preserving text content", async () => {
-      const context = createContext(`
-        <div>
-          <a href="javascript:alert('Hello')">Click me</a>
-          <a href="javascript:void(0)">Another action</a>
-        </div>
-      `);
-
-      await middleware.process(context, async () => {});
-
-      const $ = context.dom!;
-      const html = $.html();
-
-      expect(html).toContain("Click me");
-      expect(html).toContain("Another action");
-      expect(html).not.toContain("javascript:");
-      expect(html).not.toContain("<a href=");
-    });
-
-    it("should unwrap other non-HTTP protocol links while preserving text content", async () => {
-      const context = createContext(`
-        <div>
-          <a href="mailto:test@example.com">Email us</a>
-          <a href="tel:+1234567890">Call us</a>
-          <a href="ftp://files.example.com">FTP</a>
-        </div>
-      `);
-
-      await middleware.process(context, async () => {});
-
-      const $ = context.dom!;
-      const html = $.html();
-
-      expect(html).toContain("Email us");
-      expect(html).toContain("Call us");
-      expect(html).toContain("FTP");
-      expect(html).not.toContain("mailto:");
-      expect(html).not.toContain("tel:");
-      expect(html).not.toContain("ftp:");
-      expect(html).not.toContain("<a href=");
-    });
-
-    it("should unwrap links without href attribute", async () => {
-      const context = createContext(`
-        <div>
-          <a>Link without href</a>
-          <a href="">Link with empty href</a>
-        </div>
-      `);
-
-      await middleware.process(context, async () => {});
-
-      const $ = context.dom!;
-      const html = $.html();
-
-      expect(html).toContain("Link without href");
-      expect(html).toContain("Link with empty href");
-      expect($("a")).toHaveLength(0);
-    });
-
-    it("should handle malformed relative URLs by converting them", async () => {
-      const context = createContext(`
-        <a href="::invalid::url">Invalid link</a>
-      `);
-
-      await middleware.process(context, async () => {});
-
-      const $ = context.dom!;
-      const links = $("a");
-
-      // URL constructor is permissive and will resolve this as a relative path
-      expect($(links[0]).attr("href")).toBe("https://example.com/::invalid::url");
-      expect($("a")).toHaveLength(1);
-    });
-
-    it("should simplify single div wrappers inside links", async () => {
-      const context = createContext(`
-        <a href="/reference/react/useDeferredValue">
+  it("simplifies a single div or paragraph wrapper inside a link", async () => {
+    const cases: Array<{ label: string; html: string; expected: string }> = [
+      {
+        // Adjacent inline children get a space so their text does not run together.
+        label: "div of spans",
+        html: `<a href="/reference/react/useDeferredValue">
           <div><span>Previous</span><span>useDeferredValue</span></div>
-        </a>
-      `);
+        </a>`,
+        expected: "<span>Previous</span> <span>useDeferredValue</span>",
+      },
+      {
+        label: "paragraph",
+        html: '<a href="/docs"><p>Read docs</p></a>',
+        expected: "Read docs",
+      },
+      {
+        label: "div with inline formatting",
+        html: '<a href="/docs"><div><strong>Bold</strong> and <em>italic</em></div></a>',
+        expected: "<strong>Bold</strong> and <em>italic</em>",
+      },
+    ];
 
-      await middleware.process(context, async () => {});
+    for (const { label, html, expected } of cases) {
+      const $ = await normalize(html);
 
-      const $ = context.dom!;
-      const linkHtml = $("a").html()?.trim();
-
-      expect(linkHtml).toBe("<span>Previous</span> <span>useDeferredValue</span>");
-    });
-
-    it("should simplify single paragraph wrappers inside links", async () => {
-      const context = createContext(`
-        <a href="/docs"><p>Read docs</p></a>
-      `);
-
-      await middleware.process(context, async () => {});
-
-      const $ = context.dom!;
-      expect($("a").html()).toBe("Read docs");
-    });
-
-    it("should preserve inline formatting while simplifying link wrappers", async () => {
-      const context = createContext(`
-        <a href="/docs"><div><strong>Bold</strong> and <em>italic</em></div></a>
-      `);
-
-      await middleware.process(context, async () => {});
-
-      const $ = context.dom!;
-      expect($("a strong")).toHaveLength(1);
-      expect($("a em")).toHaveLength(1);
-      expect($("a").html()).toBe("<strong>Bold</strong> and <em>italic</em>");
-    });
-
-    it("should preserve image wrappers inside links", async () => {
-      const context = createContext(`
-        <a href="/image"><div><img src="hero.png" alt="Hero"></div></a>
-      `);
-
-      await middleware.process(context, async () => {});
-
-      const $ = context.dom!;
-      expect($("a > div > img")).toHaveLength(1);
-    });
-
-    it("should preserve multiple block wrappers inside links", async () => {
-      const context = createContext(`
-        <a href="/two"><div>One</div><div>Two</div></a>
-      `);
-
-      await middleware.process(context, async () => {});
-
-      const $ = context.dom!;
-      expect($("a > div")).toHaveLength(2);
-      expect($("a").text()).toBe("OneTwo");
-    });
+      expect.soft($("a").html()?.trim(), label).toBe(expected);
+    }
   });
 
-  describe("tracking image removal", () => {
-    it("should remove tracking pixels from known ad networks", async () => {
-      const context = createContext(`
-        <div>
-          <img src="https://d.adroll.com/cm/pixel.gif" alt="Ad tracking">
-          <img src="https://bat.bing.com/action/0?ti=123" alt="Bing">
-          <img src="https://analytics.twitter.com/1/i/adsct?bci=4" alt="Twitter">
-          <img src="logo.png" alt="Logo">
-        </div>
-      `);
+  it("keeps link wrappers that hold an image or several blocks", async () => {
+    const cases: Array<{ label: string; html: string; expected: string }> = [
+      {
+        label: "image wrapper",
+        html: '<a href="/image"><div><img src="hero.png" alt="Hero"></div></a>',
+        expected: '<div><img src="https://example.com/hero.png" alt="Hero"></div>',
+      },
+      {
+        label: "several blocks",
+        html: '<a href="/two"><div>One</div><div>Two</div></a>',
+        expected: "<div>One</div><div>Two</div>",
+      },
+    ];
 
-      await middleware.process(context, async () => {});
+    for (const { label, html, expected } of cases) {
+      const $ = await normalize(html);
 
-      const $ = context.dom!;
-      const images = $("img");
-
-      // Only the legitimate logo image should remain
-      expect(images).toHaveLength(1);
-      expect($(images[0]).attr("alt")).toBe("Logo");
-    });
-
-    it("should remove tracking images with various tracking domains", async () => {
-      const context = createContext(`
-        <div>
-          <img src="https://pixel.rubiconproject.com/tap.php?nid=5578" alt="Rubicon">
-          <img src="https://dsum-sec.casalemedia.com/rum?cm_dsp_id=18" alt="Casale">
-          <img src="https://partners.tremorhub.com/sync?UIDM=abc123" alt="Tremor">
-          <img src="https://id.rlcdn.com/464526.gif" alt="RL">
-          <img src="content-image.jpg" alt="Content">
-        </div>
-      `);
-
-      await middleware.process(context, async () => {});
-
-      const $ = context.dom!;
-      const images = $("img");
-
-      expect(images).toHaveLength(1);
-      expect($(images[0]).attr("alt")).toBe("Content");
-    });
-
-    it("should keep legitimate images with similar but non-tracking domains", async () => {
-      const context = createContext(`
-        <div>
-          <img src="https://cdn.example.com/adroll-logo.png" alt="Company logo">
-          <img src="https://images.site.com/pixel-art.png" alt="Pixel art">
-        </div>
-      `);
-
-      await middleware.process(context, async () => {});
-
-      const $ = context.dom!;
-      const images = $("img");
-
-      // Both should remain - domain names contain tracking keywords but aren't tracking domains
-      expect(images).toHaveLength(2);
-    });
-
-    it("should preserve data URI images", async () => {
-      const context = createContext(`
-        <div>
-          <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" alt="Data URI">
-          <img src="https://d.adroll.com/pixel.gif" alt="Tracking">
-          <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3C/svg%3E" alt="SVG Data URI">
-        </div>
-      `);
-
-      await middleware.process(context, async () => {});
-
-      const $ = context.dom!;
-      const images = $("img");
-
-      // Both data URI images should remain, tracking image removed
-      expect(images).toHaveLength(2);
-      expect($(images[0]).attr("src")).toContain("data:image/png");
-      expect($(images[1]).attr("src")).toContain("data:image/svg");
-    });
-
-    it("should remove images without src attribute", async () => {
-      const context = createContext(`
-        <div>
-          <img alt="No source">
-          <img src="valid-image.jpg" alt="Valid">
-        </div>
-      `);
-
-      await middleware.process(context, async () => {});
-
-      const $ = context.dom!;
-      const images = $("img");
-
-      expect(images).toHaveLength(1);
-      expect($(images[0]).attr("alt")).toBe("Valid");
-    });
-
-    it("should handle mixed tracking and legitimate images", async () => {
-      const context = createContext(`
-        <div>
-          <img src="hero.jpg" alt="Hero">
-          <img src="https://bat.bing.com/action/0?ti=123" alt="Bing tracking">
-          <img src="logo.png" alt="Logo">
-          <img src="https://analytics.twitter.com/1/i/adsct" alt="Twitter tracking">
-          <img src="https://cdn.example.com/banner.jpg" alt="Banner">
-          <img src="data:image/png;base64,abc123" alt="Inline">
-        </div>
-      `);
-
-      await middleware.process(context, async () => {});
-
-      const $ = context.dom!;
-      const images = $("img");
-
-      expect(images).toHaveLength(4);
-      const alts = images.map((_i, el) => $(el).attr("alt")).get();
-      expect(alts).toEqual(["Hero", "Logo", "Banner", "Inline"]);
-    });
-
-    it("should be case-insensitive when matching tracking domains", async () => {
-      const context = createContext(`
-        <div>
-          <img src="https://D.ADROLL.COM/pixel.gif" alt="Uppercase">
-          <img src="https://Analytics.Twitter.com/track" alt="Mixed case">
-          <img src="valid-image.jpg" alt="Valid">
-        </div>
-      `);
-
-      await middleware.process(context, async () => {});
-
-      const $ = context.dom!;
-      const images = $("img");
-
-      expect(images).toHaveLength(1);
-      expect($(images[0]).attr("alt")).toBe("Valid");
-    });
-  });
-
-  describe("complex scenarios", () => {
-    it("should handle mixed content correctly", async () => {
-      const context = createContext(
-        `
-        <div>
-          <h1>Test Page</h1>
-          <img src="logo.png" alt="Logo">
-          <p>Check out <a href="https://external.com">this external link</a>.</p>
-          <p>Or see <a href="#section">this section</a> below.</p>
-          <p>Contact us via <a href="mailto:info@example.com">email</a>.</p>
-          <a href="./relative/page.html">Relative page</a>
-          <img src="https://cdn.example.com/banner.jpg" alt="Banner">
-        </div>
-      `,
-        "https://example.com/docs/",
-      );
-
-      await middleware.process(context, async () => {});
-
-      const $ = context.dom!;
-      const html = $.html();
-
-      // Images should be normalized
-      expect($('img[src="https://example.com/docs/logo.png"]')).toHaveLength(1);
-      expect($('img[src="https://cdn.example.com/banner.jpg"]')).toHaveLength(1);
-
-      // External HTTP link should remain
-      expect($('a[href="https://external.com"]')).toHaveLength(1);
-
-      // Relative link should be converted
-      expect($('a[href="https://example.com/docs/relative/page.html"]')).toHaveLength(1);
-
-      // Anchor and mailto links should be unwrapped
-      expect(html).toContain("this section");
-      expect(html).toContain("email");
-      expect(html).not.toContain('#section"');
-      expect(html).not.toContain("mailto:");
-    });
-
-    it("should preserve nested elements when unwrapping links", async () => {
-      const context = createContext(`
-        <div>
-          <a href="#test"><strong>Bold</strong> and <em>italic</em> text</a>
-        </div>
-      `);
-
-      await middleware.process(context, async () => {});
-
-      const $ = context.dom!;
-      const html = $.html();
-
-      expect(html).toContain("<strong>Bold</strong> and <em>italic</em> text");
-      expect($("strong")).toHaveLength(1);
-      expect($("em")).toHaveLength(1);
-      expect($("a")).toHaveLength(0);
-    });
+      expect.soft($("a").html(), label).toBe(expected);
+    }
   });
 });

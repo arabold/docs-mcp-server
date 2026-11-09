@@ -4,17 +4,18 @@
 
 import type { Argv } from "yargs";
 import { startAppServer } from "../../app";
-import { PipelineFactory, type PipelineOptions } from "../../pipeline";
-import { createLocalDocumentManagement } from "../../store";
+import { openBackend } from "../../services/backend";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { loadConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
+import { withModelChangeOptions, withPublicUrlOptions } from "../options";
 import { registerGlobalServices } from "../services";
 import {
   type CliContext,
   createAppServerConfig,
   ensurePlaywrightBrowsersInstalled,
   getEventBus,
+  handleEmbeddingModelChange,
   validateHost,
   validatePort,
 } from "../utils";
@@ -24,21 +25,17 @@ export function createWorkerCommand(cli: Argv) {
     "worker",
     "Start a background worker for processing scraping jobs",
     (yargs) => {
-      return yargs
-        .option("port", {
-          type: "string",
-          description: "Port for worker API",
-        })
-        .option("host", {
-          type: "string",
-          description: "Host to bind the worker API to",
-        })
-        .option("public-origin", {
-          type: "string",
-          description:
-            "Public origin advertised to clients (e.g., https://docs.example.com)",
-          alias: "publicOrigin",
-        })
+      return withPublicUrlOptions(
+        withModelChangeOptions(yargs)
+          .option("port", {
+            type: "string",
+            description: "Port for worker API",
+          })
+          .option("host", {
+            type: "string",
+            description: "Host to bind the worker API to",
+          }),
+      )
         .option("embedding-model", {
           type: "string",
           description:
@@ -80,23 +77,27 @@ export function createWorkerCommand(cli: Argv) {
 
         const eventBus = getEventBus(argv as CliContext);
 
-        const docService = await createLocalDocumentManagement(eventBus, appConfig);
-        const pipelineOptions: PipelineOptions = {
-          recoverJobs: (argv.resume as boolean) ?? true,
-          appConfig: appConfig,
-        };
-        const pipeline = await PipelineFactory.createPipeline(
-          docService,
+        const backend = await openBackend({
+          appConfig,
           eventBus,
-          pipelineOptions,
-        );
+          jobs: {
+            interruptedJobs: ((argv.resume as boolean) ?? true) ? "recover" : "fail",
+          },
+          onEmbeddingModelChange: (error, service) =>
+            handleEmbeddingModelChange(
+              error,
+              service,
+              argv.acceptModelChange as boolean | undefined,
+            ),
+        });
+        // Registered first, so shutdown closes it even when a server fails to start
+        registerGlobalServices({ backend });
 
         // Configure worker-only server
         const config = createAppServerConfig({
           enableWebInterface: false,
           enableMcpServer: false,
           enableApiServer: true,
-          enableWorker: true,
           port: appConfig.server.ports.worker,
           showLogo: argv.logo as boolean,
           startupContext: {
@@ -104,18 +105,9 @@ export function createWorkerCommand(cli: Argv) {
           },
         });
 
-        const appServer = await startAppServer(
-          docService,
-          pipeline,
-          eventBus,
-          config,
-          appConfig,
-        );
+        const appServer = await startAppServer(backend, config, appConfig);
 
-        registerGlobalServices({
-          appServer,
-          docService,
-        });
+        registerGlobalServices({ appServer });
 
         await new Promise(() => {}); // Keep running forever
       } catch (error) {

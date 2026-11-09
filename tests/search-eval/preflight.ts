@@ -6,7 +6,7 @@
 
 import envPaths from "env-paths";
 import { EventBusService } from "../../src/events/EventBusService";
-import { createDocumentManagement } from "../../src/store";
+import { openBackend } from "../../src/services/backend";
 import { loadConfig } from "../../src/utils/config";
 import { LogLevel, setLogLevel } from "../../src/utils/logger";
 import { loadDataset, uniqueLibraries } from "./loader";
@@ -33,7 +33,8 @@ export async function runPreflight(datasetPath: string): Promise<PreflightResult
   }
 
   const eventBus = new EventBusService();
-  const docService = await createDocumentManagement({ appConfig, eventBus });
+  const backend = await openBackend({ appConfig, eventBus });
+  const { docService } = backend;
 
   try {
     const missing: string[] = [];
@@ -46,7 +47,7 @@ export async function runPreflight(datasetPath: string): Promise<PreflightResult
     }
     return { ok: missing.length === 0, missing };
   } finally {
-    await docService.shutdown();
+    await backend.close();
   }
 }
 

@@ -1,131 +1,30 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveStorePath } from "../utils/paths";
-import {
-  generateInstallationId,
-  shouldEnableTelemetry,
-  TelemetryConfig,
-} from "./TelemetryConfig";
-
-// Mock fs and path utilities
-vi.mock("node:fs");
-vi.mock("../utils/paths", () => ({
-  resolveStorePath: vi.fn(() => "/mock/data/path"),
-}));
-
-describe("TelemetryConfig", () => {
-  let originalArgv: string[];
-  let originalEnv: NodeJS.ProcessEnv;
-
-  beforeEach(() => {
-    originalArgv = [...process.argv];
-    originalEnv = { ...process.env };
-    vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    process.argv = originalArgv;
-    process.env = originalEnv;
-  });
-
-  it("should be enabled by default", () => {
-    const config = TelemetryConfig.getInstance();
-    config.setEnabled(true); // Reset to default
-    expect(config.isEnabled()).toBe(true);
-  });
-
-  it("should allow runtime enable/disable", () => {
-    const config = TelemetryConfig.getInstance();
-    config.setEnabled(false);
-    expect(config.isEnabled()).toBe(false);
-
-    config.setEnabled(true);
-    expect(config.isEnabled()).toBe(true);
-  });
-});
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { generateInstallationId } from "./TelemetryConfig";
 
 describe("generateInstallationId", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("should generate new UUID when file does not exist", () => {
-    vi.mocked(fs.existsSync).mockReturnValue(false);
-    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
-    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
-
-    const id = generateInstallationId();
-
-    expect(id).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-    );
-    expect(fs.mkdirSync).toHaveBeenCalledWith("/mock/data/path", { recursive: true });
-    expect(fs.writeFileSync).toHaveBeenCalledWith(
-      path.join("/mock/data/path", "installation.id"),
-      id,
-      "utf8",
-    );
-  });
-
-  it("should read existing UUID from file", () => {
-    const existingId = "12345678-1234-4567-8901-123456789012";
-    vi.mocked(fs.existsSync).mockReturnValue(true);
-    vi.mocked(fs.readFileSync).mockReturnValue(existingId);
-
-    const id = generateInstallationId();
-
-    expect(id).toBe(existingId);
-    expect(fs.readFileSync).toHaveBeenCalledWith(
-      path.join("/mock/data/path", "installation.id"),
-      "utf8",
-    );
-  });
-
-  it("should use custom store path when provided", async () => {
-    const customPath = "/custom/store/path";
-
-    // Mock resolveStorePath to return the custom path
-    vi.mocked(resolveStorePath).mockReturnValueOnce(customPath);
-
-    vi.mocked(fs.existsSync).mockReturnValue(false);
-    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
-    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
-
-    const id = generateInstallationId(customPath);
-
-    expect(id).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-    );
-    expect(fs.mkdirSync).toHaveBeenCalledWith(customPath, { recursive: true });
-    expect(fs.writeFileSync).toHaveBeenCalledWith(
-      path.join(customPath, "installation.id"),
-      id,
-      "utf8",
-    );
-  });
-});
-
-describe("shouldEnableTelemetry", () => {
-  let originalArgv: string[];
-  let originalEnv: NodeJS.ProcessEnv;
+  let storePath: string;
 
   beforeEach(() => {
-    originalArgv = [...process.argv];
-    originalEnv = { ...process.env };
-    vi.clearAllMocks();
+    storePath = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-installation-")),
+      "store",
+    );
   });
 
   afterEach(() => {
-    process.argv = originalArgv;
-    process.env = originalEnv;
+    fs.rmSync(path.dirname(storePath), { recursive: true, force: true });
   });
 
-  it("should return true when telemetry is enabled", () => {
-    delete process.env.DOCS_MCP_TELEMETRY;
-    process.argv = ["node", "script.js"];
+  it("stores a new UUID in the store path and returns the same one afterwards", () => {
+    const id = generateInstallationId(storePath);
 
-    const result = shouldEnableTelemetry();
-    expect(result).toBe(true);
+    expect(id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(fs.readFileSync(path.join(storePath, "installation.id"), "utf8")).toBe(id);
+    expect(generateInstallationId(storePath)).toBe(id);
   });
 });

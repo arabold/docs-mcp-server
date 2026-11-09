@@ -1,16 +1,23 @@
-import fs from "node:fs";
-import { type Browser, chromium, type Page } from "playwright";
+import type { Browser, BrowserContext, Page } from "playwright";
 import { ScraperAccessPolicy } from "../../utils/accessPolicy";
 import type { AppConfig } from "../../utils/config";
-import { HttpStatusError, RedirectError, ScraperError } from "../../utils/errors";
+import {
+  AccessPolicyError,
+  ChallengeError,
+  HttpStatusError,
+  RedirectError,
+  ScraperError,
+} from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
+import { detectChallengePage } from "./challenge";
 import { FingerprintGenerator } from "./FingerprintGenerator";
 import {
   DEFAULT_BROWSER_USER_AGENT,
   getHeader,
-  withMarkdownPreferredAccept,
+  withoutBrowserManagedHeaders,
 } from "./headers";
+import { ManagedBrowser } from "./ManagedBrowser";
 import {
   type ContentFetcher,
   type FetchOptions,
@@ -30,12 +37,21 @@ const MAX_REQUEST_REDIRECTS = 20;
  * This fetcher can handle JavaScript-heavy pages and bypass anti-scraping measures.
  */
 export class BrowserFetcher implements ContentFetcher {
-  private browser: Browser | null = null;
+  private readonly managedBrowser: ManagedBrowser;
   private fingerprintGenerator: FingerprintGenerator;
   private readonly defaultTimeoutMs: number;
   private readonly accessPolicy: ScraperAccessPolicy;
 
-  constructor(scraperConfig: AppConfig["scraper"]) {
+  /**
+   * @param scraperConfig - Scraper settings (timeouts, network policy).
+   * @param managedBrowser - The browser to fetch with; pass one to share it
+   * with other users, such as the HTML renderer.
+   */
+  constructor(
+    scraperConfig: AppConfig["scraper"],
+    managedBrowser = new ManagedBrowser(scraperConfig),
+  ) {
+    this.managedBrowser = managedBrowser;
     this.defaultTimeoutMs = scraperConfig.browserTimeoutMs;
     this.fingerprintGenerator = new FingerprintGenerator();
     this.accessPolicy = new ScraperAccessPolicy(scraperConfig.security);
@@ -55,14 +71,71 @@ export class BrowserFetcher implements ContentFetcher {
   }
 
   async fetch(source: string, options?: FetchOptions): Promise<RawContent> {
-    let page: Page | null = null;
-    let browserContext: { newPage(): Promise<Page>; close(): Promise<void> } | null =
-      null;
-
     try {
+      options?.signal?.throwIfAborted();
       await this.accessPolicy.assertNetworkUrlAllowed(source);
 
-      const browser = await this.ensureBrowserReady();
+      const browser = await this.managedBrowser.get();
+      try {
+        return await this.fetchWithBrowser(browser, source, options);
+      } catch (error) {
+        if (this.managedBrowser.isCurrent(browser) || options?.signal?.aborted) {
+          throw error;
+        }
+        // The browser went away under this page: Chromium exited (e.g. under
+        // memory pressure), or another user retired it. The page never got a
+        // fair attempt, so give it one more on the current browser.
+        logger.warn(`⚠️  Browser closed while fetching ${source}, retrying once`);
+        return await this.fetchWithBrowser(
+          await this.managedBrowser.get(),
+          source,
+          options,
+        );
+      }
+    } catch (error) {
+      if (options?.signal?.aborted) {
+        throw new ScraperError("Browser fetch cancelled", false);
+      }
+
+      // Preserve already-typed ScraperErrors (and their isRetryable flag) thrown
+      // by fetchWithBrowser or fetchViaRequest, rather than re-wrapping them
+      // into a new, always-non-retryable error.
+      if (error instanceof ScraperError) {
+        throw error;
+      }
+
+      logger.error(`❌ Browser fetch failed for ${source}: ${error}`);
+      throw new ScraperError(
+        `Browser fetch failed for ${source}: ${error instanceof Error ? error.message : String(error)}`,
+        false,
+        error instanceof Error ? error : undefined,
+      );
+    }
+  }
+
+  /**
+   * Loads `source` in a fresh context of the given browser.
+   *
+   * @param browser - The browser to open the page in.
+   * @param source - The URL to fetch.
+   * @param options - Headers, timeout and redirect policy for the fetch.
+   * @returns The fetched raw content.
+   */
+  private async fetchWithBrowser(
+    browser: Browser,
+    source: string,
+    options?: FetchOptions,
+  ): Promise<RawContent> {
+    let page: Page | null = null;
+    let browserContext: BrowserContext | null = null;
+    // Aborting closes the context, which ends a navigation in progress instead
+    // of letting it run until it times out.
+    const closeOnAbort = (): void => {
+      void browserContext?.close().catch(() => undefined);
+    };
+    options?.signal?.addEventListener("abort", closeOnAbort, { once: true });
+
+    try {
       const fingerprintHeaders = this.fingerprintGenerator.generateHeaders();
       browserContext = await browser.newContext({
         userAgent:
@@ -73,6 +146,8 @@ export class BrowserFetcher implements ContentFetcher {
           "https://browser-context.local",
         ),
       });
+      // An abort before the context existed had nothing to close.
+      options?.signal?.throwIfAborted();
       page = await browserContext.newPage();
       await page.setViewportSize({ width: 1920, height: 1080 });
 
@@ -84,18 +159,32 @@ export class BrowserFetcher implements ContentFetcher {
 
         return await route.continue();
       });
+      // The browser fails redirects to blocked addresses (see ManagedBrowser);
+      // remember which hop stopped the navigation, to name it in the error.
+      let blockedNavigation: string | undefined;
+      page.on("requestfailed", (request) => {
+        if (
+          request.frame() === page?.mainFrame() &&
+          request.isNavigationRequest() &&
+          request.failure()?.errorText.includes("ERR_BLOCKED_BY_CLIENT")
+        ) {
+          blockedNavigation = request.url();
+        }
+      });
 
       // Compose the browser-like fingerprint headers used both for the page's
       // own navigation and (if needed) the non-navigable request-API fallback,
-      // so the two look like the same client to anti-bot checks.
-      const requestHeaders = withMarkdownPreferredAccept(
-        {
-          ...fingerprintHeaders,
-          ...options?.headers,
-        },
-        options?.headers,
-      );
-      await page.setExtraHTTPHeaders(requestHeaders);
+      // so the two look like the same client to anti-bot checks. Like
+      // HttpFetcher, it keeps the fingerprint's HTML-first Accept.
+      const requestHeaders: Record<string, string> = {
+        ...fingerprintHeaders,
+        ...options?.headers,
+      };
+      // Chromium sets the Sec-Fetch-* and connection-level headers itself;
+      // overriding them would make it fail the page's scripts, styles and other
+      // sub-resources, or the navigation itself. The request API is
+      // Playwright's own client, so it keeps them.
+      await page.setExtraHTTPHeaders(withoutBrowserManagedHeaders(requestHeaders));
 
       // Set timeout
       const timeout = options?.timeout || this.defaultTimeoutMs;
@@ -120,12 +209,28 @@ export class BrowserFetcher implements ContentFetcher {
         response = await page.goto(source, { waitUntil: "load", timeout });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        // Non-navigable resources (Markdown, JSON, plain text, ...) make the
+        if (/ERR_BLOCKED_BY_CLIENT/.test(message)) {
+          throw new AccessPolicyError(
+            `Security policy blocked network access to ${blockedNavigation ?? source}`,
+          );
+        }
+        // Non-navigable resources (Markdown, JSON, binary files, ...) make the
         // browser begin a download, so page.goto rejects with
-        // ERR_INVALID_ARGUMENT / ERR_ABORTED. Fetch those through the context's
-        // request API instead (see fetchViaRequest): it shares cookies — so any
+        // ERR_INVALID_ARGUMENT / ERR_ABORTED, or with "Download is starting"
+        // while requests are routed. Fetch those through the context's request
+        // API instead (see fetchViaRequest): it shares cookies — so any
         // anti-bot clearance carries over — but does not try to render them.
-        if (/ERR_INVALID_ARGUMENT|ERR_ABORTED/i.test(message)) {
+        // A navigation cut off because its page or browser is going away (for
+        // example, the browser was replaced) is reported as ERR_ABORTED too;
+        // that is no download, so it is not fetched again here. Only a page
+        // that went first says "frame was detached": a closed browser leaves
+        // a bare ERR_ABORTED, so ask the browser itself.
+        const goingAway =
+          /frame was detached/i.test(message) || !this.managedBrowser.isCurrent(browser);
+        if (
+          !goingAway &&
+          /ERR_INVALID_ARGUMENT|ERR_ABORTED|Download is starting/i.test(message)
+        ) {
           return await this.fetchViaRequest(
             page,
             source,
@@ -195,6 +300,15 @@ export class BrowserFetcher implements ContentFetcher {
       const content = MimeTypeUtils.isHtml(mimeType)
         ? await page.content()
         : await response.body();
+
+      // A challenge the browser could not get past either is still on the page
+      // after the load settled; its status alone does not give it away.
+      const challengeType =
+        typeof content === "string" ? detectChallengePage(content) : null;
+      if (challengeType) {
+        throw new ChallengeError(source, finalStatus, challengeType);
+      }
+
       const contentBuffer = Buffer.isBuffer(content)
         ? content
         : Buffer.from(content, "utf-8");
@@ -211,25 +325,8 @@ export class BrowserFetcher implements ContentFetcher {
         etag,
         status: FetchStatus.SUCCESS,
       } satisfies RawContent;
-    } catch (error) {
-      if (options?.signal?.aborted) {
-        throw new ScraperError("Browser fetch cancelled", false);
-      }
-
-      // Preserve already-typed ScraperErrors (and their isRetryable flag) thrown
-      // earlier in this method or in fetchViaRequest, rather than re-wrapping
-      // them into a new, always-non-retryable error.
-      if (error instanceof ScraperError) {
-        throw error;
-      }
-
-      logger.error(`❌ Browser fetch failed for ${source}: ${error}`);
-      throw new ScraperError(
-        `Browser fetch failed for ${source}: ${error instanceof Error ? error.message : String(error)}`,
-        false,
-        error instanceof Error ? error : undefined,
-      );
     } finally {
+      options?.signal?.removeEventListener("abort", closeOnAbort);
       await page?.unroute("**/*").catch(() => undefined);
       await page?.close().catch(() => undefined);
       await browserContext?.close().catch(() => undefined);
@@ -247,9 +344,11 @@ export class BrowserFetcher implements ContentFetcher {
    * @param source - The non-navigable resource URL to fetch.
    * @param options - The original fetch options (headers, redirect policy).
    * @param timeout - Navigation/request timeout in milliseconds.
-   * @param headers - The same composed fingerprint/Accept headers set on the
-   * page via `setExtraHTTPHeaders`, so the request-API call presents the same
-   * client identity as the browser that (potentially) just solved a challenge.
+   * @param headers - The composed fingerprint and caller headers, including
+   * any Sec-Fetch-* or connection-level values among them. The page itself
+   * leaves those to Chromium; the request-API call sends them as composed, so
+   * it presents the same client identity as the browser that (potentially)
+   * just solved a challenge.
    * @returns The fetched raw content.
    */
   private async fetchViaRequest(
@@ -306,6 +405,15 @@ export class BrowserFetcher implements ContentFetcher {
     const contentType = response.headers()["content-type"] || "application/octet-stream";
     const { mimeType, charset } = MimeTypeUtils.parseContentType(contentType);
     const content = Buffer.from(await response.body());
+
+    // The origin visit above does not clear every challenge, and the request
+    // then gets the challenge page in place of the resource.
+    const challengeType = MimeTypeUtils.isHtml(mimeType)
+      ? detectChallengePage(content)
+      : null;
+    if (challengeType) {
+      throw new ChallengeError(source, response.status(), challengeType);
+    }
 
     return {
       content,
@@ -372,81 +480,9 @@ export class BrowserFetcher implements ContentFetcher {
   }
 
   /**
-   * Resolves the Chromium binary to launch.
-   *
-   * Playwright's own managed build is pinned to the installed Playwright
-   * version and is always preferred. A distro Chromium is only a fallback for
-   * environments that skipped the browser download, since an arbitrary system
-   * build can drift from the protocol Playwright expects.
-   *
-   * @returns An explicit executable path, or undefined to let Playwright choose.
-   */
-  private static resolveChromiumExecutablePath(): string | undefined {
-    const configuredPath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
-    if (configuredPath) {
-      return configuredPath;
-    }
-
-    try {
-      if (fs.existsSync(chromium.executablePath())) {
-        return undefined;
-      }
-    } catch {
-      // executablePath() throws when no managed build is registered at all.
-    }
-
-    const systemPath = [
-      "/usr/lib/chromium/chromium",
-      "/usr/bin/chromium",
-      "/usr/bin/chromium-browser",
-    ].find((candidate) => fs.existsSync(candidate));
-
-    if (systemPath) {
-      logger.debug(
-        `Playwright's managed Chromium is unavailable; using system Chromium at ${systemPath}`,
-      );
-    }
-    return systemPath;
-  }
-
-  public static async launchBrowser(): Promise<Browser> {
-    return chromium.launch({
-      headless: true,
-      executablePath: BrowserFetcher.resolveChromiumExecutablePath(),
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-blink-features=AutomationControlled",
-      ],
-    });
-  }
-
-  private async ensureBrowserReady(): Promise<Browser> {
-    if (!this.browser) {
-      logger.debug("Launching browser...");
-      this.browser = await BrowserFetcher.launchBrowser();
-    }
-
-    return this.browser;
-  }
-
-  /**
-   * Close the browser and clean up resources.
-   * Always attempts cleanup even if browser is disconnected to reap zombie processes.
+   * Closes the browser this fetcher uses.
    */
   async close(): Promise<void> {
-    // Close page first
-    if (this.browser) {
-      try {
-        await this.browser.close();
-      } catch (error) {
-        logger.warn(`⚠️  Error closing browser: ${error}`);
-      } finally {
-        this.browser = null;
-      }
-    }
-
-    logger.debug("Browser closed successfully");
+    await this.managedBrowser.close();
   }
 }

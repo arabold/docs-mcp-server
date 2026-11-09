@@ -45,34 +45,9 @@ export class EventBusService {
   }
 
   /**
-   * Subscribe to events once (auto-unsubscribes after first event).
-   */
-  once<T extends EventType>(eventType: T, listener: EventListener<T>): void {
-    this.emitter.once(eventType, listener);
-  }
-
-  /**
    * Remove a specific listener.
    */
   off<T extends EventType>(eventType: T, listener: EventListener<T>): void {
     this.emitter.off(eventType, listener);
-  }
-
-  /**
-   * Remove all listeners for a specific event type, or all listeners if no type specified.
-   */
-  removeAllListeners(eventType?: EventType): void {
-    if (eventType === undefined) {
-      this.emitter.removeAllListeners();
-    } else {
-      this.emitter.removeAllListeners(eventType);
-    }
-  }
-
-  /**
-   * Get the count of listeners for a specific event type.
-   */
-  listenerCount(eventType: EventType): number {
-    return this.emitter.listenerCount(eventType);
   }
 }

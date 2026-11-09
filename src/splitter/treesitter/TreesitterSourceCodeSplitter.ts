@@ -114,34 +114,6 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
   }
 
   /**
-   * Check if the content type is supported
-   */
-  isSupportedContentType(contentType?: string): boolean {
-    return this.getParserForContent(contentType) !== undefined;
-  }
-
-  /**
-   * Get the list of supported languages
-   */
-  getSupportedLanguages(): string[] {
-    return this.registry.getSupportedLanguages();
-  }
-
-  /**
-   * Get the list of supported file extensions
-   */
-  getSupportedExtensions(): string[] {
-    return this.registry.getSupportedExtensions();
-  }
-
-  /**
-   * Get the list of supported MIME types
-   */
-  getSupportedMimeTypes(): string[] {
-    return this.registry.getSupportedMimeTypes();
-  }
-
-  /**
    * Helper method to split content using TextContentSplitter only if needed
    * and create ContentChunks with the specified hierarchical path and level
    */

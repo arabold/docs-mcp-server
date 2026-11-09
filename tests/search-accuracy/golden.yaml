@@ -1,0 +1,1578 @@
+# Golden set of the search accuracy benchmark. See README.md.
+#
+# Each query names the passage(s) that answer it, on a page of the corpus pinned
+# in corpus.yaml. Grade 3 answers the query directly, 2 answers part of it, and
+# 1 is useful context. Passages are matched word by word, ignoring case,
+# punctuation and Markdown syntax.
+#
+# The passages quote the documentation of these projects, with Markdown
+# formatting removed:
+#   react.dev (https://github.com/reactjs/react.dev), CC BY 4.0
+#     (https://creativecommons.org/licenses/by/4.0/)
+#   FastAPI (https://github.com/fastapi/fastapi), MIT License
+#   Vite (https://github.com/vitejs/vite), MIT License
+#   Pydantic (https://github.com/pydantic/pydantic), MIT License
+
+status: draft
+notes: "Written on 2026-10-18 by a language model from the indexed chunks, 30 queries per library,
+  and checked by script: every passage is in one chunk of its page, appears on no other page, and
+  question and agent-request queries do not reuse most of their passage's words. Change status to
+  reviewed once a person has read every query and its passages."
+queries:
+  - id: react-001
+    library: react
+    query: too many re-renders error
+    intent: troubleshooting
+    style: keywords
+    passages:
+      - page: reference/react/useState.md
+        grade: 3
+        text: "Typically, this means that you're unconditionally setting state during render, so your
+          component enters a loop: render, set state (which causes a render), render, set state
+          (which causes a render), and so on."
+      - page: learn/tutorial-tic-tac-toe.md
+        grade: 2
+        text: Because handleClick(0) alters the state of the board component by calling setSquares, your
+          entire board component will be re-rendered again. But this runs handleClick(0) again,
+          leading to an infinite loop
+  - id: react-002
+    library: react
+    query: reset state when prop changes
+    intent: how-to
+    style: keywords
+    passages:
+      - page: learn/you-might-not-need-an-effect.md
+        grade: 3
+        text: By passing userId as a key to the Profile component, you're asking React to treat two Profile
+          components with different userId as two different components that should not share any
+          state.
+      - page: reference/react/useState.md
+        grade: 2
+        text: You can reset a component's state by passing a different key to a component.
+  - id: react-003
+    library: react
+    query: update nested object in state
+    intent: how-to
+    style: keywords
+    passages:
+      - page: learn/updating-objects-in-state.md
+        grade: 3
+        text: In order to change city, you would first need to produce the new artwork object (pre-populated
+          with data from the previous one), and then produce the new person object which points at
+          the new artwork
+      - page: learn/updating-objects-in-state.md
+        grade: 2
+        text: To update a nested object, you need to create copies all the way up from the place you're
+          updating.
+  - id: react-004
+    library: react
+    query: useEffect vs useLayoutEffect
+    intent: comparison
+    style: keywords
+    passages:
+      - page: reference/react/useLayoutEffect.md
+        grade: 3
+        text: useLayoutEffect is a version of useEffect that fires before the browser repaints the screen.
+      - page: reference/react/useEffect.md
+        grade: 2
+        text: If your Effect must block the browser from painting the screen, replace useEffect with
+          useLayoutEffect. Note that this shouldn't be needed for the vast majority of Effects.
+  - id: react-005
+    library: react
+    query: dedupe fetch across server components
+    intent: api-lookup
+    style: keywords
+    passages:
+      - page: reference/react/cache.md
+        grade: 3
+        text: When multiple components make the same data fetch, only one request is made and the data
+          returned is cached and shared across components.
+  - id: react-006
+    library: react
+    query: hooks conditional call order
+    intent: conceptual
+    style: keywords
+    passages:
+      - page: reference/eslint-plugin-react-hooks/lints/rules-of-hooks.md
+        grade: 3
+        text: React relies on the order in which hooks are called to correctly preserve state between
+          renders. Each time your component renders, React expects the exact same hooks to be called
+          in the exact same order.
+      - page: learn/state-a-components-memory.md
+        grade: 2
+        text: Instead, to enable their concise syntax, Hooks rely on a stable call order on every render of
+          the same component.
+      - page: reference/rules/rules-of-hooks.md
+        grade: 1
+        text: Don't call Hooks inside loops, conditions, nested functions, or try/catch/finally blocks.
+  - id: react-007
+    library: react
+    query: use server directive server components
+    intent: conceptual
+    style: keywords
+    passages:
+      - page: reference/rsc/server-components.md
+        grade: 3
+        text: A common misunderstanding is that Server Components are denoted by "use server", but there is
+          no directive for Server Components. The "use server" directive is used for Server
+          Functions.
+      - page: reference/rsc/use-server.md
+        grade: 2
+        text: Add 'use server' at the top of an async function body to mark the function as callable by the
+          client. We call these functions Server Functions.
+  - id: react-008
+    library: react
+    query: preload font react-dom
+    intent: api-lookup
+    style: keywords
+    passages:
+      - page: reference/react-dom/preload.md
+        grade: 3
+        text: preload lets you eagerly fetch a resource such as a stylesheet, font, or external script that
+          you expect to use.
+  - id: react-009
+    library: react
+    query: suppressHydrationWarning
+    intent: api-lookup
+    style: identifier
+    passages:
+      - page: reference/react-dom/components/common.md
+        grade: 3
+        text: If you set suppressHydrationWarning to true, React will not warn you about mismatches in the
+          attributes and the content of that element. It only works one level deep, and is intended
+          to be used as an escape hatch.
+      - page: reference/react-dom/client/hydrateRoot.md
+        grade: 2
+        text: If a single element’s attribute or text content is unavoidably different between the server
+          and the client (for example, a timestamp), you may silence the hydration mismatch warning.
+  - id: react-010
+    library: react
+    query: useSyncExternalStore getServerSnapshot
+    intent: api-lookup
+    style: identifier
+    passages:
+      - page: reference/react/useSyncExternalStore.md
+        grade: 3
+        text: "getServerSnapshot: A function that returns the initial snapshot of the data in the store. It
+          will be used only during server rendering and during hydration of server-rendered content
+          on the client."
+      - page: reference/react/useSyncExternalStore.md
+        grade: 2
+        text: This lets you provide the initial snapshot value which will be used before the app becomes
+          interactive.
+  - id: react-011
+    library: react
+    query: StrictMode development checks
+    intent: api-lookup
+    style: identifier
+    passages:
+      - page: reference/react/StrictMode.md
+        grade: 3
+        text: Your components will re-render an extra time to find bugs caused by impure rendering. Your
+          components will re-run Effects an extra time to find bugs caused by missing Effect
+          cleanup.
+      - page: reference/react/StrictMode.md
+        grade: 2
+        text: All of these checks are development-only and do not impact the production build.
+  - id: react-012
+    library: react
+    query: React.lazy code splitting
+    intent: how-to
+    style: identifier
+    passages:
+      - page: reference/react/lazy.md
+        grade: 3
+        text: Now that your component's code loads on demand, you also need to specify what should be
+          displayed while it is loading. You can do this by wrapping the lazy component or any of
+          its parents into a <Suspense> boundary
+      - page: reference/react/lazy.md
+        grade: 2
+        text: "To defer loading this component's code until it's rendered for the first time, replace this
+          import with:"
+  - id: react-013
+    library: react
+    query: useDeferredValue vs debounce
+    intent: comparison
+    style: identifier
+    passages:
+      - page: reference/react/useDeferredValue.md
+        grade: 3
+        text: Unlike debouncing or throttling, it doesn't require choosing any fixed delay. If the user's
+          device is fast (e.g. powerful laptop), the deferred re-render would happen almost
+          immediately and wouldn't be noticeable.
+      - page: reference/react/useDeferredValue.md
+        grade: 2
+        text: Also, unlike with debouncing or throttling, deferred re-renders done by useDeferredValue are
+          interruptible by default.
+  - id: react-014
+    library: react
+    query: '"use no memo" directive'
+    intent: api-lookup
+    style: identifier
+    passages:
+      - page: reference/react-compiler/directives/use-no-memo.md
+        grade: 3
+        text: When a function contains "use no memo", the React Compiler will skip it entirely during
+          optimization. This is useful as a temporary escape hatch when debugging or when dealing
+          with code that doesn't work correctly with the compiler.
+      - page: learn/react-compiler/installation.md
+        grade: 2
+        text: If a component is causing issues after compilation, you can temporarily opt it out using the
+          "use no memo" directive
+  - id: react-015
+    library: react
+    query: <Activity mode="hidden"> effects
+    intent: conceptual
+    style: identifier
+    passages:
+      - page: reference/react/Activity.md
+        grade: 3
+        text: 'When an Activity boundary is hidden, React will visually hide its children using the display:
+          "none" CSS property. It will also destroy their Effects, cleaning up any active
+          subscriptions.'
+      - page: reference/react/Activity.md
+        grade: 2
+        text: When the boundary becomes visible again, React will reveal the children with their previous
+          state restored, and re-create their Effects.
+  - id: react-016
+    library: react
+    query: Why does useFormStatus never report pending while my form is submitting?
+    intent: troubleshooting
+    style: question
+    passages:
+      - page: reference/react-dom/hooks/useFormStatus.md
+        grade: 3
+        text: If the component that calls useFormStatus is not nested in a <form>, status.pending will
+          always return false.
+  - id: react-017
+    library: react
+    query: What's the actual difference between useMemo and useCallback?
+    intent: comparison
+    style: question
+    passages:
+      - page: reference/react/useCallback.md
+        grade: 3
+        text: useCallback caches the function itself. Unlike useMemo, it does not call the function you
+          provide.
+      - page: reference/react/useMemo.md
+        grade: 2
+        text: The only benefit to useCallback is that it lets you avoid writing an extra nested function
+          inside.
+  - id: react-018
+    library: react
+    query: What's the difference between a controlled and an uncontrolled text input?
+    intent: comparison
+    style: question
+    passages:
+      - page: reference/react-dom/components/input.md
+        grade: 3
+        text: It does not control what the value should be right now. To render a controlled input, pass the
+          value prop to it (or checked for checkboxes and radios).
+      - page: learn/sharing-state-between-components.md
+        grade: 1
+        text: Uncontrolled components are easier to use within their parents because they require less
+          configuration. But they're less flexible when you want to coordinate them together.
+  - id: react-019
+    library: react
+    query: How do deeply nested components get data without prop drilling through every level?
+    intent: how-to
+    style: question
+    passages:
+      - page: learn/passing-data-deeply-with-context.md
+        grade: 3
+        text: Context lets a parent--even a distant one!--provide some data to the entire tree inside of it.
+      - page: reference/react/createContext.md
+        grade: 2
+        text: Context lets components pass information deep down without explicitly passing props.
+  - id: react-020
+    library: react
+    query: Does a 'use client' parent turn server components passed as children into client components?
+    intent: conceptual
+    style: question
+    passages:
+      - page: reference/rsc/use-client.md
+        grade: 3
+        text: Recall that 'use client' defines the boundary between server and client code on the module
+          dependency tree, not the render tree.
+      - page: reference/rsc/use-client.md
+        grade: 2
+        text: Client Components can render Server Components because you can pass JSX as props.
+  - id: react-021
+    library: react
+    query: Is it a bad idea to use the map index as the key?
+    intent: conceptual
+    style: question
+    passages:
+      - page: learn/rendering-lists.md
+        grade: 3
+        text: But the order in which you render items will change over time if an item is inserted, deleted,
+          or if the array gets reordered. Index as a key often leads to subtle and confusing bugs.
+      - page: learn/tutorial-tic-tac-toe.md
+        grade: 2
+        text: Using the array index as a key is problematic when trying to re-order a list's items or
+          inserting/removing list items.
+  - id: react-022
+    library: react
+    query: How do I focus a text input when the user clicks a button?
+    intent: how-to
+    style: question
+    passages:
+      - page: learn/manipulating-the-dom-with-refs.md
+        grade: 3
+        text: In the handleClick function, read the input DOM node from inputRef.current and call focus() on
+          it with inputRef.current.focus().
+  - id: react-023
+    library: react
+    query: Why does logging state right after calling the setter still show the old value?
+    intent: troubleshooting
+    style: question
+    passages:
+      - page: reference/react/useState.md
+        grade: 3
+        text: This is because states behaves like a snapshot. Updating state requests another render with
+          the new state value, but does not affect the count JavaScript variable in your
+          already-running event handler.
+      - page: learn/state-as-a-snapshot.md
+        grade: 2
+        text: However, state behaves more like a snapshot. Setting it does not change the state variable you
+          already have, but instead triggers a re-render.
+  - id: react-024
+    library: react
+    query: Our server-rendered page reports a hydration mismatch because a drafts widget reads
+      localStorage while rendering. Is there a built-in React way to mark just that widget as
+      browser-only, so the server skips it and the client renders it after load?
+    intent: troubleshooting
+    style: agent-request
+    passages:
+      - page: reference/react-dom/browser.md
+        grade: 3
+        text: During server rendering, use(browser()) stops rendering the component and leaves the closest
+          <Suspense> boundary's fallback in its place. In the browser, use(browser()) returns
+          undefined, so the component renders normally.
+      - page: reference/react-dom/client/hydrateRoot.md
+        grade: 2
+        text: If a component should render only in the browser, call use(browser()) instead of waiting for
+          an Effect.
+  - id: react-025
+    library: react
+    query: On a profile page, a useEffect fetches user details whenever userId changes. When someone
+      clicks through profiles quickly, an earlier slow response sometimes lands last and shows the
+      wrong person. How should the Effect be written so outdated responses get discarded?
+    intent: troubleshooting
+    style: agent-request
+    passages:
+      - page: reference/react/useEffect.md
+        grade: 3
+        text: "Note the ignore variable which is initialized to false, and is set to true during cleanup.
+          This ensures your code doesn't suffer from \"race conditions\": network responses may
+          arrive in a different order than you sent them."
+      - page: learn/synchronizing-with-effects.md
+        grade: 2
+        text: You can't "undo" a network request that already happened, but your cleanup function should
+          ensure that the fetch that's not relevant anymore does not keep affecting your
+          application.
+  - id: react-026
+    library: react
+    query: "I'm building a like button: the heart should flip the moment it's clicked, while the API
+      request is still pending, and go back to its previous look if the request fails. Which React
+      hook handles this, and what happens on failure?"
+    intent: how-to
+    style: agent-request
+    passages:
+      - page: reference/react/useOptimistic.md
+        grade: 3
+        text: You can wrap props or state in useOptimistic to update it immediately while an Action is in
+          progress.
+      - page: reference/react/useOptimistic.md
+        grade: 2
+        text: Since the parent typically only updates value on success, a failure means value hasn't
+          changed, so the UI shows what it showed before the optimistic update.
+  - id: react-027
+    library: react
+    query: In ChatRoom, the Effect that connects to the room also shows a toast styled with the current
+      theme, so toggling dark mode disconnects and reconnects the socket. I need the documented
+      pattern for reading the newest theme inside the Effect without making the connection depend on
+      it.
+    intent: how-to
+    style: agent-request
+    passages:
+      - page: reference/react/useEffectEvent.md
+        grade: 3
+        text: They always “see” the latest values from render (like props and state) without
+          re-synchronizing your Effect, so they're excluded from Effect dependencies.
+      - page: learn/separating-events-from-effects.md
+        grade: 2
+        text: Here, onConnected is called an Effect Event. It's a part of your Effect logic, but it behaves
+          a lot more like an event handler.
+  - id: react-028
+    library: react
+    query: Our dashboard has tabs, and opening the Analytics tab renders a huge chart that locks up the
+      page, so users can't switch to another tab until it finishes. Which React API marks that state
+      update as non-urgent so the interface keeps reacting to clicks?
+    intent: how-to
+    style: agent-request
+    passages:
+      - page: reference/react/startTransition.md
+        grade: 3
+        text: Transitions let you keep the user interface updates responsive even on slow devices. With a
+          Transition, your UI stays responsive in the middle of a re-render.
+      - page: reference/react/useTransition.md
+        grade: 2
+        text: You can update state and (optionally) perform side effects within an Action, and the work will
+          be done in the background without blocking user interactions on the page.
+  - id: react-029
+    library: react
+    query: Reviewing a PR where a form stores fullName in its own state and keeps it in sync with
+      firstName and lastName through a useEffect. Before suggesting a change, I want the guidance
+      React gives for values that can be derived from other state.
+    intent: conceptual
+    style: agent-request
+    passages:
+      - page: learn/you-might-not-need-an-effect.md
+        grade: 3
+        text: Instead, calculate it during rendering. This makes your code faster (you avoid the extra
+          "cascading" updates), simpler (you remove some code), and less error-prone (you avoid bugs
+          caused by different state variables getting out of sync with each other).
+      - page: reference/eslint-plugin-react-hooks/lints/set-state-in-effect.md
+        grade: 2
+        text: This creates an extra render pass that could have been avoided by transforming data directly
+          during render or deriving state from props.
+  - id: react-030
+    library: react
+    query: I'm wiring renderToPipeableStream into an Express handler. Normal visitors should get
+      streamed HTML, but for search engine bots I want to send the page only after everything,
+      including suspended parts, has finished rendering. Which option callback should I pipe the
+      response from?
+    intent: api-lookup
+    style: agent-request
+    passages:
+      - page: reference/react-dom/server/renderToPipeableStream.md
+        grade: 3
+        text: "onAllReady: A callback that fires when all rendering is complete, including both the shell
+          and all additional content. You can use this instead of onShellReady for crawlers and
+          static generation."
+  - id: fastapi-001
+    library: fastapi
+    query: response_model_exclude_unset
+    intent: api-lookup
+    style: identifier
+    passages:
+      - page: tutorial/response-model.md
+        grade: 3
+        text: and those default values won't be included in the response, only the values actually set.
+  - id: fastapi-002
+    library: fastapi
+    query: catch WebSocketDisconnect
+    intent: api-lookup
+    style: identifier
+    passages:
+      - page: advanced/websockets.md
+        grade: 3
+        text: When a WebSocket connection is closed, the await websocket.receive_text() will raise a
+          WebSocketDisconnect exception, which you can then catch and handle like in this example.
+  - id: fastapi-003
+    library: fastapi
+    query: jsonable_encoder return value
+    intent: api-lookup
+    style: identifier
+    passages:
+      - page: tutorial/encoder.md
+        grade: 3
+        text: It doesn't return a large str containing the data in JSON format (as a string). It returns a
+          Python standard data structure (e.g. a dict) with values and sub-values that are all
+          compatible with JSON.
+  - id: fastapi-004
+    library: fastapi
+    query: Body embed=True
+    intent: api-lookup
+    style: identifier
+    passages:
+      - page: tutorial/body-multiple-params.md
+        grade: 3
+        text: "But if you want it to expect a JSON with a key item and inside of it the model contents, as
+          it does when you declare extra body parameters, you can use the special Body parameter
+          embed:"
+  - id: fastapi-005
+    library: fastapi
+    query: redirect response default status code
+    intent: api-lookup
+    style: keywords
+    passages:
+      - page: advanced/custom-response.md
+        grade: 3
+        text: Returns an HTTP redirect. Uses a 307 status code (Temporary Redirect) by default.
+  - id: fastapi-006
+    library: fastapi
+    query: gzip middleware minimum response size
+    intent: api-lookup
+    style: keywords
+    passages:
+      - page: advanced/middleware.md
+        grade: 3
+        text: minimum_size - Do not GZip responses that are smaller than this minimum size in bytes.
+          Defaults to 500.
+  - id: fastapi-007
+    library: fastapi
+    query: swagger_ui_parameters
+    intent: api-lookup
+    style: identifier
+    passages:
+      - page: how-to/configure-swagger-ui.md
+        grade: 3
+        text: To configure them, pass the swagger_ui_parameters argument when creating the FastAPI() app
+          object or to the get_swagger_ui_html() function.
+  - id: fastapi-008
+    library: fastapi
+    query: I'm adding configuration to a FastAPI service. Values live in a dotenv file, and the
+      get_settings dependency must not hit the disk again on every request. How should the
+      pydantic-settings class and that dependency be set up so the config is built a single time?
+    intent: how-to
+    style: agent-request
+    passages:
+      - page: advanced/settings.md
+        grade: 3
+        text: But as we are using the @lru_cache decorator on top, the Settings object will be created only
+          once, the first time it's called.
+      - page: advanced/settings.md
+        grade: 2
+        text: Here we define the config env_file inside of your Pydantic Settings class, and set the value
+          to the filename with the dotenv file we want to use.
+  - id: fastapi-009
+    library: fastapi
+    query: how do I load a heavy ML model once before the app starts handling requests
+    intent: how-to
+    style: question
+    passages:
+      - page: advanced/events.md
+        grade: 3
+        text: You can define this startup and shutdown logic using the lifespan parameter of the FastAPI
+          app, and a "context manager" (I'll show you what that is in a second).
+  - id: fastapi-010
+    library: fastapi
+    query: In this project a dependency calls a paid external identity provider to resolve the current
+      user. For the pytest suite I want that call replaced by a stub returning a fixed fake user,
+      without touching the route code. What does FastAPI offer for that?
+    intent: how-to
+    style: agent-request
+    passages:
+      - page: advanced/testing-dependencies.md
+        grade: 3
+        text: For these cases, your FastAPI application has an attribute app.dependency_overrides, it is a
+          simple dict.
+  - id: fastapi-011
+    library: fastapi
+    query: fastapi server-sent events endpoint
+    intent: how-to
+    style: keywords
+    passages:
+      - page: tutorial/server-sent-events.md
+        grade: 3
+        text: To stream SSE with FastAPI, use yield in your path operation function and set
+          response_class=EventSourceResponse.
+  - id: fastapi-012
+    library: fastapi
+    query: how to update only the fields the client sent in a PATCH request
+    intent: how-to
+    style: question
+    passages:
+      - page: tutorial/body-updates.md
+        grade: 3
+        text: If you want to receive partial updates, it's very useful to use the parameter exclude_unset in
+          Pydantic's model's .model_dump().
+      - page: tutorial/sql-databases.md
+        grade: 2
+        text: And in the code, we get a dict with all the data sent by the client, only the data sent by the
+          client, excluding any values that would be there just for being the default values.
+  - id: fastapi-013
+    library: fastapi
+    query: We pull an admin router from a shared internal package that other teams also use, so its
+      source can't be edited. In our main.py it has to live under /admin, carry our X-Token check
+      and get its own tag. How do I apply those settings at registration time?
+    intent: how-to
+    style: agent-request
+    passages:
+      - page: tutorial/bigger-applications.md
+        grade: 3
+        text: "We can declare all that without having to modify the original APIRouter by passing those
+          parameters to app.include_router():"
+  - id: fastapi-014
+    library: fastapi
+    query: disable swagger docs in production
+    intent: how-to
+    style: keywords
+    passages:
+      - page: how-to/conditional-openapi.md
+        grade: 3
+        text: "Then you could disable OpenAPI (including the UI docs) by setting the environment variable
+          OPENAPI_URL to the empty string, like:"
+  - id: fastapi-015
+    library: fastapi
+    query: how do I read a repeated query param, e.g. ?tag=a&tag=b, as a list?
+    intent: how-to
+    style: question
+    passages:
+      - page: tutorial/query-params-str-validations.md
+        grade: 3
+        text: When you define a query parameter explicitly with Query you can also declare it to receive a
+          list of values, or said in another way, to receive multiple values.
+      - page: tutorial/query-params-str-validations.md
+        grade: 2
+        text: To declare a query parameter with a type of list, like in the example above, you need to
+          explicitly use Query, otherwise it would be interpreted as a request body.
+  - id: fastapi-016
+    library: fastapi
+    query: If two of my dependencies both depend on get_db, is get_db executed twice per request?
+    intent: conceptual
+    style: question
+    passages:
+      - page: tutorial/dependencies/sub-dependencies.md
+        grade: 3
+        text: If one of your dependencies is declared multiple times for the same path operation, for
+          example, multiple dependencies have a common sub-dependency, FastAPI will know to call
+          that sub-dependency only once per request.
+  - id: fastapi-017
+    library: fastapi
+    query: can anyone read the claims inside a JWT access token or are they hidden
+    intent: conceptual
+    style: question
+    passages:
+      - page: tutorial/security/oauth2-jwt.md
+        grade: 3
+        text: It is not encrypted, so, anyone could recover the information from the contents. But it's
+          signed.
+  - id: fastapi-018
+    library: fastapi
+    query: SecurityScopes
+    intent: conceptual
+    style: identifier
+    passages:
+      - page: advanced/security/oauth2-scopes.md
+        grade: 3
+        text: It will always have the security scopes declared in the current Security dependencies and all
+          the dependants for that specific path operation and that specific dependency tree.
+  - id: fastapi-019
+    library: fastapi
+    query: multiple middlewares execution order
+    intent: conceptual
+    style: keywords
+    passages:
+      - page: tutorial/middleware.md
+        grade: 3
+        text: When you add multiple middlewares using either @app.middleware() decorator or
+          app.add_middleware() method, each new middleware wraps the application, forming a stack.
+          The last middleware added is the outermost, and the first is the innermost.
+  - id: fastapi-020
+    library: fastapi
+    query: We're moving the API to a Kubernetes cluster where each deployment runs several pod replicas
+      behind the cluster load balancer. The current Dockerfile starts the app with --workers 4.
+      Should each container keep multiple worker processes, or is that redundant here?
+    intent: conceptual
+    style: agent-request
+    passages:
+      - page: deployment/docker.md
+        grade: 3
+        text: So, in this case, you would not want to have multiple workers in the container, for example
+          with the --workers command line option.
+      - page: deployment/server-workers.md
+        grade: 2
+        text: In particular, when running on Kubernetes you will probably not want to use workers and
+          instead run a single Uvicorn process per container, but I'll tell you about it later in
+          that chapter.
+  - id: fastapi-021
+    library: fastapi
+    query: when does the teardown part of a yield dependency happen relative to the response
+    intent: conceptual
+    style: question
+    passages:
+      - page: tutorial/dependencies/dependencies-with-yield.md
+        grade: 3
+        text: Normally the exit code of dependencies with yield is executed after the response is sent to
+          the client.
+      - page: tutorial/middleware.md
+        grade: 1
+        text: If you have dependencies with yield, the exit code will run after the middleware.
+  - id: fastapi-022
+    library: fastapi
+    query: Should my endpoint be declared with async def or plain def, and what changes?
+    intent: comparison
+    style: question
+    passages:
+      - page: async.md
+        grade: 3
+        text: When you declare a path operation function with normal def instead of async def, it is run in
+          an external threadpool that is then awaited, instead of being called directly (as it would
+          block the server).
+  - id: fastapi-023
+    library: fastapi
+    query: HTTPException FastAPI vs Starlette
+    intent: comparison
+    style: identifier
+    passages:
+      - page: tutorial/handling-errors.md
+        grade: 3
+        text: The only difference is that FastAPI's HTTPException accepts any JSON-able data for the detail
+          field, while Starlette's HTTPException only accepts strings for it.
+  - id: fastapi-024
+    library: fastapi
+    query: UploadFile vs bytes
+    intent: comparison
+    style: keywords
+    passages:
+      - page: tutorial/request-files.md
+        grade: 3
+        text: A file stored in memory up to a maximum size limit, and after passing this limit it will be
+          stored on disk.
+      - page: tutorial/request-files.md
+        grade: 2
+        text: Keep in mind that this means that the whole contents will be stored in memory. This will work
+          well for small files.
+  - id: fastapi-025
+    library: fastapi
+    query: After signup the app should send a welcome email without making the client wait, and every
+      night it must transcode large video files on separate machines. Is FastAPI's built-in
+      background task feature enough for both, or should part of this go to Celery?
+    intent: comparison
+    style: agent-request
+    passages:
+      - page: tutorial/background-tasks.md
+        grade: 3
+        text: If you need to perform heavy background computation and you don't necessarily need it to be
+          run by the same process (for example, you don't need to share memory, variables, etc), you
+          might benefit from using other bigger tools like Celery.
+      - page: tutorial/background-tasks.md
+        grade: 2
+        text: But if you need to access variables and objects from the same FastAPI app, or you need to
+          perform small background tasks (like sending an email notification), you can simply just
+          use BackgroundTasks.
+  - id: fastapi-026
+    library: fastapi
+    query: After bumping FastAPI, an old IoT device that POSTs JSON with no Content-Type header gets
+      validation errors because its body is no longer read as JSON. I can't update the firmware, so
+      the server has to accept these requests the way older releases did.
+    intent: troubleshooting
+    style: agent-request
+    passages:
+      - page: advanced/strict-content-type.md
+        grade: 3
+        text: "If you need to support clients that don't send a Content-Type header, you can disable strict
+          checking by setting strict_content_type=False:"
+  - id: fastapi-027
+    library: fastapi
+    query: Why does GET /users/me return 422 saying user_id must be an integer?
+    intent: troubleshooting
+    style: question
+    passages:
+      - page: tutorial/path-params.md
+        grade: 3
+        text: "Because path operations are evaluated in order, you need to make sure that the path for
+          /users/me is declared before the one for /users/{user_id}:"
+      - page: tutorial/path-params.md
+        grade: 2
+        text: Otherwise, the path for /users/{user_id} would match also for /users/me, "thinking" that it's
+          receiving a parameter user_id with a value of "me".
+  - id: fastapi-028
+    library: fastapi
+    query: Our FastAPI service runs behind Traefik, which exposes it under /api/v1 and strips that
+      prefix before forwarding. The endpoints respond fine, but the Swagger UI page breaks because
+      the browser requests /openapi.json at the domain root. What do I change on the app side?
+    intent: troubleshooting
+    style: agent-request
+    passages:
+      - page: advanced/behind-a-proxy.md
+        grade: 3
+        text: In these cases you can configure the server with fastapi run --root-path.
+      - page: advanced/behind-a-proxy.md
+        grade: 2
+        text: So, the frontend (that runs in the browser) would try to reach /openapi.json and wouldn't be
+          able to get the OpenAPI schema.
+  - id: fastapi-029
+    library: fastapi
+    query: cors wildcard origin with credentials
+    intent: troubleshooting
+    style: keywords
+    passages:
+      - page: tutorial/cors.md
+        grade: 3
+        text: None of allow_origins, allow_methods and allow_headers can be set to ['*'] if
+          allow_credentials is set to True.
+      - page: tutorial/cors.md
+        grade: 2
+        text: "But that will only allow certain types of communication, excluding everything that involves
+          credentials: Cookies, Authorization headers like those used with Bearer Tokens, etc."
+  - id: fastapi-030
+    library: fastapi
+    query: sqlite same thread error fastapi
+    intent: troubleshooting
+    style: keywords
+    passages:
+      - page: tutorial/sql-databases.md
+        grade: 3
+        text: Using check_same_thread=False allows FastAPI to use the same SQLite database in different
+          threads. This is necessary as one single request could use more than one thread (for
+          example in dependencies).
+  - id: vite-001
+    library: vite
+    query: vite proxy /api to backend
+    intent: how-to
+    style: keywords
+    passages:
+      - page: config/server-options.md
+        grade: 3
+        text: Any requests whose request path starts with that key will be proxied to the specified target.
+          If the key starts with ^, it will be interpreted as a RegExp.
+  - id: vite-002
+    library: vite
+    query: The user runs the Vite dev server inside WSL2, but edits saved from a Windows editor never
+      trigger a reload in the browser. I need to understand why file changes go unnoticed in that
+      setup and which watcher setting works around it.
+    intent: troubleshooting
+    style: agent-request
+    passages:
+      - page: config/server-options.md
+        grade: 3
+        text: When running Vite on WSL2, file system watching does not work when a file is edited by Windows
+          applications (non-WSL2 process). This is due to a WSL2 limitation.
+      - page: guide/troubleshooting.md
+        grade: 2
+        text: If you are running Vite with WSL2, Vite cannot watch file changes in some conditions.
+  - id: vite-003
+    library: vite
+    query: why is my .env variable undefined when I read it in the browser?
+    intent: troubleshooting
+    style: question
+    passages:
+      - page: guide/env-and-mode.md
+        grade: 3
+        text: Variables prefixed with VITE_ will be exposed in client-side source code after Vite bundling.
+      - page: config/shared-options.md
+        grade: 2
+        text: Env variables starting with envPrefix will be exposed to your client source code via
+          import.meta.env.
+  - id: vite-004
+    library: vite
+    query: vite NODE_ENV vs mode
+    intent: comparison
+    style: keywords
+    passages:
+      - page: guide/env-and-mode.md
+        grade: 3
+        text: It's important to note that NODE_ENV (process.env.NODE_ENV) and modes are two different
+          concepts.
+  - id: vite-005
+    library: vite
+    query: In the user's vite.config.ts I want the dev server port to come from their .env.development
+      file, but process.env doesn't contain it while the config runs. What is the supported way to
+      read those env files inside the config?
+    intent: how-to
+    style: agent-request
+    passages:
+      - page: config/index.md
+        grade: 3
+        text: If, however, values from .env* files must influence the config itself (for example to set
+          server.port, conditionally enable plugins, or compute define replacements), you can load
+          them manually using the exported loadEnv helper.
+      - page: guide/api-javascript.md
+        grade: 2
+        text: Load .env files within the envDir and merge them with the matching variables already present
+          in process.env. By default, only env variables prefixed with VITE_ are loaded, unless
+          prefixes is changed.
+  - id: vite-006
+    library: vite
+    query: should I put images in the public folder or import them from src?
+    intent: comparison
+    style: question
+    passages:
+      - page: guide/assets.md
+        grade: 3
+        text: In general, prefer importing assets unless you specifically need the guarantees provided by
+          the public directory.
+      - page: config/shared-options.md
+        grade: 2
+        text: Files in this directory are served at / during dev and copied to the root of outDir during
+          build, and are always served or copied as-is without transform.
+  - id: vite-007
+    library: vite
+    query: vite import file as string
+    intent: how-to
+    style: keywords
+    passages:
+      - page: guide/assets.md
+        grade: 3
+        text: Assets can be imported as strings using the ?raw suffix.
+  - id: vite-008
+    library: vite
+    query: what's the point of Vite bundling node_modules packages before serving the app in dev?
+    intent: conceptual
+    style: question
+    passages:
+      - page: guide/dep-pre-bundling.md
+        grade: 3
+        text: During development, Vite serves all code as native ESM. Therefore, Vite must convert
+          dependencies that are shipped as CommonJS or UMD into ESM first.
+      - page: guide/features.md
+        grade: 2
+        text: Pre-bundle them to improve page loading speed and convert CommonJS / UMD modules to ESM.
+  - id: vite-009
+    library: vite
+    query: A dependency in the user's project is only discovered after a plugin transform, so the dev
+      server re-bundles right after startup. It's a small package that already ships ESM. Should I
+      list it under optimizeDeps.include or optimizeDeps.exclude?
+    intent: comparison
+    style: agent-request
+    passages:
+      - page: guide/dep-pre-bundling.md
+        grade: 3
+        text: If the dependency is large (with many internal modules) or is CommonJS, then you should
+          include it; If the dependency is small and is already valid ESM, you can exclude it and
+          let the browser load it directly.
+  - id: vite-010
+    library: vite
+    query: optimizeDeps.include linked package
+    intent: api-lookup
+    style: identifier
+    passages:
+      - page: config/dep-optimization-options.md
+        grade: 3
+        text: By default, linked packages not inside node_modules are not pre-bundled. Use this option to
+          force a linked package to be pre-bundled.
+      - page: guide/dep-pre-bundling.md
+        grade: 2
+        text: However, this requires the linked dep to be exported as ESM. If not, you can add the
+          dependency to optimizeDeps.include in your config.
+  - id: vite-011
+    library: vite
+    query: build.rollupOptions
+    intent: api-lookup
+    style: identifier
+    passages:
+      - page: config/build-options.md
+        grade: 3
+        text: This option is an alias of build.rolldownOptions option. Use build.rolldownOptions option
+          instead.
+      - page: config/build-options.md
+        grade: 2
+        text: Directly customize the underlying Rolldown bundle. This is the same as options that can be
+          exported from a Rolldown config file and will be merged with Vite's internal Rolldown
+          options.
+  - id: vite-012
+    library: vite
+    query: vite import path aliases
+    intent: api-lookup
+    style: keywords
+    passages:
+      - page: config/shared-options.md
+        grade: 3
+        text: Defines aliases used to replace values in import or require statements. This works similar to
+          @rollup/plugin-alias.
+      - page: guide/features.md
+        grade: 1
+        text: "resolve.tsconfigPaths: true can be specified to tell Vite to use the paths option in
+          tsconfig.json to resolve imports."
+  - id: vite-013
+    library: vite
+    query: I'm turning the user's set of Vue components into a reusable npm package built with Vite. How
+      should the build be configured to emit a distributable bundle while keeping vue itself out of
+      the output, so consumers supply their own copy?
+    intent: how-to
+    style: agent-request
+    passages:
+      - page: guide/build.md
+        grade: 3
+        text: "When it is time to bundle your library for distribution, use the build.lib config option.
+          Make sure to also externalize any dependencies that you do not want to bundle into your
+          library, e.g. vue or react:"
+  - id: vite-014
+    library: vite
+    query: deploy vite app under subpath
+    intent: how-to
+    style: keywords
+    passages:
+      - page: guide/build.md
+        grade: 3
+        text: If you are deploying your project under a nested public path, simply specify the base config
+          option and all asset paths will be rewritten accordingly.
+      - page: config/shared-options.md
+        grade: 2
+        text: Base public path when served in development or production.
+  - id: vite-015
+    library: vite
+    query: Why do users get 'Failed to fetch dynamically imported module' after a new deploy?
+    intent: troubleshooting
+    style: question
+    passages:
+      - page: guide/troubleshooting.md
+        grade: 3
+        text: When you deploy a new version of your application, the HTML file and the JS files still
+          reference old chunk names that were deleted in the new deployment.
+      - page: guide/build.md
+        grade: 2
+        text: Vite emits vite:preloadError event when it fails to load dynamic imports. event.payload
+          contains the original import error.
+  - id: vite-016
+    library: vite
+    query: The user's browser console warns that module "fs" has been externalized for browser
+      compatibility, and a readFile call then fails at runtime. The import comes from a third-party
+      package. Explain why Vite does this and what the options are.
+    intent: troubleshooting
+    style: agent-request
+    passages:
+      - page: guide/troubleshooting.md
+        grade: 3
+        text: This is because Vite does not automatically polyfill Node.js modules. We recommend avoiding
+          Node.js modules for browser code to reduce the bundle size, although you can add polyfills
+          manually.
+  - id: vite-017
+    library: vite
+    query: import.meta.hot.accept callback
+    intent: api-lookup
+    style: identifier
+    passages:
+      - page: guide/api-hmr.md
+        grade: 3
+        text: "For a module to self-accept, use import.meta.hot.accept with a callback which receives the
+          updated module:"
+  - id: vite-018
+    library: vite
+    query: What's the difference between hot.dispose and hot.prune in Vite's HMR API?
+    intent: comparison
+    style: question
+    passages:
+      - page: guide/api-hmr.md
+        grade: 3
+        text: Compared to hot.dispose, this can be used if the source code cleans up side-effects by itself
+          on updates and you only need to clean-up when it's removed from the page.
+  - id: vite-019
+    library: vite
+    query: configureServer custom middleware
+    intent: api-lookup
+    style: identifier
+    passages:
+      - page: guide/api-plugin.md
+        grade: 3
+        text: "Hook for configuring the dev server. The most common use case is adding custom middlewares to
+          the internal connect app:"
+  - id: vite-020
+    library: vite
+    query: What are virtual modules in Vite plugins and when would I use one?
+    intent: conceptual
+    style: question
+    passages:
+      - page: guide/api-plugin.md
+        grade: 3
+        text: Virtual modules allow you to pass build time information to the source files using normal ESM
+          import syntax.
+  - id: vite-021
+    library: vite
+    query: import.meta.glob eager
+    intent: api-lookup
+    style: identifier
+    passages:
+      - page: guide/features.md
+        grade: 3
+        text: "If you'd rather import all the modules directly (e.g. relying on side-effects in these
+          modules to be applied first), you can pass { eager: true } as the second argument:"
+  - id: vite-022
+    library: vite
+    query: Does Vite check TypeScript types when building, or only strip them?
+    intent: conceptual
+    style: question
+    passages:
+      - page: guide/features.md
+        grade: 3
+        text: Note that Vite only performs transpilation on .ts files and does NOT perform type checking. It
+          assumes type checking is taken care of by your IDE and build process.
+  - id: vite-023
+    library: vite
+    query: worker plugins not applied build
+    intent: troubleshooting
+    style: keywords
+    passages:
+      - page: config/worker-options.md
+        grade: 3
+        text: Vite plugins that apply to the worker bundles. Note that config.plugins only applies to
+          workers in dev, it should be configured here instead for build.
+  - id: vite-024
+    library: vite
+    query: ssr.noExternal
+    intent: api-lookup
+    style: identifier
+    passages:
+      - page: config/ssr-options.md
+        grade: 3
+        text: Prevent listed dependencies from being externalized for SSR, which they will get bundled in
+          build.
+      - page: guide/ssr.md
+        grade: 2
+        text: If a dependency needs to be transformed by Vite's pipeline, for example, because Vite features
+          are used untranspiled in them, they can be added to ssr.noExternal.
+  - id: vite-025
+    library: vite
+    query: I'm wiring Vite into the user's existing Express server so it can render React pages on the
+      server during development. What's the recommended way to run Vite there so Express stays in
+      charge of routing and responses?
+    intent: how-to
+    style: agent-request
+    passages:
+      - page: guide/ssr.md
+        grade: 3
+        text: When building an SSR app, you likely want to have full control over your main server and
+          decouple Vite from the production environment. It is therefore recommended to use Vite in
+          middleware mode.
+      - page: guide/ssr.md
+        grade: 2
+        text: vite.middlewares is a Connect instance which can be used as a middleware in any
+          connect-compatible Node.js framework.
+  - id: vite-026
+    library: vite
+    query: vite preview production server
+    intent: conceptual
+    style: keywords
+    passages:
+      - page: guide/static-deploy.md
+        grade: 3
+        text: It is important to note that vite preview is intended for previewing the build locally and not
+          meant as a production server.
+      - page: guide/cli.md
+        grade: 2
+        text: Locally preview the production build. Do not use this as a production server as it's not
+          designed for it.
+  - id: vite-027
+    library: vite
+    query: I'm integrating Vite into the user's Laravel app, which renders its own HTML and pulls
+      scripts from the Vite dev server. During development, images and fonts referenced in their CSS
+      should be fetched from Vite rather than the Laravel host. Which option handles that?
+    intent: how-to
+    style: agent-request
+    passages:
+      - page: guide/backend-integration.md
+        grade: 3
+        text: Set server.origin so that generated asset URLs will be resolved using the back-end server URL
+          instead of a relative path. This is needed for assets such as images to load properly.
+      - page: config/server-options.md
+        grade: 2
+        text: Defines the origin of the generated asset URLs during development.
+  - id: vite-028
+    library: vite
+    query: Why do index files that re-export everything make Vite page loads slower?
+    intent: conceptual
+    style: question
+    passages:
+      - page: guide/performance.md
+        grade: 3
+        text: When you only import an individual API, e.g. import { slash } from './utils', all the files in
+          that barrel file need to be fetched and transformed as they may contain the slash API and
+          may also contain side-effects that run on initialization.
+  - id: vite-029
+    library: vite
+    query: server.warmup clientFiles
+    intent: how-to
+    style: identifier
+    passages:
+      - page: guide/performance.md
+        grade: 3
+        text: Vite allows you to warm up files that you know are frequently used, e.g. big-utils.js, using
+          the server.warmup option. This way big-utils.js will be ready and cached to be served
+          immediately when requested.
+      - page: config/server-options.md
+        grade: 2
+        text: Warm up files to transform and cache the results in advance. This improves the initial page
+          load during server starts and prevents transform waterfalls.
+  - id: vite-030
+    library: vite
+    query: esbuild option replaced by oxc
+    intent: conceptual
+    style: keywords
+    passages:
+      - page: guide/migration.md
+        grade: 3
+        text: Oxc is now used for JavaScript transformation instead of esbuild. Vite still supports the
+          esbuild option for backward compatibility by converting it to oxc automatically.
+      - page: config/shared-options.md
+        grade: 2
+        text: This option is converted to oxc option internally. Use oxc option instead.
+  - id: pydantic-001
+    library: pydantic
+    query: pydantic model reject unknown fields
+    intent: how-to
+    style: keywords
+    passages:
+      - page: concepts/models.md
+        grade: 3
+        text: "'ignore': Providing extra data is ignored (the default). 'forbid': Providing extra data is
+          not permitted."
+  - id: pydantic-002
+    library: pydantic
+    query: model_construct skip validation
+    intent: api-lookup
+    style: identifier
+    passages:
+      - page: concepts/models.md
+        grade: 3
+        text: Pydantic also provides the model_construct() method, which allows models to be created without
+          validation.
+  - id: pydantic-003
+    library: pydantic
+    query: when should I use a before validator instead of an after validator?
+    intent: comparison
+    style: question
+    passages:
+      - page: concepts/validators.md
+        grade: 3
+        text: run before Pydantic's internal parsing and validation (e.g. coercion of a str to an int).
+          These are more flexible than after validators, but they also have to deal with the raw
+          input
+      - page: concepts/validators.md
+        grade: 2
+        text: "After validators: run after Pydantic's internal validation. They are generally more type safe
+          and thus easier to implement."
+  - id: pydantic-004
+    library: pydantic
+    query: model_validator mode='after'
+    intent: api-lookup
+    style: identifier
+    passages:
+      - page: concepts/validators.md
+        grade: 3
+        text: "After validators: run after the whole model has been validated. As such, they are defined as
+          instance methods and can be seen as post-initialization hooks. Important note: the
+          validated instance should be returned."
+  - id: pydantic-005
+    library: pydantic
+    query: computed_field serialization
+    intent: api-lookup
+    style: identifier
+    passages:
+      - page: concepts/fields.md
+        grade: 3
+        text: The @computed_field decorator can be used to include properties (or cached properties) when
+          serializing a model or dataclass.
+  - id: pydantic-006
+    library: pydantic
+    query: pydantic run validators on defaults
+    intent: how-to
+    style: keywords
+    passages:
+      - page: concepts/fields.md
+        grade: 3
+        text: By default, Pydantic will not validate default values. The validate_default field parameter
+          (or the validate_default configuration value) can be used to enable this behavior
+      - page: concepts/validators.md
+        grade: 2
+        text: default values of fields are not validated unless configured to do so, and thus custom
+          validators will not be applied as well.
+  - id: pydantic-007
+    library: pydantic
+    query: model_dump(exclude_unset=True)
+    intent: api-lookup
+    style: identifier
+    passages:
+      - page: concepts/serialization.md
+        grade: 3
+        text: Using exclude_unset, any field that was not explicitly provided will be excluded
+  - id: pydantic-008
+    library: pydantic
+    query: what gets serialized when a parent-typed field holds a child class instance?
+    intent: conceptual
+    style: question
+    passages:
+      - page: concepts/serialization.md
+        grade: 3
+        text: the default behavior is to serialize the field value as though it was an instance of the class
+          used as the annotation, even if it is a subclass.
+      - page: migration.md
+        grade: 2
+        text: In V2, when we dump a model, we only include the fields that are defined on the annotated type
+          of the field.
+  - id: pydantic-009
+    library: pydantic
+    query: AliasChoices priority
+    intent: api-lookup
+    style: identifier
+    passages:
+      - page: concepts/alias.md
+        grade: 3
+        text: AliasChoices is used to specify a list of choices of aliases. Choices that appear first in the
+          list will have higher priority during validation.
+  - id: pydantic-010
+    library: pydantic
+    query: The client sends JSON with camelCase keys such as firstName and createdAt, but our model
+      attributes are snake_case. Rather than writing an alias on every single attribute, I want one
+      model-wide setting that derives them automatically. Where is that documented?
+    intent: how-to
+    style: agent-request
+    passages:
+      - page: concepts/alias.md
+        grade: 3
+        text: You can use the alias_generator parameter of Config to specify a callable (or group of
+          callables, via AliasGenerator) that will generate aliases for all fields in a model.
+      - page: concepts/alias.md
+        grade: 2
+        text: Pydantic offers three built-in alias generators that you can use out of the box
+  - id: pydantic-011
+    library: pydantic
+    query: how do I put example payloads into the JSON schema generated for a model?
+    intent: how-to
+    style: question
+    passages:
+      - page: concepts/json_schema.md
+        grade: 3
+        text: The json_schema_extra option can be used to add extra information to the JSON schema, either
+          at the Field level or at the Model level.
+  - id: pydantic-012
+    library: pydantic
+    query: I set str_strip_whitespace in the parent model's model_config, but a nested child model used
+      as a field type still keeps the surrounding spaces in its strings. Explain whether settings
+      carry over from an outer model to the models it contains.
+    intent: conceptual
+    style: agent-request
+    passages:
+      - page: concepts/config.md
+        grade: 3
+        text: For Pydantic models and dataclasses, configuration will not be propagated, each model has its
+          own "configuration boundary"
+  - id: pydantic-013
+    library: pydantic
+    query: can I turn off type coercion for just one attribute while the rest stays lax?
+    intent: how-to
+    style: question
+    passages:
+      - page: concepts/strict_mode.md
+        grade: 3
+        text: Strict mode can be enabled on specific fields, by setting the strict parameter of the Field()
+          function to True. Strict mode will be applied for such fields, even when the validation
+          methods are called in lax mode.
+      - page: concepts/fields.md
+        grade: 2
+        text: The strict parameter of the Field() function specifies whether the field should be validated
+          in strict mode.
+  - id: pydantic-014
+    library: pydantic
+    query: TypeAdapter.dump_json vs model_dump_json return type
+    intent: comparison
+    style: identifier
+    passages:
+      - page: concepts/type_adapter.md
+        grade: 3
+        text: TypeAdapter's dump_json methods returns a bytes object, unlike the corresponding method for
+          BaseModel, model_dump_json, which returns a str.
+  - id: pydantic-015
+    library: pydantic
+    query: "Profiling a Flask endpoint shows most of the time goes into pydantic: the handler calls
+      TypeAdapter(list[Order]).validate_python(payload) on every request. What is the recommended
+      way to structure this so the adapter is not rebuilt per call?"
+    intent: how-to
+    style: agent-request
+    passages:
+      - page: concepts/performance.md
+        grade: 3
+        text: If you're using a TypeAdapter in a function, it will be instantiated each time the function is
+          called. Instead, instantiate it once, and reuse it.
+      - page: concepts/type_adapter.md
+        grade: 2
+        text: This comes with some non-trivial overhead, so it is recommended to create a TypeAdapter for a
+          given type just once and reuse it in loops or other performance-critical code.
+  - id: pydantic-016
+    library: pydantic
+    query: union smart mode vs left_to_right
+    intent: comparison
+    style: keywords
+    passages:
+      - page: concepts/unions.md
+        grade: 3
+        text: smart mode - similar to "left to right mode" members are tried in order; however, validation
+          will proceed past the first match to attempt to find a better match, this is the default
+          mode for most union validation
+      - page: concepts/unions.md
+        grade: 2
+        text: With this approach, validation is attempted against each member of the union in their order
+          they're defined, and the first successful validation is accepted as input.
+  - id: pydantic-017
+    library: pydantic
+    query: what's the point of tagging union members with a discriminator?
+    intent: conceptual
+    style: question
+    passages:
+      - page: concepts/unions.md
+        grade: 3
+        text: Unions can be validated more efficiently using a discriminator, by specifically choosing which
+          member of the union to validate against. This makes validation more efficient and also
+          avoids a proliferation of errors when validation fails.
+      - page: concepts/performance.md
+        grade: 2
+        text: Tagged union (or discriminated union) is a union with a field that indicates which type it is.
+  - id: pydantic-018
+    library: pydantic
+    query: We're refactoring a codebase full of stdlib @dataclass types and want runtime type checking
+      on them. Should I convert them to BaseModel subclasses or apply pydantic's dataclass
+      decorator, and what would I give up with the decorator route?
+    intent: comparison
+    style: agent-request
+    passages:
+      - page: concepts/dataclasses.md
+        grade: 3
+        text: Keep in mind that Pydantic dataclasses are not a replacement for Pydantic models. They provide
+          a similar functionality to stdlib dataclasses with the addition of Pydantic validation.
+      - page: concepts/dataclasses.md
+        grade: 2
+        text: The various methods to validate, dump and generate a JSON Schema aren't available. Instead,
+          you can wrap the dataclass with a TypeAdapter and make use of its methods
+  - id: pydantic-019
+    library: pydantic
+    query: I'm ingesting a list of sensor readings where a few entries are malformed. Right now one bad
+      entry makes the whole list fail; I'd like pydantic to quietly drop the broken entries and keep
+      the good ones. Which type wrapper does this?
+    intent: how-to
+    style: agent-request
+    passages:
+      - page: concepts/types.md
+        grade: 3
+        text: "The OnErrorOmit annotation changes this behavior: any item failing validation is silently
+          omitted from the result, and the valid ones are kept."
+  - id: pydantic-020
+    library: pydantic
+    query: does validate_call also check what the function returns?
+    intent: api-lookup
+    style: question
+    passages:
+      - page: concepts/validation_decorator.md
+        grade: 3
+        text: By default, the return value of the function is not validated. To do so, the validate_return
+          argument of the decorator can be set to True.
+  - id: pydantic-021
+    library: pydantic
+    query: if I annotate a field as Optional[str] with no default, must callers still pass it?
+    intent: conceptual
+    style: question
+    passages:
+      - page: migration.md
+        grade: 3
+        text: A field annotated as typing.Optional[T] will be required, and will allow for a value of None.
+          It does not mean that the field has a default value of None.
+      - page: concepts/fields.md
+        grade: 2
+        text: a type annotated as Any or wrapped by Optional would be given an implicit default of None even
+          if no default was explicitly specified. This is no longer the case in Pydantic V2.
+  - id: pydantic-022
+    library: pydantic
+    query: ImportError BaseSettings pydantic 2
+    intent: troubleshooting
+    style: keywords
+    passages:
+      - page: migration.md
+        grade: 3
+        text: BaseSettings, the base object for Pydantic settings management, has been moved to a separate
+          package, pydantic-settings.
+      - page: concepts/pydantic_settings.md
+        grade: 2
+        text: Pydantic Settings provides optional Pydantic features for loading a settings or config class
+          from environment variables or secrets files.
+  - id: pydantic-023
+    library: pydantic
+    query: validation error location nested model
+    intent: api-lookup
+    style: keywords
+    passages:
+      - page: errors/errors.md
+        grade: 3
+        text: The first item in the loc list will be the field where the error occurred, and if the field is
+          a sub-model, subsequent items will be present to indicate the nested location of the
+          error.
+  - id: pydantic-024
+    library: pydantic
+    query: While importing our models module the app crashes with a PydanticUserError saying the Order
+      class is not fully defined. Order has a field typed as Customer, which is declared further
+      down the same file. What triggers this and how do I fix it?
+    intent: troubleshooting
+    style: agent-request
+    passages:
+      - page: errors/usage_errors.md
+        grade: 3
+        text: This error is raised when a type referenced in an annotation of a pydantic-validated type
+          (such as a subclass of BaseModel, or a pydantic dataclass) is not defined
+      - page: concepts/models.md
+        grade: 2
+        text: Pydantic tries to determine when this is necessary automatically and error if it wasn't done,
+          but you may want to call model_rebuild() proactively when dealing with recursive models or
+          generics.
+  - id: pydantic-025
+    library: pydantic
+    query: __modify_schema__ pydantic v2 error
+    intent: troubleshooting
+    style: identifier
+    passages:
+      - page: errors/usage_errors.md
+        grade: 3
+        text: The __modify_schema__ method is no longer supported in V2. You should use the
+          __get_pydantic_json_schema__ method instead.
+      - page: migration.md
+        grade: 2
+        text: __modify_schema__ becomes __get_pydantic_json_schema__. See JSON Schema Customization for more
+          information.
+  - id: pydantic-026
+    library: pydantic
+    query: Instance is frozen error pydantic
+    intent: troubleshooting
+    style: keywords
+    passages:
+      - page: errors/validation_errors.md
+        grade: 3
+        text: This error is raised when frozen is set in the configuration and you attempt to delete or
+          assign a new value to any of the fields
+      - page: concepts/models.md
+        grade: 2
+        text: Models can be configured to be immutable via model_config['frozen'] = True. When this is set,
+          attempting to change the values of instance attributes will raise errors.
+  - id: pydantic-027
+    library: pydantic
+    query: my Field pattern uses a lookahead and fails; can I use Python's re module instead?
+    intent: troubleshooting
+    style: question
+    passages:
+      - page: api/standard_library_types.md
+        grade: 3
+        text: By default, Pydantic will use the regex Rust crate to enforce the pattern constraint. The
+          regex engine can be controlled using the regex_engine configuration value.
+      - page: migration.md
+        grade: 2
+        text: If you still want to use Python's regex library, you can use the regex_engine config setting.
+  - id: pydantic-028
+    library: pydantic
+    query: We stream structured output from an LLM token by token and want to show a preview object
+      before the closing braces arrive, but the incomplete string currently throws a parse error.
+      Does pydantic offer a way to read truncated JSON so we can validate what has arrived so far?
+    intent: how-to
+    style: agent-request
+    passages:
+      - page: concepts/json.md
+        grade: 3
+        text: Pydantic's JSON parser offers support for partial JSON parsing, which is exposed via
+          pydantic_core.from_json().
+      - page: concepts/json.md
+        grade: 2
+        text: For partial JSON parsing to work reliably, all fields on the model should have default values.
+  - id: pydantic-029
+    library: pydantic
+    query: pydantic automatic type coercion
+    intent: conceptual
+    style: keywords
+    passages:
+      - page: concepts/strict_mode.md
+        grade: 3
+        text: By default, Pydantic will attempt to coerce values to the desired type when possible. For
+          example, you can pass the string '123' as the input for the int number type, and it will
+          be converted to the value 123.
+      - page: concepts/models.md
+        grade: 2
+        text: Pydantic may cast input data to force it to conform to model field types, and in some cases
+          this may result in a loss of information.
+  - id: pydantic-030
+    library: pydantic
+    query: pydantic core schema explained
+    intent: conceptual
+    style: keywords
+    passages:
+      - page: internals/architecture.md
+        grade: 3
+        text: "Pydantic uses the concept of a core schema: a structured (and serializable) Python dictionary
+          (represented using TypedDict definitions) describing a specific validation and
+          serialization logic."

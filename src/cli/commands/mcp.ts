@@ -6,23 +6,26 @@ import type { Argv } from "yargs";
 import { startAppServer } from "../../app";
 import { startStdioServer } from "../../mcp/startStdioServer";
 import { initializeTools } from "../../mcp/tools";
-import { PipelineFactory, type PipelineOptions } from "../../pipeline";
-import { DocumentManagementClient, DocumentManagementService } from "../../store";
-import { EmbeddingModelChangedError } from "../../store/errors";
-import type { IDocumentManagement } from "../../store/trpc/interfaces";
+import { openBackend } from "../../services/backend";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { loadConfig } from "../../utils/config";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
+import {
+  withAuthOptions,
+  withModelChangeOptions,
+  withPublicUrlOptions,
+  withServerIdentityOptions,
+} from "../options";
 import { applyGlobalCliOutputMode } from "../output";
 import { registerGlobalServices } from "../services";
 import {
   type CliContext,
+  checkAuthForProtocol,
   createAppServerConfig,
+  ensurePlaywrightBrowsersInstalled,
   getEventBus,
   handleEmbeddingModelChange,
-  parseAuthConfig,
   resolveProtocol,
-  validateAuthConfig,
   validatePort,
 } from "../utils";
 
@@ -30,29 +33,27 @@ export function createMcpCommand(cli: Argv) {
   cli.command(
     "mcp",
     "Start the MCP server (Standalone Mode)",
-    (yargs) => {
-      return (
-        yargs
-          .option("protocol", {
-            type: "string",
-            description: "Protocol for MCP server",
-            choices: ["auto", "stdio", "http"],
-            default: "auto",
-          })
-          .option("port", {
-            type: "string",
-            description: "Port for the MCP server",
-          })
-          .option("host", {
-            type: "string",
-            description: "Host to bind the MCP server to",
-          })
-          .option("public-origin", {
-            type: "string",
-            description:
-              "Public origin advertised to clients (e.g., https://docs.example.com)",
-            alias: "publicOrigin",
-          })
+    (yargs) =>
+      withAuthOptions(
+        withServerIdentityOptions(
+          withPublicUrlOptions(
+            withModelChangeOptions(yargs)
+              .option("protocol", {
+                type: "string",
+                description: "Protocol for MCP server",
+                choices: ["auto", "stdio", "http"],
+                defaultDescription: "auto",
+              })
+              .option("port", {
+                type: "string",
+                description: "Port for the MCP server",
+              })
+              .option("host", {
+                type: "string",
+                description: "Host to bind the MCP server to",
+              }),
+          ),
+        )
           .option("embedding-model", {
             type: "string",
             description:
@@ -69,48 +70,33 @@ export function createMcpCommand(cli: Argv) {
             type: "boolean",
             description:
               "Run in read-only mode (only expose read tools, disable write/job tools)",
-            default: false,
+            defaultDescription: "false",
             alias: "readOnly",
-          })
-          // Auth options
-          .option("auth-enabled", {
-            type: "boolean",
-            description: "Enable OAuth2/OIDC authentication for MCP endpoints",
-            default: false,
-            alias: "authEnabled",
-          })
-          .option("auth-issuer-url", {
-            type: "string",
-            description: "Issuer/discovery URL for OAuth2/OIDC provider",
-            alias: "authIssuerUrl",
-          })
-          .option("auth-audience", {
-            type: "string",
-            description: "JWT audience claim (identifies this protected resource)",
-            alias: "authAudience",
-          })
-      );
-    },
+          }),
+      ),
     async (argv) => {
+      // Reject a malformed --port before anything starts.
+      validatePort((argv.port as string) || "6280");
+      // Options the user did not pass are absent from argv, so the protocol,
+      // read-only mode and auth come from env, config file or defaults here.
+      // The logger writes to stderr, so loading before the stdio log level is
+      // set cannot corrupt the protocol stream on stdout.
+      const appConfig = loadConfig(argv, {
+        configPath: argv.config as string,
+        searchDir: argv.storePath as string, // resolvedStorePath passed via argv by middleware
+      });
+
       await telemetry.track(TelemetryEvent.CLI_COMMAND, {
         command: "mcp",
-        protocol: argv.protocol,
+        protocol: appConfig.server.protocol,
         port: argv.port,
         host: argv.host,
         useServerUrl: !!argv.serverUrl,
-        readOnly: argv.readOnly,
-        authEnabled: !!argv.authEnabled,
+        readOnly: appConfig.app.readOnly,
+        authEnabled: appConfig.auth.enabled,
       });
 
-      const _port = validatePort((argv.port as string) || "6280"); // fallback for validation if undefined, but loadConfig handles defaults.
-      // Wait, validatePort throws if invalid. If undefined, we should rely on loadConfig.
-      // Current logic calls validatePort(cmdOptions.port). If undefined, what happens?
-      // In Yargs, if no default, argv.port is undefined.
-      // validatePort(undefined) -> depends on impl. It expects string.
-      // I should modify validation or defer it.
-      // loadConfig will fill default.
-      // So I should load config FIRST.
-      const resolvedProtocol = resolveProtocol(argv.protocol as string);
+      const resolvedProtocol = resolveProtocol(appConfig.server.protocol);
       if (resolvedProtocol === "stdio") {
         setLogLevel(LogLevel.ERROR);
       } else {
@@ -120,78 +106,43 @@ export function createMcpCommand(cli: Argv) {
         });
       }
 
-      const appConfig = loadConfig(argv, {
-        configPath: argv.config as string,
-        searchDir: argv.storePath as string, // resolvedStorePath passed via argv by middleware
-      });
+      checkAuthForProtocol(appConfig.auth, resolvedProtocol, appConfig.server.ports.mcp);
 
-      // Now we have appConfig with defaults.
-      // Validate resolved values?
-      // validatePort(appConfig.server.ports.mcp.toString());
-      // The old code validated CLI input explicitly?
-      // Yes. I will validate from appConfig.
-
-      // Parse and validate auth configuration
-      const authConfig = parseAuthConfig({
-        authEnabled: appConfig.auth.enabled,
-        authIssuerUrl: appConfig.auth.issuerUrl,
-        authAudience: appConfig.auth.audience,
-      });
-
-      if (authConfig) {
-        validateAuthConfig(authConfig);
-      }
+      // The fetch_url tool renders pages here, even when jobs run on a server
+      ensurePlaywrightBrowsersInstalled();
 
       try {
         const serverUrl = argv.serverUrl as string | undefined;
 
         const eventBus = getEventBus(argv as CliContext);
 
-        let docService: IDocumentManagement;
-        if (serverUrl) {
-          const client = new DocumentManagementClient(serverUrl);
-          await client.initialize();
-          docService = client;
-        } else {
-          const service = new DocumentManagementService(eventBus, appConfig);
-          try {
-            await service.initialize();
-          } catch (error) {
-            if (error instanceof EmbeddingModelChangedError) {
-              await handleEmbeddingModelChange(error, service);
-            } else {
-              throw error;
-            }
-          }
-          docService = service;
-        }
-        const pipelineOptions: PipelineOptions = {
-          recoverJobs: false, // MCP command doesn't support job recovery
+        const backend = await openBackend({
+          appConfig,
+          eventBus,
           serverUrl,
-          appConfig: appConfig,
-        };
-        const pipeline = serverUrl
-          ? await PipelineFactory.createPipeline(undefined, eventBus, {
-              serverUrl,
-              ...pipelineOptions,
-            })
-          : await PipelineFactory.createPipeline(
-              docService as DocumentManagementService,
-              eventBus,
-              pipelineOptions,
-            );
+          // No job recovery here; a read-only server runs no jobs, so it leaves
+          // interrupted ones to the process that does
+          jobs: { interruptedJobs: appConfig.app.readOnly ? "leave" : "fail" },
+          onEmbeddingModelChange: (error, service) =>
+            handleEmbeddingModelChange(
+              error,
+              service,
+              argv.acceptModelChange as boolean | undefined,
+            ),
+        });
+        // Registered first, so shutdown closes it even when a server fails to start
+        registerGlobalServices({ backend });
 
         if (resolvedProtocol === "stdio") {
           logger.debug(`Auto-detected stdio protocol (no TTY)`);
-          await pipeline.start();
-          const mcpTools = await initializeTools(docService, pipeline, appConfig);
+          const mcpTools = await initializeTools(
+            backend.docService,
+            backend.pipeline,
+            appConfig,
+          );
           const mcpServer = await startStdioServer(mcpTools, appConfig);
 
-          registerGlobalServices({
-            mcpStdioServer: mcpServer,
-            docService,
-            pipeline,
-          });
+          registerGlobalServices({ mcpStdioServer: mcpServer });
 
           await new Promise(() => {});
         } else {
@@ -200,9 +151,7 @@ export function createMcpCommand(cli: Argv) {
             enableWebInterface: false,
             enableMcpServer: true,
             enableApiServer: false,
-            enableWorker: !serverUrl,
             port: appConfig.server.ports.mcp,
-            externalWorkerUrl: serverUrl,
             showLogo: argv.logo as boolean,
             startupContext: {
               cliCommand: "mcp",
@@ -210,18 +159,9 @@ export function createMcpCommand(cli: Argv) {
             },
           });
 
-          const appServer = await startAppServer(
-            docService,
-            pipeline,
-            eventBus,
-            config,
-            appConfig,
-          );
+          const appServer = await startAppServer(backend, config, appConfig);
 
-          registerGlobalServices({
-            appServer,
-            docService,
-          });
+          registerGlobalServices({ appServer });
 
           await new Promise(() => {});
         }

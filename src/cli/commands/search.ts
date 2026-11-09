@@ -3,7 +3,7 @@
  */
 
 import type { Argv } from "yargs";
-import { createDocumentManagement } from "../../store";
+import { openBackend } from "../../services/backend";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { SearchTool } from "../../tools";
 import { loadConfig } from "../../utils/config";
@@ -70,7 +70,7 @@ export function createSearchCommand(cli: Argv) {
         command: "search",
         library: argv.library,
         version: argv.version,
-        query: argv.query,
+        queryLength: (argv.query as string).length, // Never the query itself
         limit: argv.limit,
         exactMatch: argv.exactMatch,
         useServerUrl: !!argv.serverUrl,
@@ -88,11 +88,12 @@ export function createSearchCommand(cli: Argv) {
 
       const eventBus = getEventBus(argv as CliContext);
 
-      const docService = await createDocumentManagement({
+      const backend = await openBackend({
         serverUrl,
         eventBus,
         appConfig: appConfig,
       });
+      const { docService } = backend;
 
       try {
         const searchTool = new SearchTool(docService);
@@ -108,7 +109,7 @@ export function createSearchCommand(cli: Argv) {
 
         renderStructuredOutput(result.results, argv);
       } finally {
-        await docService.shutdown();
+        await backend.close();
       }
     },
   );

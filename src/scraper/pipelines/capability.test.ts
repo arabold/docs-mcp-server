@@ -9,36 +9,31 @@ describe("createMimeTypeCapabilityPredicate", () => {
   const pipelines = PipelineFactory.createStandardPipelines(appConfig);
   const canProcess = createMimeTypeCapabilityPredicate(pipelines);
 
-  describe("types the standard pipelines claim", () => {
-    it.each([
-      ["text/html", "HtmlPipeline"],
-      ["text/markdown", "MarkdownPipeline"],
-      ["application/json", "JsonPipeline"],
-      ["application/pdf", "DocumentPipeline"],
-      ["text/x-python", "SourceCodePipeline"],
-      ["text/x-typescript", "SourceCodePipeline"],
-      ["text/plain", "TextPipeline"],
-    ])("accepts %s (%s)", (mimeType) => {
-      expect(canProcess(mimeType)).toBe(true);
-    });
-  });
+  it("accepts the types the standard pipelines claim and rejects the rest", () => {
+    const cases: Array<[mimeType: string, expected: boolean]> = [
+      ["text/html", true], // HtmlPipeline
+      ["text/markdown", true], // MarkdownPipeline
+      ["application/json", true], // JsonPipeline
+      ["application/pdf", true], // DocumentPipeline
+      ["text/x-python", true], // SourceCodePipeline
+      ["text/x-typescript", true], // SourceCodePipeline
+      ["text/plain", true], // TextPipeline
+      ["image/png", false],
+      ["image/jpeg", false],
+      ["image/gif", false],
+      // Rejected because no pipeline claims image/svg+xml, not because it is
+      // special-cased anywhere. Teaching a pipeline the type is all that is needed.
+      ["image/svg+xml", false],
+      ["video/mp4", false],
+      ["audio/mpeg", false],
+      ["application/zip", false],
+      ["application/octet-stream", false],
+      ["font/woff2", false],
+    ];
 
-  // SVG appears below because no pipeline claims image/svg+xml, not because it is
-  // special-cased anywhere. Teaching a pipeline the type is all that is needed.
-  describe("types no pipeline claims", () => {
-    it.each([
-      "image/png",
-      "image/jpeg",
-      "image/gif",
-      "image/svg+xml",
-      "video/mp4",
-      "audio/mpeg",
-      "application/zip",
-      "application/octet-stream",
-      "font/woff2",
-    ])("rejects %s", (mimeType) => {
-      expect(canProcess(mimeType)).toBe(false);
-    });
+    for (const [mimeType, expected] of cases) {
+      expect.soft(canProcess(mimeType), mimeType).toBe(expected);
+    }
   });
 
   it("widens automatically when a pipeline claims a new type", () => {
@@ -54,22 +49,44 @@ describe("createMimeTypeCapabilityPredicate", () => {
     expect(widened("image/png")).toBe(false);
   });
 
-  it("is never more restrictive than the pipeline-selection loop", () => {
-    // The gates call canProcess without content; the selection loop calls it with a
-    // buffer. Anything the predicate accepts must still be accepted with content in
-    // hand, or a gate could admit content that nothing can process.
-    const body = Buffer.from("# hello\n\nworld\n");
-    const accepted = [
+  // The gates call canProcess without content; the selection loop calls it with the
+  // fetched body. A gate that rejected something the loop would accept would drop
+  // processable content, so the predicate must be the more permissive side.
+  describe("relation to the pipeline-selection loop", () => {
+    const bodies = {
+      text: Buffer.from("# hello\n\nworld\n"),
+      binary: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01]),
+    };
+    const mimeTypes = [
       "text/html",
       "text/markdown",
-      "application/json",
-      "text/x-python",
       "text/plain",
+      "text/x-python",
+      "application/json",
+      "application/pdf",
+      "image/png",
+      "application/octet-stream",
     ];
 
-    for (const mimeType of accepted) {
-      expect(canProcess(mimeType)).toBe(true);
-      expect(pipelines.some((p) => p.canProcess(mimeType, body))).toBe(true);
-    }
+    it("accepts every type the loop accepts with the body in hand", () => {
+      const selectedByLoop = mimeTypes.flatMap((mimeType) =>
+        Object.values(bodies)
+          .filter((body) =>
+            pipelines.some((pipeline) => pipeline.canProcess(mimeType, body)),
+          )
+          .map(() => mimeType),
+      );
+
+      expect(selectedByLoop.length).toBeGreaterThan(0);
+      expect(selectedByLoop.filter((mimeType) => !canProcess(mimeType))).toEqual([]);
+    });
+
+    it("may accept a type that the loop refuses once it sees the body", () => {
+      // TextPipeline refuses content with null bytes, which only the loop can see.
+      expect(canProcess("text/plain")).toBe(true);
+      expect(
+        pipelines.some((pipeline) => pipeline.canProcess("text/plain", bodies.binary)),
+      ).toBe(false);
+    });
   });
 });

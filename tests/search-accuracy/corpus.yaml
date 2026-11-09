@@ -1,0 +1,44 @@
+# Corpus of the search accuracy benchmark.
+#
+# Each source is a documentation tree in a public repository, pinned to a
+# commit. The benchmark downloads only the files matching `include` (patterns
+# relative to `root`, gitignore syntax, "!" excludes) into
+# .cache/search-accuracy/corpus/ and indexes `root` as one library.
+#
+# Moving a pin changes the dataset: every golden passage is checked again and
+# the baseline must be refreshed.
+
+sources:
+  - library: react
+    repository: https://github.com/reactjs/react.dev
+    revision: 046f17d04295ba047bb5739026b4ac3110f17028
+    root: src/content
+    include:
+      - learn/**/*.md
+      - reference/**/*.md
+    license: CC-BY-4.0
+
+  - library: fastapi
+    repository: https://github.com/fastapi/fastapi
+    revision: 3070b5105fe02c4afdba5e3aea6c2cf2e3796c7f
+    root: docs/en/docs
+    include:
+      - "**/*.md"
+      - "!release-notes.md"
+    license: MIT
+
+  - library: vite
+    repository: https://github.com/vitejs/vite
+    revision: a3001c5e3f4febb3099b097f4828ea567e1b253f
+    root: docs
+    include:
+      - "**/*.md"
+    license: MIT
+
+  - library: pydantic
+    repository: https://github.com/pydantic/pydantic
+    revision: 5adfeaaaea947f81f0f01868604f219084ec151a
+    root: docs
+    include:
+      - "**/*.md"
+    license: MIT

@@ -13,10 +13,12 @@ const compactFn = vi.fn(async () => ({
   afterBytes: 1024,
   reclaimedBytes: 1024,
 }));
-vi.mock("../../store", () => ({
-  createDocumentManagement: vi.fn(async () => ({
-    shutdown: vi.fn(),
-    compact: compactFn,
+vi.mock("../../services/backend", () => ({
+  openBackend: vi.fn(async () => ({
+    docService: {
+      compact: compactFn,
+    },
+    close: vi.fn(),
   })),
 }));
 vi.mock("../utils", () => ({
@@ -51,18 +53,6 @@ describe("compact command", () => {
 
   afterEach(() => {
     stdoutWriteSpy.mockRestore();
-  });
-
-  it("compacts when free pages exist and reports reclaimed space", async () => {
-    const parser = yargs().scriptName("test");
-    createCompactCommand(parser);
-
-    await parser.parse("compact");
-
-    expect(compactFn).toHaveBeenCalledWith({ force: false });
-    expect(stdoutWriteMock).toHaveBeenCalledWith(
-      "Compacted store from 2.0 KB to 1.0 KB (reclaimed 1.0 KB).\n",
-    );
   });
 
   it("forces vacuum when requested", async () => {

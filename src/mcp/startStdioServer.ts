@@ -1,28 +1,28 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { type StdioServerHandle, serveStdio } from "@modelcontextprotocol/server/stdio";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
-import { createMcpServerInstance } from "./mcpServer";
+import { createMcpServerFactory } from "./mcpServer";
 import type { McpServerTools } from "./tools";
 
 /**
- * Starts the MCP server using the Stdio transport.
+ * Starts the MCP server on the process's stdio.
+ *
+ * Serves clients on the current protocol revision as well as clients that open
+ * with an earlier revision's `initialize` handshake. Each connection gets a
+ * server instance from the shared factory.
+ *
  * @param tools The shared tool instances.
  * @param config The application configuration.
- * @returns The created McpServer instance.
+ * @returns The handle that closes the stdio connection on shutdown.
  */
 export async function startStdioServer(
   tools: McpServerTools,
   config: AppConfig,
-): Promise<McpServer> {
-  // Create a server instance using the factory and shared tools
-  const server = createMcpServerInstance(tools, config);
-
-  // Start server with Stdio transport
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+): Promise<StdioServerHandle> {
+  const handle = serveStdio(createMcpServerFactory(tools, config), {
+    legacy: "serve",
+    onerror: (error) => logger.error(`❌ MCP stdio transport error: ${error.message}`),
+  });
   logger.info("🤖 MCP server listening on stdio");
-
-  // Return the server instance
-  return server;
+  return handle;
 }

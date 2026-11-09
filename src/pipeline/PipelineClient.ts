@@ -1,106 +1,115 @@
 /**
- * tRPC client implementation of the Pipeline interface.
- * Delegates all pipeline operations to an external worker via tRPC router.
- * Uses WebSocket link for subscriptions and HTTP for queries/mutations.
+ * Pipeline backed by a remote worker: every operation calls the worker's
+ * application API through a shared {@link ApiClient}.
  */
 
-import {
-  createTRPCProxyClient,
-  createWSClient,
-  httpBatchLink,
-  splitLink,
-  wsLink,
-} from "@trpc/client";
-import superjson from "superjson";
+import { TRPCError } from "@trpc/server";
 import type { EventBusService } from "../events/EventBusService";
+import type { RemoteEventProxy } from "../events/RemoteEventProxy";
 import { EventType } from "../events/types";
 import type { ScraperOptions } from "../scraper/types";
+import type { ApiClient } from "../services/apiClient";
 import { normalizeVersionLabel } from "../store/types";
 import { logger } from "../utils/logger";
-import type { IPipeline } from "./trpc/interfaces";
-import type { PipelineRouter } from "./trpc/router";
-import type { PipelineJob, PipelineJobStatus, PipelineManagerCallbacks } from "./types";
+import {
+  type EnqueueScrapeOptions,
+  type IPipeline,
+  RELAYED_ENQUEUE_ERROR_CODES,
+  type RelayedEnqueueErrorCode,
+} from "./trpc/interfaces";
+import { type PipelineJob, PipelineJobStatus } from "./types";
 
 /**
- * HTTP client that implements the IPipeline interface by delegating to external worker.
+ * How long submitting the first job waits for the worker's event stream, so the
+ * job's first events reach this process.
+ */
+export const EVENTS_CONNECT_TIMEOUT_MS = 5000;
+
+/**
+ * How often `waitForJobCompletion` asks the worker for the job's state while
+ * the worker's events reach this process. The lookup only catches an event lost
+ * around a reconnect.
+ */
+const JOB_SAFETY_LOOKUP_INTERVAL_MS = 10_000;
+
+/** How often `waitForJobCompletion` asks while the worker's events do not arrive. */
+const JOB_POLL_INTERVAL_MS = 1000;
+
+/** How long job lookups may keep failing before `waitForJobCompletion` gives up. */
+const JOB_LOOKUP_GIVE_UP_MS = 30_000;
+
+/**
+ * Re-raises a worker's enqueue error as a `TRPCError` with the same code and
+ * message, so this process's own router relays it unchanged (the web UI then
+ * sees the same 409/400/404 as in front of a local pipeline). The worker's router
+ * already decided which errors a caller can act on; anything it left as an
+ * internal error, or a failure that never reached it, is wrapped as a plain
+ * error prefixed with `failure`.
+ *
+ * @returns The error to rethrow.
+ */
+function toEnqueueError(error: unknown, failure: string): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  const code = (error as { data?: { code?: unknown } } | null)?.data?.code;
+  return RELAYED_ENQUEUE_ERROR_CODES.includes(code as RelayedEnqueueErrorCode)
+    ? new TRPCError({ code: code as RelayedEnqueueErrorCode, message, cause: error })
+    : new Error(`${failure}: ${message}`);
+}
+
+/**
+ * Implements {@link IPipeline} by delegating every operation to a remote worker.
  */
 export class PipelineClient implements IPipeline {
-  private readonly baseUrl: string;
-  private readonly wsUrl: string;
-  private readonly client: ReturnType<typeof createTRPCProxyClient<PipelineRouter>>;
-  private readonly wsClient: ReturnType<typeof createWSClient>;
-  private readonly eventBus: EventBusService;
+  /**
+   * @param client The worker's API client. Whoever created it closes it.
+   * @param eventBus The local bus that the worker's relayed job events arrive on.
+   * @param relay The relay that brings those events; whoever created it disconnects it.
+   */
+  constructor(
+    private readonly client: ApiClient,
+    private readonly eventBus: EventBusService,
+    private readonly relay: RemoteEventProxy,
+  ) {}
 
-  constructor(serverUrl: string, eventBus: EventBusService) {
-    this.baseUrl = serverUrl.replace(/\/$/, "");
-    this.eventBus = eventBus;
+  /** The first job submission's wait for the event stream, shared by later ones. */
+  private eventsReady: Promise<void> | undefined;
 
-    // Extract base URL without the /api path for WebSocket connection
-    // The tRPC WebSocket adapter handles the /api routing internally
-    const url = new URL(this.baseUrl);
-    const baseWsUrl = `${url.protocol}//${url.host}`;
-    this.wsUrl = baseWsUrl.replace(/^http/, "ws");
-
-    // Create WebSocket client for subscriptions
-    this.wsClient = createWSClient({
-      url: this.wsUrl,
+  /**
+   * Waits, once, for the worker's event stream before the first job is
+   * submitted, so a job that starts at once does not lose its first events.
+   * When the stream is not live in time, warns once and lets jobs go ahead;
+   * waits then rely on asking the worker.
+   */
+  private waitForEvents(): Promise<void> {
+    this.eventsReady ??= this.relay.connect(EVENTS_CONNECT_TIMEOUT_MS).then((live) => {
+      if (!live) {
+        logger.warn(
+          "⚠️  Live job updates from the worker are unavailable; progress is not shown and waits check the job's state instead",
+        );
+      }
     });
-
-    // Create tRPC client with split link:
-    // - Subscriptions use WebSocket
-    // - Queries and mutations use HTTP
-    this.client = createTRPCProxyClient<PipelineRouter>({
-      links: [
-        splitLink({
-          condition: (op) => op.type === "subscription",
-          true: wsLink({ client: this.wsClient, transformer: superjson }),
-          false: httpBatchLink({ url: this.baseUrl, transformer: superjson }),
-        }),
-      ],
-    });
-
-    logger.debug(
-      `PipelineClient (tRPC) created for: ${this.baseUrl} (ws: ${this.wsUrl})`,
-    );
-  }
-
-  async start(): Promise<void> {
-    // Check connectivity via ping procedure
-    try {
-      await this.client.ping.query();
-      logger.debug("PipelineClient connected to external worker via tRPC");
-    } catch (error) {
-      throw new Error(
-        `Failed to connect to external worker at ${this.baseUrl}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  }
-
-  async stop(): Promise<void> {
-    // Close WebSocket connection
-    this.wsClient.close();
-
-    logger.debug("PipelineClient stopped");
+    return this.eventsReady;
   }
 
   async enqueueScrapeJob(
     library: string,
     version: string | undefined | null,
     options: ScraperOptions,
+    enqueue?: EnqueueScrapeOptions,
   ): Promise<string> {
+    await this.waitForEvents();
     try {
       const normalizedVersion = normalizeVersionLabel(version) || null;
       const result = await this.client.enqueueScrapeJob.mutate({
         library,
         version: normalizedVersion,
         options,
+        onExisting: enqueue?.onExisting,
       });
       logger.debug(`Job ${result.jobId} enqueued successfully`);
       return result.jobId;
     } catch (error) {
-      throw new Error(
-        `Failed to enqueue job: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      throw toEnqueueError(error, "Failed to enqueue job");
     }
   }
 
@@ -109,6 +118,7 @@ export class PipelineClient implements IPipeline {
     version: string | undefined | null,
     options?: { preserveHashes?: boolean },
   ): Promise<string> {
+    await this.waitForEvents();
     try {
       const normalizedVersion = normalizeVersionLabel(version) || null;
       const result = await this.client.enqueueRefreshJob.mutate({
@@ -119,16 +129,14 @@ export class PipelineClient implements IPipeline {
       logger.debug(`Refresh job ${result.jobId} enqueued successfully`);
       return result.jobId;
     } catch (error) {
-      throw new Error(
-        `Failed to enqueue refresh job: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      throw toEnqueueError(error, "Failed to enqueue refresh job");
     }
   }
 
-  async getJob(jobId: string): Promise<PipelineJob | undefined> {
+  async getJob(jobId: string, signal?: AbortSignal): Promise<PipelineJob | undefined> {
     try {
       // superjson automatically deserializes Date objects
-      return await this.client.getJob.query({ id: jobId });
+      return await this.client.getJob.query({ id: jobId }, { signal });
     } catch (error) {
       throw new Error(
         `Failed to get job ${jobId}: ${error instanceof Error ? error.message : String(error)}`,
@@ -168,39 +176,124 @@ export class PipelineClient implements IPipeline {
     }
   }
 
+  /**
+   * Waits until the worker reports the job as completed, failed, or cancelled.
+   * Like `PipelineManager.waitForJobCompletion`, it resolves for completed and
+   * cancelled jobs and rejects for failed ones.
+   *
+   * The relayed status events settle the wait. It also asks the worker for the
+   * job right away, which covers a job that finished before the wait began,
+   * and then again: every few seconds while events arrive, to catch one lost
+   * around a reconnect, and every second while they do not.
+   *
+   * @param jobId The job to wait for.
+   * @throws Error if the job failed, the worker does not know it, or the worker
+   * stays unreachable beyond a bounded period.
+   */
   async waitForJobCompletion(jobId: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      // Listen for job status changes on the event bus
-      // RemoteEventProxy bridges remote worker events to this local bus
-      const unsubscribe = this.eventBus.on(
-        EventType.JOB_STATUS_CHANGE,
-        (job: PipelineJob) => {
-          // Filter for the specific job we're waiting for
-          if (job.id !== jobId) {
+      let settled = false;
+      let pollTimer: ReturnType<typeof setTimeout> | undefined;
+      let lastAnswerAt = Date.now();
+
+      const finish = (error?: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        unsubscribe();
+        clearTimeout(pollTimer);
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      };
+
+      const settleIfDone = (
+        job: Pick<PipelineJob, "status" | "error" | "errorMessage">,
+      ) => {
+        switch (job.status) {
+          case PipelineJobStatus.COMPLETED:
+          case PipelineJobStatus.CANCELLED:
+            finish();
+            break;
+          case PipelineJobStatus.FAILED:
+            // The worker emits the FAILED status before it sets `error`, so a
+            // relayed event carries the text only in `errorMessage`
+            finish(
+              new Error(job.error?.message || job.errorMessage || `Job ${jobId} failed`),
+            );
+            break;
+        }
+      };
+
+      const unsubscribe = this.eventBus.on(EventType.JOB_STATUS_CHANGE, (job) => {
+        if (job.id === jobId) {
+          settleIfDone(job);
+        }
+      });
+
+      // A lookup the worker never answers fails when the give-up window ends,
+      // so a stalled request cannot keep the wait open
+      const lookUp = async () => {
+        const deadline = new AbortController();
+        const timer = setTimeout(
+          () => deadline.abort(),
+          lastAnswerAt + JOB_LOOKUP_GIVE_UP_MS - Date.now(),
+        );
+        try {
+          return await this.getJob(jobId, deadline.signal);
+        } catch (error) {
+          throw deadline.signal.aborted
+            ? new Error(
+                `Failed to get job ${jobId}: the worker did not answer for ${JOB_LOOKUP_GIVE_UP_MS / 1000} s`,
+              )
+            : error;
+        } finally {
+          clearTimeout(timer);
+        }
+      };
+
+      const poll = async () => {
+        try {
+          const job = await lookUp();
+          lastAnswerAt = Date.now();
+          if (!job) {
+            // Clearing finished jobs or restarting the worker drops the record
+            finish(
+              new Error(
+                `Job not found: ${jobId}. The worker no longer knows it; it may have been cleared or the worker restarted.`,
+              ),
+            );
             return;
           }
-
-          // Check if job reached a terminal state
-          if (
-            job.status === "completed" ||
-            job.status === "failed" ||
-            job.status === "cancelled"
-          ) {
-            unsubscribe();
-
-            if (job.status === "failed" && job.error) {
-              reject(new Error(job.error.message));
-            } else {
-              resolve();
-            }
+          settleIfDone(job);
+        } catch (error) {
+          // getJob only throws Error instances
+          if (Date.now() - lastAnswerAt >= JOB_LOOKUP_GIVE_UP_MS) {
+            finish(error as Error);
+            return;
           }
-        },
-      );
+          logger.debug(`Job lookup for ${jobId} failed: ${error}`);
+        }
+        if (!settled) {
+          const interval = this.relay.isActive()
+            ? JOB_SAFETY_LOOKUP_INTERVAL_MS
+            : JOB_POLL_INTERVAL_MS;
+          pollTimer = setTimeout(poll, interval);
+        }
+      };
+
+      void poll();
     });
   }
 
-  setCallbacks(_callbacks: PipelineManagerCallbacks): void {
-    // For external pipeline, callbacks are not used since all updates come via event bus
-    logger.debug("PipelineClient.setCallbacks called - no-op for external worker");
+  /** Removes the version on the worker, which cancels its own job for it first. */
+  async removeVersion(
+    library: string,
+    version: string | undefined | null,
+  ): Promise<void> {
+    await this.client.removeDocs.mutate({ library, version: version ?? null });
   }
 }

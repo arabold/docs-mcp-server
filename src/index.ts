@@ -7,13 +7,8 @@ import { logger } from "./utils/logger";
 
 sanitizeEnvironment();
 
-const [{ runCli }, { ensurePlaywrightBrowsersInstalled }] = await Promise.all([
-  import("./cli/main"),
-  import("./cli/utils"),
-]);
-
-// Ensure Playwright browsers are installed
-ensurePlaywrightBrowsersInstalled();
+// Commands that can launch a browser make sure one is installed themselves.
+const { runCli } = await import("./cli/main");
 
 // Run the CLI
 runCli().catch((error) => {

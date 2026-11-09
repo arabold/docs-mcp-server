@@ -1,301 +1,109 @@
 # Pipeline Architecture
 
-## Overview
+The pipeline runs scrape and refresh jobs in the background. A job lives in the memory of the process that runs it, and every change to it is written through to the library version it targets, so the store always shows what a job is doing and what it left behind. [ARCHITECTURE.md](../../ARCHITECTURE.md) covers how entry points open a backend and how the two deployment modes connect. This page covers how jobs run, end, and survive a restart.
 
-The pipeline system manages asynchronous document processing with persistent job state and coordinated execution across embedded or external workers.
+## Components
 
-## Architecture Pattern
+Every caller uses one interface, `IPipeline` ([src/pipeline/trpc/interfaces.ts](../../src/pipeline/trpc/interfaces.ts)). It has two implementations:
 
-The pipeline uses a Factory pattern to provide a unified interface for both local and remote job processing:
+- `PipelineManager` ([src/pipeline/PipelineManager.ts](../../src/pipeline/PipelineManager.ts)) runs jobs in this process. It owns the job queue, runs each job in a `PipelineWorker`, writes job state to the store and emits job events.
+- `PipelineClient` ([src/pipeline/PipelineClient.ts](../../src/pipeline/PipelineClient.ts)) forwards every call to a remote worker, which runs a `PipelineManager` of its own.
+
+`openBackend()` ([src/services/backend.ts](../../src/services/backend.ts)) creates one or the other, starts it, and stops it when the backend closes; see [Backend Selection](../../ARCHITECTURE.md#backend-selection). No caller starts or stops a pipeline itself.
+
+`PipelineWorker` ([src/pipeline/PipelineWorker.ts](../../src/pipeline/PipelineWorker.ts)) runs one job. It asks `ScraperService` to crawl and stores what each page produced through `DocumentManagementService`.
 
 ```mermaid
-classDiagram
-    class IPipeline {
-        <<interface>>
-        +start() Promise~void~
-        +stop() Promise~void~
-        +enqueueScrapeJob() Promise~string~
-        +enqueueRefreshJob() Promise~string~
-        +getJob() Promise~PipelineJob~
-        +cancelJob() Promise~void~
-    }
-    
-    class PipelineFactory {
-        <<factory>>
-        +createPipeline(docService, options) Promise~IPipeline~
-    }
-    
-    class PipelineManager {
-        -docService DocumentManagementService
-        -workers PipelineWorker[]
-        -queue JobQueue
-        +start() Promise~void~
-        +enqueueScrapeJob() Promise~string~
-    }
-    
-    class PipelineClient {
-        -serverUrl string
-        -trpcClient TRPCClient
-        +start() Promise~void~
-        +enqueueScrapeJob() Promise~string~
-    }
-    
-    class PipelineWorker {
-        -job PipelineJob
-        -scraper ScraperService
-        +execute() Promise~void~
-    }
-    
-    IPipeline <|.. PipelineManager : implements
-    IPipeline <|.. PipelineClient : implements
-    PipelineFactory ..> IPipeline : creates
-    PipelineFactory ..> PipelineManager : creates (local)
-    PipelineFactory ..> PipelineClient : creates (remote)
-    PipelineManager o-- PipelineWorker : manages
+flowchart LR
+    Callers[Tools and API routers] --> IP[IPipeline]
+    IP --> PM[PipelineManager]
+    IP --> PC[PipelineClient]
+    PC -->|Worker API| WPM[PipelineManager on the worker]
+    PM --> PW[PipelineWorker]
+    PW --> SS[ScraperService]
+    PW -->|Pages| DMS[DocumentManagementService]
+    PM -->|Version status and progress| DMS
+    PM -.->|Job events| EB[EventBusService]
 ```
 
-**Code Reference:** 
-- `src/pipeline/PipelineFactory.ts` - Factory implementation
-- `src/pipeline/trpc/interfaces.ts` lines 20-35 - IPipeline interface
-- `src/pipeline/PipelineManager.ts` - Local implementation
-- `src/pipeline/PipelineClient.ts` - Remote implementation
+## Jobs and Versions
 
-## Core Components
+A job targets one library version, and two records describe it:
 
-### PipelineFactory
+- The job record lives only in memory, in the `PipelineManager` that runs it. `getJob` and `getJobs` read it from there. Clearing finished jobs or restarting the process forgets it.
+- The version row in the store is the durable record. It holds the status, the progress counters, the error message, and the scraper options the job ran with.
 
-Central factory that selects pipeline implementation based on configuration:
+Each status change and each progress report updates both records, then emits an event on the [event bus](eventbus-architecture.md). Other processes on the same store, a restarted worker, and the web UI's library views all read the version row. A failed write to it is logged and does not stop the job.
 
-```typescript
-interface PipelineOptions {
-  recoverJobs?: boolean; // Enable job recovery from database
-  serverUrl?: string; // External worker URL
-  concurrency?: number; // Worker concurrency limit
-}
-```
-
-**Selection Logic:**
-
-- `serverUrl` specified → PipelineClient (external worker)
-- `recoverJobs: true` → PipelineManager with recovery
-- `recoverJobs: false` → PipelineManager without recovery
-
-### PipelineManager
-
-Manages job queue and worker coordination for embedded processing:
-
-**Responsibilities:**
-
-- Job queue management with concurrency limits
-- Worker lifecycle management
-- Progress tracking and status updates
-- Database state synchronization
-- Job recovery after restart
-
-**Job Recovery:**
-
-- Loads QUEUED and RUNNING jobs from database on startup
-- Resets RUNNING jobs to QUEUED for re-execution
-- Maintains job configuration for reproducible processing
-
-### PipelineClient
-
-Type-safe tRPC client providing identical interface to PipelineManager for external worker communication:
-
-**Features:**
-
-- tRPC client for remote job operations over HTTP
-- Identical method signatures to PipelineManager
-- Error handling and connection management
-- Connectivity check via ping
-
-### PipelineWorker
-
-Executes individual jobs with progress reporting:
-
-**Execution Flow:**
-
-1. Fetch job configuration from queue
-2. Initialize scraper with job parameters
-3. Process content through scraper pipeline
-4. Update progress via callbacks
-5. Store results and mark completion
+The stored scraper options leave out what belongs to one run, such as a refresh's page queue (`withoutRunOnlyOptions` in [src/scraper/types.ts](../../src/scraper/types.ts)). Refreshes and recovered jobs therefore run with the original scrape's settings.
 
 ## Job Lifecycle
 
-### Job States
-
+```mermaid
+stateDiagram-v2
+    [*] --> QUEUED: enqueued
+    QUEUED --> RUNNING: a slot is free
+    QUEUED --> CANCELLED: cancelJob
+    RUNNING --> COMPLETED
+    RUNNING --> FAILED
+    RUNNING --> CANCELLING: cancelJob
+    CANCELLING --> CANCELLED: crawl has stopped
+    COMPLETED --> [*]
+    FAILED --> [*]
+    CANCELLED --> [*]
 ```
-QUEUED → RUNNING → COMPLETED
-              ↓
-            FAILED
-              ↓
-           CANCELLED
-```
 
-### State Transitions
+Cancelling a queued job removes it from the queue at once. Cancelling a running job aborts its signal and marks it CANCELLING. Until the crawl has stopped, the job can still be storing a page, so the version row stays RUNNING and the job becomes CANCELLED only then. `waitForJobCompletion` resolves for completed and cancelled jobs and rejects for failed ones, in both implementations.
 
-- **QUEUED**: Job created, waiting for worker
-- **RUNNING**: Worker processing job
-- **COMPLETED**: Successful completion
-- **FAILED**: Error during processing
-- **CANCELLED**: Manual cancellation
+## Running Jobs
 
-### Progress Tracking
+`PipelineManager` starts jobs in the order they were enqueued and runs up to `scraper.maxConcurrency` of them at once. The same setting bounds how many pages one crawl fetches at once, so a busy process can have that many jobs each fetching that many pages.
 
-Jobs report progress through a callback, once per queued item, carrying four
-counters and the outcome that item reached. The `scrape-progress-reporting`
-capability defines them normatively; in short:
+A worker first clears the version, unless the job is a refresh or the scrape asked to append (`clean: false`). It then turns each page outcome into a store action:
 
-| Counter | Meaning |
-|---|---|
-| `totalDiscovered` | URLs admitted to the crawl queue, unbounded |
-| `totalPages` | Items the job expects to process — the denominator |
-| `pagesScraped` | Items dequeued and given an outcome — the numerator |
-| `pagesIndexed` | Items that produced stored content |
+- A page with content replaces whatever the store holds for that page.
+- A page that is empty now is recorded as empty. When its pipeline failed instead, the stored page stays as it was.
+- A page that is gone is deleted, when it came from the store.
+- Unchanged, skipped and failed pages change nothing.
 
-`pagesScraped` converges on `totalPages`, because every queued item is
-eventually dequeued and reaches exactly one outcome. `totalPages` is **not** the
-configured `maxPages`: it is the number of queued URLs, clamped at the point the
-crawl will stop. Since `maxPages` bounds indexed pages rather than attempts, that
-stopping point is `maxPages` plus however many items produced nothing.
+A page whose chunks cannot be embedded fails the job at once (`EmbeddingError`): this usually means the provider is down or misconfigured, and a job that went on would complete with the remaining pages missing. Any other failed write for one page is logged and the job goes on. A failed deletion fails the job, because it would leave the page's chunks searchable. An error the worker throws for a page ends the crawl; the scraper does not count it as one failed page. [Refresh Architecture](refresh-architecture.md) describes the outcomes a refresh produces.
 
-Each event names its outcome — stored, unchanged, absent, empty, skipped or
-failed — rather than leaving consumers to infer one from a null result. A null
-result alone cannot distinguish a page that is unchanged from one that is now
-empty, and those call for opposite handling: the first says keep what is stored,
-the second says the page exists and holds nothing.
+Each outcome also advances the job's progress counters. The `scrape-progress-reporting` spec ([openspec/specs/scrape-progress-reporting/spec.md](../../openspec/specs/scrape-progress-reporting/spec.md)) defines them, and [Scrape progress counters](../../ARCHITECTURE.md#scrape-progress-counters) summarizes them.
 
-## Write-Through Architecture
+## One Version at a Time
 
-### Single Source of Truth
+Within one process, enqueueing a job and removing a version run one at a time for each library version (`withVersionLock` in `PipelineManager`). Library names match ignoring case, the way the store groups them.
 
-PipelineJob objects contain both runtime state and database fields, ensuring consistency between memory and persistent storage.
+- A scrape first claims its version in the store. By default an existing version is rejected; replacing or appending has to be asked for (`onExisting`, `clean: false`). Only a successful claim goes on to cancel the version's other jobs, so a rejected request cannot stop the job it conflicts with.
+- A refresh holds the lock from reading the version's pages until its job is registered, so a removal cannot run in between.
+- A removal cancels the version's jobs and waits until each has ended, including one that is already cancelling, before it deletes anything. A job enqueued for the version meanwhile registers after the removal.
 
-### Immediate Persistence
+## Interrupted Jobs
 
-All state changes immediately write to database:
+A process that exits while jobs run or wait leaves their versions RUNNING or QUEUED in the store. `stop()` does not cancel running jobs, so a shutdown leaves them unfinished too. Several processes can share one store, for example a server and a local `scrape`, or `web` beside an embedded stdio server, so a RUNNING or QUEUED version can also belong to a job another live process runs.
 
-- Status transitions
-- Progress updates
-- Error information
-- Configuration changes
+Every local pipeline therefore marks the versions of its unfinished jobs alive: from `start()` until `stop()`, it sets their `updated_at` to now every `scraper.jobHeartbeatMs` (15 s by default). Status and progress writes set it too. A version is interrupted once nothing has written it for four intervals plus one second, the resolution of `updated_at`.
 
-### Recovery Mechanism
+Only the process that hosts the store's jobs should act on the jobs another run left behind. `openBackend()` therefore gives each local pipeline an `interruptedJobs` policy ([src/pipeline/types.ts](../../src/pipeline/types.ts)), which `PipelineManager.start()` applies to interrupted versions:
 
-Database state enables automatic recovery:
+| Policy | Effect | Used by |
+|---|---|---|
+| `recover` | Enqueues each version again through `enqueueRefreshJob`. The version never completed, so this becomes a full re-scrape with its stored options. A version that cannot be enqueued, such as one without stored options, is marked FAILED. | `worker` (default), the default command with `--resume` |
+| `fail` | Marks each version FAILED with "Job interrupted", so users can start it again. | `web`, `mcp`, the default command without `--resume`, `worker --no-resume` |
+| `leave` | Changes nothing. | `scrape`, `refresh`, and `mcp` or the default command in read-only mode |
 
-1. Load pending jobs on startup
-2. Reset RUNNING jobs to QUEUED
-3. Resume processing with original configuration
-4. Maintain progress history
+`scrape` and `refresh` run only their own job, and a read-only server runs none, so they leave the others to the server. A remote backend takes no policy, because the worker applies its own.
 
-## Concurrency Management
+`start()` never treats the manager's own unfinished jobs as interrupted, such as jobs enqueued before it. A version written within the bound may belong to a live process, or to one that crashed moments ago, so `start()` checks it once more when the bound has passed: still unwritten, it gets the policy; written again, it is left to the process that runs it and not checked again. A server restarted right after a crash therefore recovers or fails the crashed job about a minute after it starts. The bound assumes every process on the store uses the same `jobHeartbeatMs`.
 
-### Worker Pool
+Before it fails or recovers a version, the manager claims it with a write that only succeeds while the version is still RUNNING or QUEUED and nothing has written it since it was read, so of two servers that start together only one acts on it.
 
-PipelineManager maintains configurable worker pool:
+## Remote Pipeline
 
-- Default concurrency: 3 workers
-- Configurable via environment or CLI
-- Workers process jobs independently
-- Queue coordination prevents conflicts
+`PipelineClient` calls the worker's pipeline procedures ([src/pipeline/trpc/router.ts](../../src/pipeline/trpc/router.ts)) through the backend's shared API client. It removes a version through the application router's `removeDocs` ([src/services/appRouter.ts](../../src/services/appRouter.ts)), which cancels the worker's job for that version first. The coordinator keeps no job state of its own.
 
-### Job Distribution
+- Enqueue errors a caller can act on keep their tRPC code across the hop: an existing target, an invalid library name, and an unknown refresh target. A coordinator's API therefore answers like a local one.
+- Before its first job, the client waits briefly for the worker's event stream, so a job that starts at once does not lose its first events. When the stream does not come up in time, it warns once and goes on.
+- `waitForJobCompletion` settles on relayed `JOB_STATUS_CHANGE` events and also asks the worker for the job. The lookup covers an event lost around a reconnect and a job that finished before the wait began. A worker that no longer knows the job, because it was cleared or the worker restarted, ends the wait with an error.
 
-Jobs are distributed to available workers using:
-
-- FIFO queue ordering
-- Worker availability checking
-- Load balancing across workers
-- Graceful worker shutdown handling
-
-## External Worker RPC
-
-### Procedures (tRPC)
-
-- `ping` - Connectivity check
-- `enqueueJob` - Create new job
-- `getJobs` - List jobs with optional filtering
-- `getJob` - Get job details
-- `cancelJob` - Cancel a job
-- `clearCompletedJobs` - Remove completed/cancelled/failed jobs
-
-### Data Contracts
-
-Requests and responses use shared TypeScript types through tRPC, ensuring end-to-end type safety.
-
-### Error Handling
-
-Errors propagate as structured tRPC errors with messages suitable for user feedback and logs.
-
-## Configuration Persistence
-
-### Job Configuration
-
-Each job stores complete scraper configuration:
-
-- Source URL and scraping parameters
-- Library name and version information
-- Processing options and filters
-- Retry and timeout settings
-
-### Reproducible Processing
-
-Stored configuration enables:
-
-- Exact re-indexing with same parameters
-- Configuration auditing and debugging
-- Version-specific processing rules
-- Consistent results across runs
-
-## Monitoring and Observability
-
-### Progress Reporting
-
-Real-time progress updates through:
-
-- Callback-based progress notifications
-- Database persistence of progress state
-- Web UI polling for status display
-- Log-based progress tracking
-
-### Error Tracking
-
-Comprehensive error information:
-
-- Exception stack traces
-- Processing context at failure
-- Retry attempt logging
-- User-friendly error messages
-
-### Performance Metrics
-
-Job execution metrics:
-
-- Processing duration
-- Pages processed per minute
-- Memory and resource usage
-- Queue depth and throughput
-
-## Scaling Patterns
-
-### Vertical Scaling
-
-Increase worker concurrency within its single process:
-
-- Higher `maxConcurrency` limits
-- More memory allocation
-- Faster storage backend
-
-### Horizontal Scaling (Coordinators Only)
-
-The worker is a single process that owns the in-memory job queue and the SQLite-backed document store — it does not scale horizontally. What scales horizontally is the coordinator tier:
-
-- Run multiple `web`/`mcp` coordinator replicas, each started with `--server-url` pointing at the same worker
-- Coordinators are stateless; both document reads (`DocumentManagementClient`) and job dispatch (`PipelineClient`) proxy to the one worker over tRPC
-- Load balance across coordinator replicas, not worker replicas
-
-### Deployment Modes Are Exclusive
-
-A deployment runs with either an embedded worker (`enableWorker: true`, standalone mode) or a single external worker started separately and reached via the coordinator's `--server-url` flag (distributed mode) — not both at once.
+One worker owns the job queue and the store, and coordinators scale out in front of it; see [Deployment Modes](../infrastructure/deployment-modes.md).

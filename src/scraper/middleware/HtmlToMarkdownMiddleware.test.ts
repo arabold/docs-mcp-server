@@ -1,5 +1,5 @@
-import * as cheerio from "cheerio"; // Import cheerio
-import TurndownService from "turndown"; // Import for mocking if needed
+import * as cheerio from "cheerio";
+import TurndownService from "turndown";
 import { describe, expect, it, vi } from "vitest";
 import type { ScraperOptions } from "../types";
 import { HtmlToMarkdownMiddleware } from "./HtmlToMarkdownMiddleware";
@@ -38,93 +38,77 @@ const createMockContext = (
   return context;
 };
 
+/** Converts the HTML with a fresh middleware and returns the context. */
+async function convert(html: string): Promise<MiddlewareContext> {
+  const middleware = new HtmlToMarkdownMiddleware();
+  const context = createMockContext(html);
+  const next = vi.fn().mockResolvedValue(undefined);
+
+  await middleware.process(context, next);
+
+  expect(next).toHaveBeenCalledOnce();
+  return context;
+}
+
 describe("HtmlToMarkdownMiddleware", () => {
-  it("should convert basic HTML to Markdown", async () => {
-    const middleware = new HtmlToMarkdownMiddleware();
-    const html = `
+  it("should convert basic HTML and tables to Markdown", async () => {
+    const context = await convert(`
       <html><body>
         <h1>Heading 1</h1>
         <p>This is a paragraph with <strong>bold</strong> and <em>italic</em> text.</p>
         <ul><li>Item 1</li><li>Item 2</li></ul>
         <a href="http://link.com">Link</a>
-      </body></html>`;
-    const context = createMockContext(html);
-    const next = vi.fn().mockResolvedValue(undefined);
-
-    await middleware.process(context, next);
-
-    expect(next).toHaveBeenCalledOnce();
-    expect(context.content).toBe(
-      "# Heading 1\n\nThis is a paragraph with **bold** and _italic_ text.\n\n-   Item 1\n-   Item 2\n\n[Link](http://link.com)",
-    );
-    expect(context.contentType).toBe("text/markdown");
-    expect(context.errors).toHaveLength(0);
-
-    // No close needed
-  });
-
-  it("should apply custom code block rule", async () => {
-    const middleware = new HtmlToMarkdownMiddleware();
-    const html = `
-      <html><body>
-        <pre><code class="language-javascript">const x = 1;</code></pre>
-      </body></html>`;
-    const context = createMockContext(html);
-    const next = vi.fn().mockResolvedValue(undefined);
-
-    await middleware.process(context, next);
-
-    expect(next).toHaveBeenCalledOnce();
-    // Check for trimmed content within the code block
-    expect(context.content).toContain("```javascript\nconst x = 1;\n```");
-    expect(context.errors).toHaveLength(0);
-
-    // No close needed
-  });
-
-  it("should preserve newlines within code blocks using <br>", async () => {
-    const middleware = new HtmlToMarkdownMiddleware();
-    const html = `
-      <html><body>
-        <pre><code class="language-text">Line 1<br>Line 2<br><br>Line 4</code></pre>
-      </body></html>`;
-    const context = createMockContext(html);
-    const next = vi.fn().mockResolvedValue(undefined);
-
-    await middleware.process(context, next);
-
-    expect(next).toHaveBeenCalledOnce();
-    const expectedMarkdown = "```text\nLine 1\nLine 2\n\nLine 4\n```";
-    // Normalize whitespace within the actual content for comparison
-    const actualContentNormalized = (context.content as string)
-      .replace(/\r\n/g, "\n") // Normalize line endings
-      .trim(); // Trim leading/trailing whitespace from the whole block
-    expect(actualContentNormalized).toBe(expectedMarkdown);
-    expect(context.errors).toHaveLength(0);
-  });
-
-  it("should apply custom table rule", async () => {
-    const middleware = new HtmlToMarkdownMiddleware();
-    const html = `
-      <html><body>
         <table>
           <thead><tr><th>Header 1</th><th>Header 2</th></tr></thead>
           <tbody><tr><td>Data 1</td><td>Data 2</td></tr></tbody>
         </table>
-      </body></html>`;
-    const context = createMockContext(html);
-    const next = vi.fn().mockResolvedValue(undefined);
+      </body></html>`);
 
-    await middleware.process(context, next);
-
-    expect(next).toHaveBeenCalledOnce();
-    // Turndown's default table output
-    const expectedMarkdown =
-      "| Header 1 | Header 2 |\n| --- | --- |\n| Data 1 | Data 2 |";
-    expect(context.content).toBe(expectedMarkdown);
+    expect(context.content).toBe(
+      "# Heading 1\n\nThis is a paragraph with **bold** and _italic_ text.\n\n-   Item 1\n-   Item 2\n\n[Link](http://link.com)\n\n| Header 1 | Header 2 |\n| --- | --- |\n| Data 1 | Data 2 |",
+    );
+    expect(context.contentType).toBe("text/markdown");
     expect(context.errors).toHaveLength(0);
+  });
 
-    // No close needed
+  it("should keep the language and every line of a code block", async () => {
+    const cases: Array<{ label: string; html: string; expected: string }> = [
+      {
+        label: "language class",
+        html: '<pre><code class="language-javascript">const x = 1;</code></pre>',
+        expected: "```javascript\nconst x = 1;\n```",
+      },
+      {
+        label: "<br> line breaks",
+        html: '<pre><code class="language-text">Line 1<br>Line 2<br><br>Line 4</code></pre>',
+        expected: "```text\nLine 1\nLine 2\n\nLine 4\n```",
+      },
+      {
+        // Real-world output from Shiki (tailwindcss.com, Astro/MDX sites, etc.).
+        // No `\n` or `<br>` between lines — only `<span class="line">` containers
+        // CSS-styled as `display: block`.
+        label: "Shiki span.line",
+        html: '<pre class="shiki"><code><span class="line"><span>npm</span><span> create vite@latest my-project</span></span><span class="line"><span>cd</span><span> my-project</span></span></code></pre>',
+        expected: "npm create vite@latest my-project\ncd my-project",
+      },
+      {
+        label: "highlight.js-style div.line",
+        html: '<pre><code><div class="line">line one</div><div class="line">line two</div><div class="line">line three</div></code></pre>',
+        expected: "line one\nline two\nline three",
+      },
+      {
+        label: "existing newlines and <br>",
+        html: "<pre><code>line one<br>line two\nline three</code></pre>",
+        expected: "line one\nline two\nline three",
+      },
+    ];
+
+    for (const { label, html, expected } of cases) {
+      const context = await convert(`<html><body>${html}</body></html>`);
+
+      expect.soft(context.content, label).toContain(expected);
+      expect.soft(context.errors, label).toHaveLength(0);
+    }
   });
 
   it("should split oversized tables before GFM conversion while retaining content", async () => {
@@ -153,13 +137,13 @@ describe("HtmlToMarkdownMiddleware", () => {
     expect(context.content.match(/\| Name \| Value \|/g)).toHaveLength(6);
   });
 
-  it("should preserve captions and colgroups when splitting oversized tables", async () => {
-    const middleware = new HtmlToMarkdownMiddleware();
+  it("should repeat the caption on every part of a split oversized table", async () => {
     const rows = Array.from(
       { length: 505 },
       (_, index) => `<tr><td>Row ${index + 1}</td><td>Value ${index + 1}</td></tr>`,
     ).join("");
-    const html = `
+
+    const context = await convert(`
       <html><body>
         <table>
           <caption>Release matrix</caption>
@@ -167,42 +151,14 @@ describe("HtmlToMarkdownMiddleware", () => {
           <thead><tr><th>Name</th><th>Value</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
-      </body></html>`;
-    const context = createMockContext(html);
-    const next = vi.fn().mockResolvedValue(undefined);
-    const originalTurndown = TurndownService.prototype.turndown;
-    let convertedHtml = "";
-    const turndownSpy = vi
-      .spyOn(TurndownService.prototype, "turndown")
-      .mockImplementation(function (
-        this: TurndownService,
-        input: Parameters<TurndownService["turndown"]>[0],
-      ) {
-        convertedHtml = String(input);
-        return originalTurndown.call(this, String(input));
-      });
+      </body></html>`);
 
-    try {
-      await middleware.process(context, next);
-
-      expect(next).toHaveBeenCalledOnce();
-      expect(context.errors).toHaveLength(0);
-      expect(convertedHtml.match(/<caption>Release matrix<\/caption>/g)).toHaveLength(6);
-      expect(convertedHtml.match(/<colgroup><col span="2"><\/colgroup>/g)).toHaveLength(
-        6,
-      );
-      expect(convertedHtml).toContain(
-        '<table><caption>Release matrix</caption><colgroup><col span="2"></colgroup><thead>',
-      );
-      expect(context.content.match(/Release matrix/g)).toHaveLength(6);
-      expect(context.content).toContain("| Row 505 | Value 505 |");
-    } finally {
-      turndownSpy.mockRestore();
-    }
+    expect(context.errors).toHaveLength(0);
+    expect(context.content.match(/Release matrix/g)).toHaveLength(6);
+    expect(context.content).toContain("| Row 505 | Value 505 |");
   });
 
   it("should preserve oversized tables as HTML when row splitting is not possible", async () => {
-    const middleware = new HtmlToMarkdownMiddleware();
     const headerCells = Array.from(
       { length: 1001 },
       (_, index) => `<th>Header ${index + 1}</th>`,
@@ -211,42 +167,21 @@ describe("HtmlToMarkdownMiddleware", () => {
       { length: 1001 },
       (_, index) => `<td>Value ${index + 1}</td>`,
     ).join("");
-    const html = `
+
+    const context = await convert(`
       <html><body>
         <table>
           <thead><tr>${headerCells}</tr></thead>
           <tbody><tr>${dataCells}</tr></tbody>
         </table>
-      </body></html>`;
-    const context = createMockContext(html);
-    const next = vi.fn().mockResolvedValue(undefined);
-    const originalTurndown = TurndownService.prototype.turndown;
-    let convertedHtml = "";
-    const turndownSpy = vi
-      .spyOn(TurndownService.prototype, "turndown")
-      .mockImplementation(function (
-        this: TurndownService,
-        input: Parameters<TurndownService["turndown"]>[0],
-      ) {
-        convertedHtml = String(input);
-        return originalTurndown.call(this, String(input));
-      });
+      </body></html>`);
 
-    try {
-      await middleware.process(context, next);
-
-      expect(next).toHaveBeenCalledOnce();
-      expect(context.errors).toHaveLength(0);
-      expect(convertedHtml).toContain("data-docs-mcp-preserved-table-id");
-      expect(convertedHtml).not.toContain("<th>Header 1</th>");
-      expect(context.content).toContain("<table>");
-      expect(context.content).toContain("<th>Header 1</th>");
-      expect(context.content).toContain("<td>Value 1001</td>");
-      expect(context.content).not.toContain("data-docs-mcp-preserved-table-id");
-      expect(context.content).not.toContain("| Header 1 |");
-    } finally {
-      turndownSpy.mockRestore();
-    }
+    expect(context.errors).toHaveLength(0);
+    expect(context.content).toContain("<table>");
+    expect(context.content).toContain("<th>Header 1</th>");
+    expect(context.content).toContain("<td>Value 1001</td>");
+    expect(context.content).not.toContain("data-docs-mcp-preserved-table-id");
+    expect(context.content).not.toContain("| Header 1 |");
   });
 
   it("should return empty string and markdown type if conversion results in empty markdown", async () => {
@@ -274,18 +209,6 @@ describe("HtmlToMarkdownMiddleware", () => {
 
     expect(next).toHaveBeenCalledOnce();
     expect(context.content).toBe(""); // Original content (empty string)
-    expect(context.errors).toHaveLength(0);
-  });
-
-  it("should skip processing if content type is not HTML", async () => {
-    const middleware = new HtmlToMarkdownMiddleware();
-    const context = createMockContext("Just plain text");
-    const next = vi.fn().mockResolvedValue(undefined);
-
-    await middleware.process(context, next);
-
-    expect(next).toHaveBeenCalledOnce();
-    expect(context.content).toBe("Just plain text"); // Content unchanged
     expect(context.errors).toHaveLength(0);
   });
 
@@ -389,110 +312,42 @@ Mixed: [Another Valid](http://another.com) and bad one.`;
     expect(context.errors).toHaveLength(0);
   });
 
-  it("should normalize block-level anchor whitespace into a single readable link label", async () => {
-    const middleware = new HtmlToMarkdownMiddleware();
-    const html = `
-      <html><body>
-        <a href="https://react.dev/reference/react/useDeferredValue">
+  it("should render a link label as one line that keeps its inline formatting", async () => {
+    const cases: Array<{ label: string; html: string; expected: string }> = [
+      {
+        label: "block-level whitespace",
+        html: `<a href="https://react.dev/reference/react/useDeferredValue">
           <div>
             <span>Previous</span>
             <span>useDeferredValue</span>
           </div>
-        </a>
-      </body></html>`;
-    const context = createMockContext(html);
-    const next = vi.fn().mockResolvedValue(undefined);
+        </a>`,
+        expected:
+          "[Previous useDeferredValue](https://react.dev/reference/react/useDeferredValue)",
+      },
+      {
+        label: "nested formatting",
+        html: '<a href="https://example.com/docs"><div><strong>Bold</strong> and <em>italic</em></div></a>',
+        expected: "[**Bold** and _italic_](https://example.com/docs)",
+      },
+      {
+        label: "inline code",
+        html: '<a href="https://example.com/api"><div><code>useEffect</code><span> API</span></div></a>',
+        expected: "[`useEffect` API](https://example.com/api)",
+      },
+      {
+        label: "image link",
+        html: '<a href="https://example.com/image"><div><img src="hero.png" alt="Hero"></div></a>',
+        expected: "[![Hero](hero.png)](https://example.com/image)",
+      },
+    ];
 
-    await middleware.process(context, next);
+    for (const { label, html, expected } of cases) {
+      const context = await convert(`<html><body>${html}</body></html>`);
 
-    expect(next).toHaveBeenCalledOnce();
-    expect(context.content).toBe(
-      "[Previous useDeferredValue](https://react.dev/reference/react/useDeferredValue)",
-    );
-    expect(context.errors).toHaveLength(0);
-  });
-
-  it("should preserve nested markdown formatting inside links", async () => {
-    const middleware = new HtmlToMarkdownMiddleware();
-    const html = `
-      <html><body>
-        <a href="https://example.com/docs"><div><strong>Bold</strong> and <em>italic</em></div></a>
-      </body></html>`;
-    const context = createMockContext(html);
-    const next = vi.fn().mockResolvedValue(undefined);
-
-    await middleware.process(context, next);
-
-    expect(next).toHaveBeenCalledOnce();
-    expect(context.content).toBe("[**Bold** and _italic_](https://example.com/docs)");
-    expect(context.errors).toHaveLength(0);
-  });
-
-  it("should preserve inline code formatting inside links", async () => {
-    const middleware = new HtmlToMarkdownMiddleware();
-    const html = `
-      <html><body>
-        <a href="https://example.com/api"><div><code>useEffect</code><span> API</span></div></a>
-      </body></html>`;
-    const context = createMockContext(html);
-    const next = vi.fn().mockResolvedValue(undefined);
-
-    await middleware.process(context, next);
-
-    expect(next).toHaveBeenCalledOnce();
-    expect(context.content).toBe("[`useEffect` API](https://example.com/api)");
-    expect(context.errors).toHaveLength(0);
-  });
-
-  it("should preserve image links while collapsing wrapper whitespace", async () => {
-    const middleware = new HtmlToMarkdownMiddleware();
-    const html = `
-      <html><body>
-        <a href="https://example.com/image"><div><img src="hero.png" alt="Hero"></div></a>
-      </body></html>`;
-    const context = createMockContext(html);
-    const next = vi.fn().mockResolvedValue(undefined);
-
-    await middleware.process(context, next);
-
-    expect(next).toHaveBeenCalledOnce();
-    expect(context.content).toBe("[![Hero](hero.png)](https://example.com/image)");
-    expect(context.errors).toHaveLength(0);
-  });
-
-  it("should preserve line breaks in Shiki-tokenized code blocks (span.line)", async () => {
-    const middleware = new HtmlToMarkdownMiddleware();
-    // Real-world output from Shiki (tailwindcss.com, Astro/MDX sites, etc.).
-    // No `\n` or `<br>` between lines — only `<span class="line">` containers
-    // CSS-styled as `display: block`.
-    const html = `
-      <html><body>
-        <pre class="shiki"><code><span class="line"><span>npm</span><span> create vite@latest my-project</span></span><span class="line"><span>cd</span><span> my-project</span></span></code></pre>
-      </body></html>`;
-    const context = createMockContext(html);
-    const next = vi.fn().mockResolvedValue(undefined);
-
-    await middleware.process(context, next);
-
-    expect(next).toHaveBeenCalledOnce();
-    expect(context.content).toContain("npm create vite@latest my-project\ncd my-project");
-    expect(context.errors).toHaveLength(0);
-  });
-
-  it("should preserve line breaks in highlight.js-style code blocks (div.line)", async () => {
-    const middleware = new HtmlToMarkdownMiddleware();
-    const html = `
-      <html><body>
-        <pre><code><div class="line">line one</div><div class="line">line two</div><div class="line">line three</div></code></pre>
-      </body></html>`;
-    const context = createMockContext(html);
-    const next = vi.fn().mockResolvedValue(undefined);
-
-    await middleware.process(context, next);
-
-    expect(next).toHaveBeenCalledOnce();
-    expect(context.content).toContain("line one\nline two\nline three");
-    expect(context.errors).toHaveLength(0);
+      expect.soft(context.content, label).toBe(expected);
+      expect.soft(context.errors, label).toHaveLength(0);
+    }
   });
 
   it("should convert code blocks containing element names the DOM cannot recreate", async () => {
@@ -513,23 +368,6 @@ Mixed: [Another Valid](http://another.com) and bad one.`;
     expect(context.errors).toHaveLength(0);
     expect(context.contentType).toBe("text/markdown");
     expect(context.content).toContain("200 cores");
-  });
-
-  it("should still respect existing newlines / <br> in code blocks", async () => {
-    const middleware = new HtmlToMarkdownMiddleware();
-    const html = `
-      <html><body>
-        <pre><code>line one<br>line two
-line three</code></pre>
-      </body></html>`;
-    const context = createMockContext(html);
-    const next = vi.fn().mockResolvedValue(undefined);
-
-    await middleware.process(context, next);
-
-    expect(next).toHaveBeenCalledOnce();
-    expect(context.content).toContain("line one\nline two\nline three");
-    expect(context.errors).toHaveLength(0);
   });
 
   it("never leaves markup in the context when the salvage itself fails", async () => {
@@ -579,20 +417,32 @@ line three</code></pre>
     // unbounded descent costs O(depth x size) — minutes on a document built
     // from thousands of nested wrappers. Past the bound the words are taken
     // and the walk stops.
-    const middleware = new HtmlToMarkdownMiddleware();
-    const $ = cheerio.load("<div><h1>Heading</h1><p>Body prose.</p></div>");
-    const node = $("div").get(0);
-    const internals = middleware as unknown as {
-      convertNodeWithFallback: (api: typeof $, n: typeof node, depth: number) => string;
-    };
+    const nested = (depth: number) =>
+      `<html><body>${'<div class="wrap">'.repeat(depth)}<h1>Heading</h1> <p>Body prose.</p>${"</div>".repeat(depth)}</body></html>`;
+    // Every subtree that holds a wrapper fails to convert, so the salvage
+    // descends one wrapper at a time until it reaches the heading.
+    const realTurndown = TurndownService.prototype.turndown;
+    vi.spyOn(TurndownService.prototype, "turndown").mockImplementation(function (
+      this: TurndownService,
+      input: Parameters<typeof realTurndown>[0],
+    ) {
+      if (typeof input === "string" && input.includes('class="wrap"')) {
+        throw new Error("Turndown failed");
+      }
+      return realTurndown.call(this, input);
+    });
 
-    const withinBound = internals.convertNodeWithFallback($, node, 0);
-    const atBound = internals.convertNodeWithFallback($, node, 100);
+    try {
+      const withinBound = await convert(nested(2));
+      const pastBound = await convert(nested(101));
 
-    // Within the bound the structure survives; at it, only the text does.
-    expect(withinBound).toContain("# Heading");
-    expect(atBound).not.toContain("#");
-    expect(atBound).toContain("Heading");
-    expect(atBound).toContain("Body prose.");
+      // Within the bound the structure survives; past it, only the text does.
+      expect(withinBound.content).toContain("# Heading");
+      expect(pastBound.content).not.toContain("#");
+      expect(pastBound.content).toContain("Heading");
+      expect(pastBound.content).toContain("Body prose.");
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });

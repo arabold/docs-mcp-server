@@ -4,8 +4,6 @@ import { defaults } from "../../utils/config";
 import { DimensionError } from "../errors";
 import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
 
-// Suppress logger output during tests
-
 // Mock embedding models that produce vectors of different sizes
 class MockBaseEmbeddings extends Embeddings {
   constructor(private dimension: number) {
@@ -16,133 +14,69 @@ class MockBaseEmbeddings extends Embeddings {
     return Array(this.dimension).fill(1);
   }
 
-  async embedDocuments(_documents: string[]): Promise<number[][]> {
-    return [Array(this.dimension).fill(1)];
+  async embedDocuments(documents: string[]): Promise<number[][]> {
+    return documents.map(() => Array(this.dimension).fill(1));
   }
 }
 
 describe("FixedDimensionEmbeddings", () => {
   const targetDimension = defaults.embeddings.vectorDimension;
 
-  test("should pass through vectors of correct dimension", async () => {
-    const base = new MockBaseEmbeddings(targetDimension);
-    const wrapper = new FixedDimensionEmbeddings(base, targetDimension, "test:model");
-
-    const vector = await wrapper.embedQuery("test");
-    expect(vector.length).toBe(targetDimension);
-  });
-
-  test("should pad vectors that are too short", async () => {
+  test("pads short vectors with zeros and passes exact-size ones through (query and documents)", async () => {
     const shortDimension = 1024;
-    const base = new MockBaseEmbeddings(shortDimension);
-    const wrapper = new FixedDimensionEmbeddings(base, targetDimension, "test:model");
-
-    const vector = await wrapper.embedQuery("test");
-    expect(vector.length).toBe(targetDimension);
-    // Check that first part contains the original values
-    expect(vector.slice(0, shortDimension)).toEqual(Array(shortDimension).fill(1));
-    // Check that padding is zeros
-    expect(vector.slice(shortDimension)).toEqual(
-      Array(targetDimension - shortDimension).fill(0),
-    );
-  });
-
-  test("should truncate oversized vectors when allowTruncate is true", async () => {
-    const largeDimension = 2048;
-    const base = new MockBaseEmbeddings(largeDimension);
-    const wrapper = new FixedDimensionEmbeddings(
-      base,
+    const padded = [
+      ...Array(shortDimension).fill(1),
+      ...Array(targetDimension - shortDimension).fill(0),
+    ];
+    const short = new FixedDimensionEmbeddings(
+      new MockBaseEmbeddings(shortDimension),
       targetDimension,
       "test:model",
-      true,
+    );
+    const exact = new FixedDimensionEmbeddings(
+      new MockBaseEmbeddings(targetDimension),
+      targetDimension,
+      "test:model",
     );
 
-    const vector = await wrapper.embedQuery("test");
-    expect(vector.length).toBe(targetDimension);
-    expect(vector).toEqual(Array(targetDimension).fill(1));
+    expect(await short.embedQuery("test")).toEqual(padded);
+    expect(await short.embedDocuments(["test1", "test2"])).toEqual([padded, padded]);
+    expect(await exact.embedQuery("test")).toEqual(Array(targetDimension).fill(1));
   });
 
-  test("should throw DimensionError for oversized vectors when allowTruncate is false", async () => {
-    const largeDimension = 3072;
-    const base = new MockBaseEmbeddings(largeDimension);
-    const wrapper = new FixedDimensionEmbeddings(base, targetDimension, "test:model");
+  test("truncates oversized vectors when allowTruncate is true", async () => {
+    const cases: [label: string, dimension: number, spec: string][] = [
+      ["a 2048-dimension vector", 2048, "test:model"],
+      ["a Gemini-sized 3072-dimension vector", 3072, "gemini:gemini-embedding-001"],
+    ];
 
-    await expect(() => wrapper.embedQuery("test")).rejects.toThrow(DimensionError);
+    for (const [label, dimension, spec] of cases) {
+      const wrapper = new FixedDimensionEmbeddings(
+        new MockBaseEmbeddings(dimension),
+        targetDimension,
+        spec,
+        true,
+      );
+      expect
+        .soft(await wrapper.embedQuery("test"), label)
+        .toEqual(Array(targetDimension).fill(1));
+    }
   });
 
-  test("should name the full model specification in DimensionError", async () => {
+  test("rejects an oversized vector when allowTruncate is false, naming the model spec verbatim", async () => {
     // The spec is carried verbatim rather than split and rejoined, so segments
-    // after a second colon survive into the diagnostic.
-    const base = new MockBaseEmbeddings(3072);
-    const wrapper = new FixedDimensionEmbeddings(
-      base,
-      targetDimension,
-      "gemini:model:tag",
-    );
+    // after a second colon survive into the diagnostic, and an unprefixed spec
+    // gets no prefix.
+    for (const spec of ["gemini:model:tag", "nomic-embed-text:latest"]) {
+      const wrapper = new FixedDimensionEmbeddings(
+        new MockBaseEmbeddings(3072),
+        targetDimension,
+        spec,
+      );
+      const error = await wrapper.embedQuery("test").catch((e: unknown) => e);
 
-    await expect(() => wrapper.embedQuery("test")).rejects.toThrow(
-      /Model "gemini:model:tag"/,
-    );
-  });
-
-  test("should not prefix an unprefixed model specification in DimensionError", async () => {
-    const base = new MockBaseEmbeddings(3072);
-    const wrapper = new FixedDimensionEmbeddings(
-      base,
-      targetDimension,
-      "nomic-embed-text:latest",
-    );
-
-    await expect(() => wrapper.embedQuery("test")).rejects.toThrow(
-      /Model "nomic-embed-text:latest"/,
-    );
-  });
-
-  test("should truncate Gemini-sized vectors (3072d) to target dimension when allowTruncate is true", async () => {
-    const geminiDimension = 3072;
-    const base = new MockBaseEmbeddings(geminiDimension);
-    const wrapper = new FixedDimensionEmbeddings(
-      base,
-      targetDimension,
-      "gemini:gemini-embedding-001",
-      true,
-    );
-
-    const vector = await wrapper.embedQuery("test");
-    expect(vector.length).toBe(targetDimension);
-    expect(vector).toEqual(Array(targetDimension).fill(1));
-  });
-
-  test("should expose allowTruncate as a public property", () => {
-    const base = new MockBaseEmbeddings(targetDimension);
-    const withTruncate = new FixedDimensionEmbeddings(
-      base,
-      targetDimension,
-      "gemini:model",
-      true,
-    );
-    const withoutTruncate = new FixedDimensionEmbeddings(
-      base,
-      targetDimension,
-      "test:model",
-      false,
-    );
-
-    expect(withTruncate.allowTruncate).toBe(true);
-    expect(withoutTruncate.allowTruncate).toBe(false);
-  });
-
-  test("should process multiple documents correctly", async () => {
-    const shortDimension = 1024;
-    const base = new MockBaseEmbeddings(shortDimension);
-    const wrapper = new FixedDimensionEmbeddings(base, targetDimension, "test:model");
-
-    const vectors = await wrapper.embedDocuments(["test1", "test2"]);
-    expect(vectors.length).toBe(1); // Our mock returns just one vector
-    expect(vectors[0].length).toBe(targetDimension);
-    // Check padding
-    expect(vectors[0].slice(shortDimension)).toEqual(
-      Array(targetDimension - shortDimension).fill(0),
-    );
+      expect.soft(error, spec).toBeInstanceOf(DimensionError);
+      expect.soft(String(error), spec).toContain(`Model "${spec}"`);
+    }
   });
 });

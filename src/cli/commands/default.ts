@@ -6,53 +6,53 @@ import type { Argv } from "yargs";
 import { startAppServer } from "../../app";
 import { startStdioServer } from "../../mcp/startStdioServer";
 import { initializeTools } from "../../mcp/tools";
-import { PipelineFactory, type PipelineOptions } from "../../pipeline";
-import { DocumentManagementService } from "../../store";
-import { EmbeddingModelChangedError } from "../../store/errors";
+import { openBackend } from "../../services/backend";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { loadConfig } from "../../utils/config";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
+import {
+  withAuthOptions,
+  withModelChangeOptions,
+  withPublicUrlOptions,
+  withServerIdentityOptions,
+} from "../options";
 import { applyGlobalCliOutputMode } from "../output";
 import { registerGlobalServices } from "../services";
 import {
   type CliContext,
+  checkAuthForProtocol,
   createAppServerConfig,
   ensurePlaywrightBrowsersInstalled,
   getEventBus,
   handleEmbeddingModelChange,
-  parseAuthConfig,
   resolveProtocol,
-  validateAuthConfig,
-  warnHttpUsage,
 } from "../utils";
 
 export function createDefaultAction(cli: Argv) {
   cli.command(
     ["$0", "server"],
     "Starts the Docs MCP server (Unified Mode)",
-    (yargs) => {
-      return (
-        yargs
-          .option("protocol", {
-            type: "string",
-            description: "Protocol for MCP server",
-            choices: ["auto", "stdio", "http"],
-            default: "auto",
-          })
-          .option("port", {
-            type: "string", // Keep as string to match old behavior/validation, or number? Using string allows environment variable mapping via loadConfig if strict number parsing isn't desired immediately. Actually validation logic expects string often. But Yargs can parse number.
-            description: "Port for the server",
-          })
-          .option("host", {
-            type: "string",
-            description: "Host to bind the server to",
-          })
-          .option("public-origin", {
-            type: "string",
-            description:
-              "Public origin advertised to clients (e.g., https://docs.example.com)",
-            alias: "publicOrigin",
-          })
+    (yargs) =>
+      withAuthOptions(
+        withServerIdentityOptions(
+          withPublicUrlOptions(
+            withModelChangeOptions(yargs)
+              .option("protocol", {
+                type: "string",
+                description: "Protocol for MCP server",
+                choices: ["auto", "stdio", "http"],
+                defaultDescription: "auto",
+              })
+              .option("port", {
+                type: "string", // Keep as string to match old behavior/validation, or number? Using string allows environment variable mapping via loadConfig if strict number parsing isn't desired immediately. Actually validation logic expects string often. But Yargs can parse number.
+                description: "Port for the server",
+              })
+              .option("host", {
+                type: "string",
+                description: "Host to bind the server to",
+              }),
+          ),
+        )
           .option("embedding-model", {
             type: "string",
             description:
@@ -68,40 +68,31 @@ export function createDefaultAction(cli: Argv) {
             type: "boolean",
             description:
               "Run in read-only mode (only expose read tools, disable write/job tools)",
-            default: false,
+            defaultDescription: "false",
             alias: "readOnly",
-          })
-          // Auth options
-          .option("auth-enabled", {
-            type: "boolean",
-            description: "Enable OAuth2/OIDC authentication for MCP endpoints",
-            default: false,
-            alias: "authEnabled",
-          })
-          .option("auth-issuer-url", {
-            type: "string",
-            description: "Issuer/discovery URL for OAuth2/OIDC provider",
-            alias: "authIssuerUrl",
-          })
-          .option("auth-audience", {
-            type: "string",
-            description: "JWT audience claim (identifies this protected resource)",
-            alias: "authAudience",
-          })
-      );
-    },
+          }),
+      ),
     async (argv) => {
+      // Options the user did not pass are absent from argv, so the protocol,
+      // read-only mode and auth come from env, config file or defaults here.
+      // The logger writes to stderr, so loading before the stdio log level is
+      // set cannot corrupt the protocol stream on stdout.
+      const appConfig = loadConfig(argv, {
+        configPath: argv.config as string,
+        searchDir: argv.storePath as string,
+      });
+
       await telemetry.track(TelemetryEvent.CLI_COMMAND, {
         command: "default",
-        protocol: argv.protocol,
+        protocol: appConfig.server.protocol,
         port: argv.port,
         host: argv.host,
         resume: argv.resume,
-        readOnly: argv.readOnly,
-        authEnabled: !!argv.authEnabled,
+        readOnly: appConfig.app.readOnly,
+        authEnabled: appConfig.auth.enabled,
       });
 
-      const resolvedProtocol = resolveProtocol(argv.protocol as string);
+      const resolvedProtocol = resolveProtocol(appConfig.server.protocol);
       if (resolvedProtocol === "stdio") {
         setLogLevel(LogLevel.ERROR);
       } else {
@@ -113,72 +104,48 @@ export function createDefaultAction(cli: Argv) {
 
       logger.debug("No subcommand specified, starting unified server by default...");
 
-      // Validate inputs if provided, otherwise validation happens after config load?
-      // Old logic validated options.port etc. but yargs parsing might be loose?
-      // Since we don't have defaults in Yargs, argv.port might be undefined.
-      // logic below uses loadConfig which fills defaults.
-      // So validation should happen AFTER loadConfig on the RESULTING config?
-      // OR we validate argv if present?
-      // The old logic validated valid integers.
-      // We will rely on Zod schema validation inside loadConfig.
-
-      const appConfig = loadConfig(argv, {
-        configPath: argv.config as string,
-        searchDir: argv.storePath as string,
-      });
-
-      // Propagate resolved store path? loadConfig logic handled it?
-      // loadConfig takes argv, so it mapped `storePath` to `app.storePath`.
-      // But `argv.storePath` was resolved by middleware in index.ts?
-      // Yes. So appConfig has resolved path.
-
-      // Parse and validate auth config
-      const authConfig = parseAuthConfig({
-        authEnabled: appConfig.auth.enabled,
-        authIssuerUrl: appConfig.auth.issuerUrl,
-        authAudience: appConfig.auth.audience,
-      });
-
-      if (authConfig) {
-        validateAuthConfig(authConfig);
-        warnHttpUsage(authConfig, appConfig.server.ports.default);
-      }
+      checkAuthForProtocol(
+        appConfig.auth,
+        resolvedProtocol,
+        appConfig.server.ports.default,
+      );
 
       ensurePlaywrightBrowsersInstalled();
 
       const eventBus = getEventBus(argv as CliContext);
 
-      const docService = new DocumentManagementService(eventBus, appConfig);
-      try {
-        await docService.initialize();
-      } catch (error) {
-        if (error instanceof EmbeddingModelChangedError) {
-          await handleEmbeddingModelChange(error, docService);
-        } else {
-          throw error;
-        }
-      }
-      const pipelineOptions: PipelineOptions = {
-        recoverJobs: (argv.resume as boolean) || false,
-        appConfig: appConfig,
-      };
-      const pipeline = await PipelineFactory.createPipeline(
-        docService,
+      const backend = await openBackend({
+        appConfig,
         eventBus,
-        pipelineOptions,
-      );
+        // A read-only server runs no jobs, so it leaves interrupted ones to the
+        // process that does
+        jobs: {
+          interruptedJobs: appConfig.app.readOnly
+            ? "leave"
+            : argv.resume
+              ? "recover"
+              : "fail",
+        },
+        onEmbeddingModelChange: (error, service) =>
+          handleEmbeddingModelChange(
+            error,
+            service,
+            argv.acceptModelChange as boolean | undefined,
+          ),
+      });
+      // Registered first, so shutdown closes it even when a server fails to start
+      registerGlobalServices({ backend });
 
       if (resolvedProtocol === "stdio") {
         logger.debug(`Auto-detected stdio protocol (no TTY)`);
-        await pipeline.start();
-        const mcpTools = await initializeTools(docService, pipeline, appConfig);
+        const mcpTools = await initializeTools(
+          backend.docService,
+          backend.pipeline,
+          appConfig,
+        );
         const mcpServer = await startStdioServer(mcpTools, appConfig);
 
-        registerGlobalServices({
-          mcpStdioServer: mcpServer,
-          docService,
-          pipeline,
-        });
+        registerGlobalServices({ mcpStdioServer: mcpServer });
 
         await new Promise(() => {});
       } else {
@@ -187,7 +154,6 @@ export function createDefaultAction(cli: Argv) {
           enableWebInterface: true,
           enableMcpServer: true,
           enableApiServer: true,
-          enableWorker: true,
           port: appConfig.server.ports.default,
           showLogo: argv.logo as boolean,
           startupContext: {
@@ -196,18 +162,9 @@ export function createDefaultAction(cli: Argv) {
           },
         });
 
-        const appServer = await startAppServer(
-          docService,
-          pipeline,
-          eventBus,
-          config,
-          appConfig,
-        );
+        const appServer = await startAppServer(backend, config, appConfig);
 
-        registerGlobalServices({
-          appServer,
-          docService,
-        });
+        registerGlobalServices({ appServer });
 
         await new Promise(() => {}); // Keep running
       }

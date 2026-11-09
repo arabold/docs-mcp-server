@@ -1,377 +1,202 @@
 /**
- * CLI argument validation tests.
- * Tests that commands accept the correct arguments according to the CLI Commands and Arguments Matrix.
+ * Tests for the CLI setup: global options, the validators commands share, and
+ * the rule that options mapped onto settings declare no built-in value.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DocumentManagementService } from "../store";
-import { resolveStorePath } from "../utils/paths";
-import { createCli } from "./index";
-import { resolveProtocol, validatePort, validateResumeFlag } from "./utils";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import type { Argv } from "yargs";
+import { Parser } from "yargs/helpers";
+import { openBackend } from "../services/backend";
+import { getConfigMappedCliKeys } from "../utils/config";
+import { COMMAND_FACTORIES, createCli, registerGlobalOptions } from "./index";
+import { resolveProtocol, validateHost, validatePort } from "./utils";
 
-// Mocks for execution tests will be defined below in dedicated describe block
+vi.mock("../telemetry", () => ({
+  initTelemetry: vi.fn(),
+  shouldEnableTelemetry: vi.fn().mockReturnValue(false),
+  telemetry: {
+    isEnabled: vi.fn().mockReturnValue(false),
+    setGlobalContext: vi.fn(),
+    track: vi.fn(),
+  },
+  TelemetryEvent: { CLI_COMMAND: "cli_command" },
+}));
 
-// Mock CLI utils early to prevent side effects (like Playwright installation)
-vi.mock("./utils", async () => {
-  const actual = await vi.importActual<any>("./utils");
-  return {
-    ...actual,
-    ensurePlaywrightBrowsersInstalled: vi.fn(), // Mock to prevent side effects in tests
-  };
+vi.mock("../services/backend", () => ({
+  openBackend: vi.fn(async () => ({
+    docService: { listLibraries: async () => [] },
+    close: vi.fn(),
+  })),
+}));
+
+describe("global options", () => {
+  it("opens the store that --store-path names, over DOCS_MCP_STORE_PATH", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "cli-store-path-"));
+    const savedStorePath = process.env.DOCS_MCP_STORE_PATH;
+    process.env.DOCS_MCP_STORE_PATH = path.join(dir, "from-env");
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      await createCli([]).parseAsync([
+        "list",
+        "--store-path",
+        path.join(dir, "from-flag"),
+      ]);
+
+      const [options] = vi.mocked(openBackend).mock.calls[0] ?? [];
+      expect(options?.appConfig.app.storePath).toBe(path.join(dir, "from-flag"));
+    } finally {
+      stdout.mockRestore();
+      process.env.DOCS_MCP_STORE_PATH = savedStorePath;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
-vi.mock("../events", () => ({
-  EventBusService: vi.fn().mockImplementation(function () {
-    return {
-      emitter: {},
-      emit: vi.fn(),
-      on: vi.fn(),
-      off: vi.fn(),
+describe("resolveProtocol", () => {
+  it("takes an explicit protocol as given and resolves auto from the terminal", () => {
+    const savedTty = { stdin: process.stdin.isTTY, stdout: process.stdout.isTTY };
+    const cases: Array<{ protocol: string; terminal: boolean; expected: string }> = [
+      { protocol: "stdio", terminal: true, expected: "stdio" },
+      { protocol: "http", terminal: false, expected: "http" },
+      // No terminal, like VS Code or CI/CD
+      { protocol: "auto", terminal: false, expected: "stdio" },
+      { protocol: "auto", terminal: true, expected: "http" },
+    ];
+    try {
+      for (const { protocol, terminal, expected } of cases) {
+        process.stdin.isTTY = terminal;
+        process.stdout.isTTY = terminal;
+        expect
+          .soft(resolveProtocol(protocol), `${protocol}, terminal: ${terminal}`)
+          .toBe(expected);
+      }
+    } finally {
+      process.stdin.isTTY = savedTty.stdin;
+      process.stdout.isTTY = savedTty.stdout;
+    }
+
+    expect(() => resolveProtocol("invalid")).toThrow(
+      "Invalid protocol: invalid. Must be 'auto', 'stdio', or 'http'",
+    );
+  });
+});
+
+describe("validatePort", () => {
+  it("accepts a port from 1 to 65535 and rejects anything else", () => {
+    const cases: Array<{ input: string; expected: number | "rejected" }> = [
+      { input: "3000", expected: 3000 },
+      { input: "8080", expected: 8080 },
+      { input: "1", expected: 1 },
+      { input: "65535", expected: 65535 },
+      { input: "0", expected: "rejected" },
+      { input: "65536", expected: "rejected" },
+      { input: "-1", expected: "rejected" },
+      { input: "abc", expected: "rejected" },
+      { input: "", expected: "rejected" },
+    ];
+
+    for (const { input, expected } of cases) {
+      const label = JSON.stringify(input);
+      if (expected === "rejected") {
+        expect.soft(() => validatePort(input), label).toThrow("Invalid port number");
+      } else {
+        expect.soft(validatePort(input), label).toBe(expected);
+      }
+    }
+  });
+});
+
+describe("validateHost", () => {
+  it("trims a host and rejects an empty one or one with whitespace inside", () => {
+    const cases: Array<{ input: string; expected: string | RegExp }> = [
+      { input: "  localhost ", expected: "localhost" },
+      { input: "0.0.0.0", expected: "0.0.0.0" },
+      { input: "::1", expected: "::1" },
+      { input: "", expected: /cannot be empty/ },
+      { input: "   ", expected: /cannot be empty/ },
+      { input: "local host", expected: /cannot contain whitespace/ },
+    ];
+
+    for (const { input, expected } of cases) {
+      const label = JSON.stringify(input);
+      if (expected instanceof RegExp) {
+        expect.soft(() => validateHost(input), label).toThrow(expected);
+      } else {
+        expect.soft(validateHost(input), label).toBe(expected);
+      }
+    }
+  });
+});
+
+describe("CLI options mapped to settings", () => {
+  interface Declaration {
+    command: string;
+    name: string;
+    options: Record<string, unknown>;
+  }
+
+  /**
+   * A yargs stand-in that records option and positional declarations, runs
+   * command builders against itself, and returns itself for every other call.
+   */
+  function createRecorder(command: string, declarations: Declaration[]): Argv {
+    const record = (name: string, options: Record<string, unknown> = {}) => {
+      declarations.push({ command, name, options });
     };
-  }),
-}));
-
-// Mock telemetry to prevent side effects and timeouts
-vi.mock("../telemetry", async () => {
-  return {
-    initTelemetry: vi.fn(),
-    shouldEnableTelemetry: vi.fn().mockReturnValue(false),
-    TelemetryService: vi.fn().mockImplementation(function () {
-      return {
-        shutdown: vi.fn(),
-      };
-    }),
-    telemetry: {
-      isEnabled: vi.fn().mockReturnValue(false),
-      setGlobalContext: vi.fn(),
-      track: vi.fn(),
-      shutdown: vi.fn(),
-    },
-    TelemetryEvent: {
-      APP_STARTED: "app_started",
-      APP_SHUTDOWN: "app_shutdown",
-      CLI_COMMAND: "cli_command",
-      TOOL_USED: "tool_used",
-      PIPELINE_JOB_STARTED: "pipeline_job_started",
-      PIPELINE_JOB_COMPLETED: "pipeline_job_completed",
-      PIPELINE_JOB_FAILED: "pipeline_job_failed",
-    },
-  };
-});
-
-// --- Additional mocks for createPipelineWithCallbacks behavior tests ---
-vi.mock("../pipeline/PipelineFactory", () => ({
-  PipelineFactory: {
-    createPipeline: vi.fn().mockResolvedValue({
-      setCallbacks: vi.fn(),
-      shutdown: vi.fn(),
-      start: vi.fn(),
-    }),
-  },
-}));
-
-// --- Mocks & state for handler wiring regression (formerly commandHandlers.test.ts) ---
-let capturedCreateArgs: any[] = [];
-let listToolExecuteCalled = false;
-vi.mock("../tools", async () => {
-  const actual = await vi.importActual<any>("../tools");
-  return {
-    ...actual,
-    ListLibrariesTool: vi.fn().mockImplementation(function () {
-      return {
-        execute: vi.fn(async () => {
-          listToolExecuteCalled = true;
-          return { libraries: [] };
-        }),
-      };
-    }),
-  };
-});
-
-// CLI Command Arguments Matrix tests removed as they relied on Commander-specific internal properties.
-// Command configuration is now verified by individual command tests and Typescript validation.
-
-describe("CLI command handler parameters", () => {
-  beforeEach(() => {
-    capturedCreateArgs = [];
-    listToolExecuteCalled = false;
-  });
-
-  it("list command forwards --server-url and uses correct (options, command) signature", async () => {
-    const program = createCli([]);
-    const serverUrl = "http://example.com/api";
-
-    await expect(
-      program.parseAsync(["list", "--server-url", serverUrl]),
-    ).resolves.not.toThrow();
-
-    expect(capturedCreateArgs).toContainEqual(
-      expect.objectContaining({
-        eventBus: expect.any(Object),
-        serverUrl,
-        appConfig: expect.objectContaining({
-          app: expect.objectContaining({ storePath: expect.any(String) }),
-        }),
-      }),
-    );
-    expect(listToolExecuteCalled).toBe(true);
-  });
-});
-
-// Global mocks for the propagation tests - declared at module level
-vi.mock("../utils/paths", () => ({
-  resolveStorePath: vi.fn().mockReturnValue("/mocked/resolved/path"),
-  getProjectRoot: vi.fn().mockReturnValue("/mocked/project/root"),
-}));
-
-vi.mock("../store", async () => {
-  const actual = await vi.importActual<any>("../store");
-  return {
-    ...actual,
-    createDocumentManagement: vi.fn(async (opts: any) => {
-      capturedCreateArgs.push(opts);
-      return { shutdown: vi.fn() } as any;
-    }),
-    DocumentManagementService: vi.fn().mockImplementation(function () {
-      return {
-        initialize: vi.fn().mockResolvedValue(undefined),
-        shutdown: vi.fn(),
-      };
-    }),
-  };
-});
-vi.mock("../store/errors", () => ({
-  EmbeddingModelChangedError: class EmbeddingModelChangedError extends Error {
-    name = "EmbeddingModelChangedError";
-  },
-}));
-
-vi.mock("../app", () => ({
-  startAppServer: vi.fn().mockResolvedValue({
-    shutdown: vi.fn(),
-  }),
-}));
-
-vi.mock("../mcp/tools", () => ({
-  initializeTools: vi.fn().mockResolvedValue({}),
-}));
-
-vi.mock("../mcp/startStdioServer", () => ({
-  startStdioServer: vi.fn().mockResolvedValue({ shutdown: vi.fn() }),
-}));
-
-describe("Global option propagation", () => {
-  let mockResolveStorePath: any;
-  let mockDocumentManagementService: any;
-
-  beforeEach(async () => {
-    vi.clearAllMocks();
-
-    // Get references to the mocked functions
-    mockResolveStorePath = vi.mocked(resolveStorePath);
-    mockDocumentManagementService = vi.mocked(DocumentManagementService);
-  });
-
-  it("should pass --store-path through preAction hook to default command", async () => {
-    const customStorePath = "/custom/data/path";
-    const resolvedStorePath = "/resolved/custom/path";
-
-    // Mock the path resolution to return a resolved path
-    mockResolveStorePath.mockReturnValue(resolvedStorePath);
-
-    const program = createCli([]);
-
-    // Simulate running the default command with --store-path
-    // Use --protocol http to get a random available port
-    const _parsePromise = program.parseAsync([
-      "--store-path",
-      customStorePath,
-      "--protocol",
-      "http",
-    ]);
-
-    // Give it a moment to start and then verify the mocks were called
-    await new Promise((resolve) => setTimeout(resolve, 100));
-
-    // Verify that resolveStorePath was called with the CLI option
-    expect(mockResolveStorePath).toHaveBeenCalledWith(customStorePath);
-
-    // Verify that DocumentManagementService was constructed with the resolved path
-    expect(mockDocumentManagementService).toHaveBeenCalledWith(
-      expect.objectContaining({
-        emitter: expect.any(Object),
-      }), // EventBusService instance
-      expect.objectContaining({
-        app: expect.objectContaining({ storePath: resolvedStorePath }),
-      }),
-    );
-
-    // The parseAsync promise will hang since it starts a server, but we've verified our assertions
-    // No need to wait for it to complete
-  }, 10000);
-
-  it("should handle DOCS_MCP_STORE_PATH environment variable through preAction hook", async () => {
-    const envStorePath = "/env/data/path";
-    const resolvedStorePath = "/resolved/env/path";
-
-    // Set environment variable
-    process.env.DOCS_MCP_STORE_PATH = envStorePath;
-
-    // Mock the path resolution
-    mockResolveStorePath.mockReturnValue(resolvedStorePath);
-
-    const program = createCli([]);
-
-    // Run default command without explicit --store-path
-    // Use --protocol http to get a random available port
-    const _parsePromise = program.parseAsync(["--protocol", "http"]);
-
-    // Give it a moment to start and then verify the mocks were called
-    await new Promise((resolve) => setTimeout(resolve, 100));
-
-    // Verify that resolveStorePath was called with the env var value
-    expect(mockResolveStorePath).toHaveBeenCalledWith(envStorePath);
-
-    // Verify that DocumentManagementService was constructed with the resolved path
-    expect(mockDocumentManagementService).toHaveBeenCalledWith(
-      expect.objectContaining({
-        emitter: expect.any(Object),
-      }), // EventBusService instance
-      expect.objectContaining({
-        app: expect.objectContaining({ storePath: resolvedStorePath }),
-      }),
-    );
-
-    // Clean up
-    delete process.env.DOCS_MCP_STORE_PATH;
-  }, 10000);
-
-  it("should pass --embedding-model through to document management", async () => {
-    const embeddingModel = "openai:text-embedding-3-large";
-    const resolvedStorePath = "/mocked/resolved/path";
-    mockResolveStorePath.mockReturnValue(resolvedStorePath);
-
-    const program = createCli([]);
-
-    // Parse with embedding model flag
-    const _parsePromise = program.parseAsync([
-      "--embedding-model",
-      embeddingModel,
-      "--protocol",
-      "http",
-    ]);
-
-    await new Promise((resolve) => setTimeout(resolve, 100));
-
-    expect(mockDocumentManagementService).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({
-        app: expect.objectContaining({
-          storePath: resolvedStorePath,
-          embeddingModel,
-        }),
-      }),
-    );
-  }, 10000);
-
-  it("should pick up DOCS_MCP_EMBEDDING_MODEL environment variable", async () => {
-    const envModel = "openai:text-embedding-ada-002";
-    const resolvedStorePath = "/mocked/resolved/path";
-    process.env.DOCS_MCP_EMBEDDING_MODEL = envModel;
-    mockResolveStorePath.mockReturnValue(resolvedStorePath);
-
-    const program = createCli([]);
-
-    // Run without explicit --embedding-model
-    const _parsePromise = program.parseAsync(["--protocol", "http"]);
-
-    await new Promise((resolve) => setTimeout(resolve, 100));
-
-    expect(mockDocumentManagementService).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({
-        app: expect.objectContaining({
-          storePath: resolvedStorePath,
-          embeddingModel: envModel,
-        }),
-      }),
-    );
-
-    delete process.env.DOCS_MCP_EMBEDDING_MODEL;
-  }, 10000);
-});
-
-describe("CLI Validation Logic", () => {
-  describe("resolveProtocol", () => {
-    it("should return explicit protocol values", () => {
-      expect(resolveProtocol("stdio")).toBe("stdio");
-      expect(resolveProtocol("http")).toBe("http");
+    const recorder: Argv = new Proxy({} as Argv, {
+      get(_target, property) {
+        if (property === "then") {
+          return undefined;
+        }
+        return (...args: unknown[]) => {
+          if (property === "option" || property === "positional") {
+            record(args[0] as string, args[1] as Record<string, unknown>);
+          } else if (property === "options") {
+            for (const [name, options] of Object.entries(args[0] as object)) {
+              record(name, options);
+            }
+          } else if (property === "command") {
+            const [names, , builder] = args;
+            const commandName = [names].flat()[0] as string;
+            if (typeof builder === "function") {
+              builder(createRecorder(commandName, declarations));
+            } else if (builder && typeof builder === "object") {
+              for (const [name, options] of Object.entries(builder)) {
+                declarations.push({ command: commandName, name, options });
+              }
+            }
+          }
+          return recorder;
+        };
+      },
     });
+    return recorder;
+  }
 
-    it("should auto-detect stdio when no TTY", () => {
-      // Mock no TTY environment (like CI/CD or VS Code)
-      vi.stubGlobal("process", {
-        ...process,
-        stdin: { isTTY: false },
-        stdout: { isTTY: false },
-      });
+  it("declares no built-in value on an option that maps onto a setting", () => {
+    const declarations: Declaration[] = [];
+    registerGlobalOptions(createRecorder("(global)", declarations));
+    for (const registerCommand of COMMAND_FACTORIES) {
+      const before = declarations.length;
+      registerCommand(createRecorder("(root)", declarations));
+      // A factory the recorder cannot follow would hide its offenders
+      expect.soft(declarations.length - before, registerCommand.name).toBeGreaterThan(0);
+    }
+    const mapped = getConfigMappedCliKeys();
 
-      expect(resolveProtocol("auto")).toBe("stdio");
-    });
+    const offenders = declarations
+      .filter(({ name, options }) => {
+        // The same conversion yargs applies to argv keys.
+        const keys = [name, ...[options.alias ?? []].flat()].map((key) =>
+          Parser.camelCase(String(key)),
+        );
+        return keys.some((key) => mapped.has(key)) && options.default !== undefined;
+      })
+      .map(({ command, name }) => `${command} --${name}`);
 
-    it("should auto-detect http when TTY is available", () => {
-      // Mock TTY environment (like terminal)
-      vi.stubGlobal("process", {
-        ...process,
-        stdin: { isTTY: true },
-        stdout: { isTTY: true },
-      });
-
-      expect(resolveProtocol("auto")).toBe("http");
-    });
-
-    it("should throw on invalid protocol", () => {
-      expect(() => resolveProtocol("invalid")).toThrow(
-        "Invalid protocol: invalid. Must be 'auto', 'stdio', or 'http'",
-      );
-    });
-
-    afterEach(() => {
-      vi.unstubAllGlobals();
-    });
-  });
-
-  describe("validatePort", () => {
-    it("should accept valid port numbers", () => {
-      expect(validatePort("3000")).toBe(3000);
-      expect(validatePort("8080")).toBe(8080);
-      expect(validatePort("1")).toBe(1);
-      expect(validatePort("65535")).toBe(65535);
-    });
-
-    it("should throw on clearly invalid port numbers", () => {
-      expect(() => validatePort("0")).toThrow();
-      expect(() => validatePort("65536")).toThrow();
-      expect(() => validatePort("-1")).toThrow();
-      expect(() => validatePort("abc")).toThrow();
-      expect(() => validatePort("")).toThrow();
-    });
-  });
-
-  describe("validateResumeFlag", () => {
-    it("should allow resume without server URL", () => {
-      expect(() => validateResumeFlag(true)).not.toThrow();
-      expect(() => validateResumeFlag(true, undefined)).not.toThrow();
-    });
-
-    it("should allow no resume with server URL", () => {
-      expect(() => validateResumeFlag(false, "http://example.com")).not.toThrow();
-    });
-
-    it("should throw when resume is used with server URL", () => {
-      expect(() => validateResumeFlag(true, "http://example.com")).toThrow(
-        "--resume flag is incompatible with --server-url. External workers handle their own job recovery.",
-      );
-    });
+    expect(offenders).toEqual([]);
   });
 });

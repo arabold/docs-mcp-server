@@ -3,7 +3,7 @@
  */
 
 import type { Argv } from "yargs";
-import { createDocumentManagement } from "../../store";
+import { openBackend } from "../../services/backend";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { FindVersionTool } from "../../tools";
 import { loadConfig } from "../../utils/config";
@@ -53,12 +53,12 @@ export function createFindVersionCommand(cli: Argv) {
 
       const eventBus = getEventBus(argv as CliContext);
 
-      // Find version command doesn't need embeddings - explicitly disable for local execution
-      const docService = await createDocumentManagement({
+      const backend = await openBackend({
         serverUrl,
         eventBus,
         appConfig: appConfig,
       });
+      const { docService } = backend;
       try {
         const findVersionTool = new FindVersionTool(docService);
 
@@ -71,7 +71,7 @@ export function createFindVersionCommand(cli: Argv) {
         if (!versionInfo) throw new Error("Failed to get version information");
         renderStructuredOutput(versionInfo, argv);
       } finally {
-        await docService.shutdown();
+        await backend.close();
       }
     },
   );

@@ -99,6 +99,19 @@ export class GitHubWikiProcessor {
         headers,
       });
 
+      // GitHub redirects the wiki of a repository that has none to the
+      // repository page. That page is not a wiki page, so the wiki is absent.
+      // Checked before the status: a refresh sends the stored ETag through the
+      // redirect, and a row that older versions stored for the repository page
+      // carries that page's ETag, so the answer can be a 304 from outside the
+      // wiki.
+      const wikiInfo = this.parseGitHubWikiUrl(currentUrl);
+      const wikiPath = `/${wikiInfo.owner}/${wikiInfo.repo}/wiki`;
+      if (!new URL(rawContent.source, currentUrl).pathname.startsWith(wikiPath)) {
+        logger.debug(`Wiki URL redirected out of the wiki: ${currentUrl}`);
+        return { url: currentUrl, links: [], status: FetchStatus.NOT_FOUND };
+      }
+
       // Return the status directly - BaseScraperStrategy handles NOT_MODIFIED and NOT_FOUND
       if (rawContent.status !== FetchStatus.SUCCESS) {
         return { url: currentUrl, links: [], status: rawContent.status };
@@ -132,13 +145,7 @@ export class GitHubWikiProcessor {
         logger.warn(`⚠️  Processing error for ${currentUrl}: ${err.message}`);
       }
 
-      // Extract wiki page title from URL
       const parsedUrl = new URL(currentUrl);
-      const wikiInfo = this.parseGitHubWikiUrl(currentUrl);
-      const wikiPagePath = parsedUrl.pathname
-        .replace(`/${wikiInfo.owner}/${wikiInfo.repo}/wiki`, "")
-        .replace(/^\//, "");
-      const pageTitle = wikiPagePath || "Home";
 
       // Extract links from the processed content
       const links = processed.links || [];
@@ -172,7 +179,7 @@ export class GitHubWikiProcessor {
             // Only include links that are within the same wiki
             return (
               linkUrl.hostname === parsedUrl.hostname &&
-              linkUrl.pathname.startsWith(`/${wikiInfo.owner}/${wikiInfo.repo}/wiki`)
+              linkUrl.pathname.startsWith(wikiPath)
             );
           } catch {
             return false;
@@ -181,7 +188,10 @@ export class GitHubWikiProcessor {
 
       return {
         url: currentUrl,
-        title: pageTitle,
+        // The crawl stores the pipeline's title for a page with text and this
+        // one for a page without, so both get the <title> GitHub serves with
+        // every wiki page.
+        title: processed.title,
         etag: rawContent.etag,
         lastModified: rawContent.lastModified,
         contentType: rawContent.mimeType,

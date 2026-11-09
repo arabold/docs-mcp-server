@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  analyzeSearchQuery,
-  extractCliFlags,
   extractHostname,
   extractProtocol,
-  sanitizeError,
+  sanitizeErrorForTracking,
   sanitizeErrorMessage,
 } from "./sanitizer";
 
@@ -28,84 +26,141 @@ describe("extractProtocol", () => {
   });
 });
 
-describe("analyzeSearchQuery", () => {
-  it("should analyze search query characteristics", () => {
-    const result1 = analyzeSearchQuery("react hooks");
-    expect(result1.length).toBe(11);
-    expect(result1.wordCount).toBe(2);
-    expect(result1.hasSpecialChars).toBe(false);
-    expect(result1.hasCodeTerms).toBe(false);
-
-    const result2 = analyzeSearchQuery("get-user-info()");
-    expect(result2.hasSpecialChars).toBe(true);
-
-    const result3 = analyzeSearchQuery("function test");
-    expect(result3.hasCodeTerms).toBe(true);
-  });
-});
-
 describe("sanitizeErrorMessage", () => {
-  it("should sanitize error messages removing sensitive info", () => {
-    expect(sanitizeErrorMessage("Error in /Users/john/project/file.js")).toBe(
-      "Error in [path]",
-    );
+  it("removes paths, file URLs, URLs and credentials, and keeps slashes that are not paths", () => {
+    const cases = [
+      { message: "Error in /Users/john/project/file.js", sanitized: "Error in [path]" },
+      {
+        message: "Failed to read file:///Users/john/documents/secret.txt",
+        sanitized: "Failed to read [file-url]",
+      },
+      { message: "Cannot access ./local/config.json", sanitized: "Cannot access [path]" },
+      { message: "api_key=secret123 invalid", sanitized: "api_key=[redacted] invalid" },
+      // URLs with paths and query strings
+      {
+        message: "HTTP 404 for https://intranet.example.com/team/doc?q=secret",
+        sanitized: "HTTP 404 for [url]",
+      },
+      // Absolute paths without a file extension
+      {
+        message: "ENOENT: no such file or directory, scandir '/home/john/private-docs'",
+        sanitized: "ENOENT: no such file or directory, scandir '[path]'",
+      },
+      // Single-component absolute paths
+      { message: "scandir '/private-docs'", sanitized: "scandir '[path]'" },
+      { message: "cannot open /private-docs", sanitized: "cannot open [path]" },
+      // Paths with spaces
+      {
+        message: "scandir '/Users/Jane Doe/private-docs'",
+        sanitized: "scandir '[path]'",
+      },
+      {
+        message: "open C:\\Users\\Jane Doe\\docs failed",
+        sanitized: "open [path] failed",
+      },
+      // Slashes that are not paths
+      {
+        message: "HTTP/1.1 503 on 2024/10/18, retry and/or wait",
+        sanitized: "HTTP/1.1 503 on 2024/10/18, retry and/or wait",
+      },
+    ];
 
-    expect(
-      sanitizeErrorMessage("Failed to read file:///Users/john/documents/secret.txt"),
-    ).toBe("Failed to read [file-url]");
-
-    expect(sanitizeErrorMessage("Cannot access ./local/config.json")).toBe(
-      "Cannot access .[path]",
-    );
-
-    expect(sanitizeErrorMessage("api_key=secret123 invalid")).toBe(
-      "api_key=[redacted] invalid",
-    );
+    for (const { message, sanitized } of cases) {
+      expect.soft(sanitizeErrorMessage(message), message).toBe(sanitized);
+    }
   });
 });
 
-describe("sanitizeError", () => {
-  it("should sanitize Error objects", () => {
-    const error = new Error("File not found: /Users/john/secret.txt");
-    const result = sanitizeError(error);
+describe("sanitizeErrorForTracking", () => {
+  it("should keep the error name and sanitize the message", () => {
+    const error = new TypeError("Failed to fetch https://secret.example.com/api");
 
-    expect(result.type).toBe("Error");
-    expect(result.message).toBe("File not found: [path]");
-    expect(result.hasStack).toBe(true);
+    const sanitized = sanitizeErrorForTracking(error);
+
+    expect(sanitized.name).toBe("TypeError");
+    expect(sanitized.message).toBe("Failed to fetch [url]");
   });
 
-  it("should handle TypeError objects", () => {
-    const error = new TypeError("Cannot read property of undefined");
-    const result = sanitizeError(error);
+  it("shortens stack frame paths to file names or package paths", () => {
+    const cases = [
+      {
+        frame: "    at run (/Users/john/project/dist/index.js:10:5)",
+        shortened: "    at run (index.js:10:5)",
+      },
+      {
+        frame:
+          "    at file:///home/john/.npm/_npx/abc/node_modules/better-sqlite3/lib/database.js:3:1",
+        shortened: "    at better-sqlite3/lib/database.js:3:1",
+      },
+      {
+        frame: "    at C:\\Users\\john\\app\\server.js:7:2",
+        shortened: "    at server.js:7:2",
+      },
+      {
+        frame:
+          "    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)",
+        shortened:
+          "    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)",
+      },
+      // Query strings and fragments are dropped from URL frames
+      {
+        frame:
+          "    at eval (https://intranet.example.com/private-module.js?token=secret:3:7)",
+        shortened: "    at eval (private-module.js:3:7)",
+      },
+      {
+        frame: "    at load (https://intranet.example.com/loader.js#secret:1:2)",
+        shortened: "    at load (loader.js:1:2)",
+      },
+      // A line but no column
+      {
+        frame: "    at load (/Users/john/private-docs/loader.js:10)",
+        shortened: "    at load (loader.js:10)",
+      },
+      // Frames without a file location are kept
+      {
+        frame: "    at async Promise.all (index 0)",
+        shortened: "    at async Promise.all (index 0)",
+      },
+    ];
 
-    expect(result.type).toBe("TypeError");
-    expect(result.message).toBe("Cannot read property of undefined");
-    expect(result.hasStack).toBe(true);
+    for (const { frame, shortened } of cases) {
+      const error = new Error("boom");
+      error.stack = `Error: boom\n${frame}`;
+
+      expect
+        .soft(sanitizeErrorForTracking(error).stack, frame)
+        .toBe(`Error: boom\n${shortened}`);
+    }
   });
-});
 
-describe("extractCliFlags", () => {
-  it("should extract CLI flags", () => {
-    const args = ["node", "script.js", "--verbose", "--port=3000", "file.txt"];
-    const result = extractCliFlags(args);
+  it("should drop lines that are not stack frames", () => {
+    const error = new Error(
+      "Request failed\n    at https://private.example/docs?token=secret",
+    );
 
-    expect(result).toEqual(["--verbose", "--port=3000"]);
-    expect(result.length).toBe(2);
+    const sanitized = sanitizeErrorForTracking(error);
+
+    expect(sanitized.stack).not.toContain("private.example");
+    expect(sanitized.stack).not.toContain("secret");
   });
 
-  it("should handle no flags", () => {
-    const args = ["node", "script.js", "file.txt"];
-    const result = extractCliFlags(args);
+  it("should drop the original message from the stack", () => {
+    const error = new Error("Cannot open /Users/john/secret/notes");
 
-    expect(result).toEqual([]);
-    expect(result.length).toBe(0);
+    const sanitized = sanitizeErrorForTracking(error);
+
+    expect(sanitized.stack).not.toContain("john");
+    expect(sanitized.stack?.split("\n")[0]).toBe("Error: Cannot open [path]");
   });
 
-  it("should handle single dash flags", () => {
-    const args = ["node", "script.js", "-v", "--help"];
-    const result = extractCliFlags(args);
+  it("should sanitize the error cause", () => {
+    const error = new Error("Scrape failed", {
+      cause: new Error("Request to https://secret.example.com/x failed"),
+    });
 
-    expect(result).toEqual(["-v", "--help"]);
-    expect(result.length).toBe(2);
+    const sanitized = sanitizeErrorForTracking(error);
+
+    expect((sanitized.cause as Error).message).toBe("Request to [url] failed");
   });
 });

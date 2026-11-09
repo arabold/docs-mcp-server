@@ -11,8 +11,12 @@ import type {
   EmbeddingConfigInfo,
   FindVersionResult,
   LibrarySummary,
+  ListPagesOptions,
+  ListPagesResult,
   ListVersionChunksOptions,
   ListVersionChunksResult,
+  PageContentOptions,
+  PageContentResult,
   StoredScraperOptions,
   StoreSearchResult,
   VersionChunkStats,
@@ -21,15 +25,20 @@ import type {
   VersionStatus,
 } from "../types";
 
+/**
+ * Document management as tools and routers use it. Opening and closing the
+ * store belongs to whoever created the implementation (see `openBackend`).
+ */
 export interface IDocumentManagement {
-  // Lifecycle
-  initialize(): Promise<void>;
-  shutdown(): Promise<void>;
-
   // Library/version introspection used by tools/UI
   listLibraries(): Promise<LibrarySummary[]>;
   validateLibraryExists(library: string): Promise<void>;
   findBestVersion(library: string, targetVersion?: string): Promise<FindVersionResult>;
+  listPages(
+    library: string,
+    version: string | null | undefined,
+    options?: ListPagesOptions,
+  ): Promise<ListPagesResult>;
 
   // Search & mutation used by tools/UI
   searchStore(
@@ -38,7 +47,12 @@ export interface IDocumentManagement {
     query: string,
     limit?: number,
   ): Promise<StoreSearchResult[]>;
-  removeAllDocuments(library: string, version?: string | null): Promise<void>;
+  getPageContent(
+    library: string,
+    version: string | null | undefined,
+    pathOrUrl: string,
+    options?: PageContentOptions,
+  ): Promise<PageContentResult>;
   removeVersion(library: string, version?: string | null): Promise<void>;
   /**
    * Reclaims unused SQLite pages and truncates the WAL file.

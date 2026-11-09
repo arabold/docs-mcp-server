@@ -1,8 +1,4 @@
-import type {
-  ScrapeResult,
-  ScraperOptions,
-  ScraperProgressEvent,
-} from "../scraper/types";
+import type { ScraperOptions, ScraperProgressEvent } from "../scraper/types";
 import type { VersionStatus } from "../store/types";
 
 /**
@@ -16,6 +12,16 @@ export enum PipelineJobStatus {
   CANCELLING = "cancelling",
   CANCELLED = "cancelled",
 }
+
+/**
+ * What a pipeline does when it starts with versions that an earlier run left
+ * RUNNING or QUEUED:
+ * - `recover`: runs them again as refresh jobs.
+ * - `fail`: marks them FAILED, so users can retry them.
+ * - `leave`: changes nothing, for a command that runs only its own job while
+ *   the process that hosts the store handles the rest.
+ */
+export type InterruptedJobs = "recover" | "fail" | "leave";
 
 /**
  * Public interface for pipeline jobs exposed through API boundaries.
@@ -71,9 +77,11 @@ export interface PipelineJob {
  * always have complete runtime configuration available.
  */
 export interface InternalPipelineJob
-  extends Omit<PipelineJob, "version" | "error" | "scraperOptions"> {
+  extends Omit<PipelineJob, "version" | "error" | "scraperOptions" | "versionId"> {
   /** The library version associated with the job (internal uses string). */
   version: string;
+  /** Database version ID, claimed when the job is enqueued. */
+  versionId: number;
   /** Error object if the job failed. */
   error: Error | null;
   /** Complete scraper options with runtime configuration. */
@@ -86,19 +94,4 @@ export interface InternalPipelineJob
   resolveCompletion: () => void;
   /** Rejector function for the completion promise. */
   rejectCompletion: (reason?: unknown) => void;
-}
-
-/**
- * Defines the structure for callback functions used with the PipelineManager.
- * Allows external components to hook into job lifecycle events.
- * All callbacks receive the public PipelineJob representation to maintain
- * clean separation between internal implementation and external API.
- */
-export interface PipelineManagerCallbacks {
-  /** Callback triggered when a job's status changes. */
-  onJobStatusChange?: (job: PipelineJob) => Promise<void>;
-  /** Callback triggered when a job makes progress. */
-  onJobProgress?: (job: PipelineJob, progress: ScraperProgressEvent) => Promise<void>;
-  /** Callback triggered when a job encounters an error during processing (e.g., storing a doc). */
-  onJobError?: (job: PipelineJob, error: Error, page?: ScrapeResult) => Promise<void>;
 }

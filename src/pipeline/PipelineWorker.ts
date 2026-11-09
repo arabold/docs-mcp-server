@@ -6,6 +6,7 @@ import {
   type ScraperProgressEvent,
 } from "../scraper/types";
 import type { DocumentManagementService } from "../store";
+import { EmbeddingError } from "../store/errors";
 import { logger } from "../utils/logger";
 import { CancellationError } from "./errors";
 import type { InternalPipelineJob } from "./types";
@@ -126,12 +127,6 @@ export class PipelineWorker {
     // and resolving/rejecting the completion promise based on the outcome here.
   }
 
-  // --- Old methods removed ---
-  // process()
-  // stop()
-  // setCallbacks()
-  // handleScrapingProgress()
-
   /**
    * Records a page that exists but holds no content, replacing what was stored.
    *
@@ -147,7 +142,12 @@ export class PipelineWorker {
     progress: ScraperProgressEvent,
   ): Promise<void> {
     const { emptyPage } = progress;
-    if (!emptyPage) return; // A container, not a page — nothing to record.
+    if (!emptyPage) {
+      // A container, not a page: nothing to record, and a row stored for it
+      // by an older version is deleted.
+      await this.removeDeletedPage(job, callbacks, progress);
+      return;
+    }
 
     if (emptyPage.pipelineFailed) {
       logger.debug(
@@ -249,12 +249,18 @@ export class PipelineWorker {
       logger.error(
         `❌ [${job.id}] Failed to process content ${progress.currentUrl}: ${docError}`,
       );
-      // A single document error is logged and the job continues.
       await callbacks.onJobError?.(
         job,
         docError instanceof Error ? docError : new Error(String(docError)),
         progress.result,
       );
+      // A failed embedding usually means the provider is down or misconfigured,
+      // so the remaining pages would fail too. The job fails at once instead of
+      // completing with nothing stored. Any other error is logged and the job
+      // continues.
+      if (docError instanceof EmbeddingError) {
+        throw docError;
+      }
     }
   }
 }

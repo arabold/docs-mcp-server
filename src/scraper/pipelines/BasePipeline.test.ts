@@ -1,5 +1,6 @@
 // Copyright (c) 2025
 import { describe, expect, it, vi } from "vitest";
+import { ScraperError } from "../../utils/errors";
 import type { ContentProcessorMiddleware, MiddlewareContext } from "../middleware/types";
 import { BasePipeline } from "./BasePipeline";
 import type { PipelineResult } from "./types";
@@ -76,61 +77,58 @@ describe("BasePipeline", () => {
     expect(context.title).toBe("Step 3");
   });
 
-  it("executeMiddlewareStack catches errors and adds them to context", async () => {
-    const pipeline = new TestPipeline();
-    const context: MiddlewareContext = {
-      content: "test",
-      source: "http://test",
-      metadata: {},
-      links: [],
-      errors: [],
-      // @ts-expect-error
-      options: {},
-    };
+  it("executeMiddlewareStack catches thrown errors and adds them to context", async () => {
+    const cases: Array<[label: string, thrown: unknown, message: string]> = [
+      ["Error", new Error("Test error"), "Test error"],
+      // A thrown non-Error is converted to an Error.
+      ["non-Error", "String error", "String error"],
+    ];
 
-    // Create middleware that throws an error
-    const errorMiddleware = {
-      process: vi.fn(async () => {
-        throw new Error("Test error");
-      }),
-    };
+    for (const [label, thrown, message] of cases) {
+      const pipeline = new TestPipeline();
+      const context: MiddlewareContext = {
+        content: "test",
+        source: "http://test",
+        metadata: {},
+        links: [],
+        errors: [],
+        // @ts-expect-error
+        options: {},
+      };
+      const errorMiddleware = {
+        process: vi.fn(async () => {
+          throw thrown;
+        }),
+      };
 
-    const middlewareStack = [errorMiddleware];
+      await pipeline.testExecuteMiddlewareStack([errorMiddleware], context);
 
-    await pipeline.testExecuteMiddlewareStack(middlewareStack, context);
-
-    // Verify the error was caught and added to context
-    expect(context.errors.length).toBe(1);
-    expect(context.errors[0].message).toBe("Test error");
+      expect.soft(context.errors, label).toHaveLength(1);
+      expect.soft(context.errors[0], label).toBeInstanceOf(Error);
+      expect.soft(context.errors[0]?.message, label).toBe(message);
+    }
   });
 
-  it("executeMiddlewareStack handles non-Error objects thrown", async () => {
+  it("executeMiddlewareStack lets a ScraperError fail the page", async () => {
     const pipeline = new TestPipeline();
     const context: MiddlewareContext = {
       content: "test",
       source: "http://test",
-      metadata: {},
       links: [],
       errors: [],
       // @ts-expect-error
       options: {},
     };
+    const failure = new ScraperError("Page cannot be processed");
+    const next = { process: vi.fn() };
 
-    // Create middleware that throws a non-Error object
-    const errorMiddleware = {
-      process: vi.fn(async () => {
-        throw "String error"; // Not an Error object
-      }),
-    };
-
-    const middlewareStack = [errorMiddleware];
-
-    await pipeline.testExecuteMiddlewareStack(middlewareStack, context);
-
-    // Verify the error was caught, converted to Error, and added to context
-    expect(context.errors.length).toBe(1);
-    expect(context.errors[0].message).toBe("String error");
-    expect(context.errors[0] instanceof Error).toBe(true);
+    await expect(
+      pipeline.testExecuteMiddlewareStack(
+        [{ process: vi.fn().mockRejectedValue(failure) }, next],
+        context,
+      ),
+    ).rejects.toBe(failure);
+    expect(next.process).not.toHaveBeenCalled();
   });
 
   it("executeMiddlewareStack prevents calling next() multiple times", async () => {
@@ -160,22 +158,5 @@ describe("BasePipeline", () => {
     // Verify the error was caught and added to context
     expect(context.errors.length).toBe(1);
     expect(context.errors[0].message).toBe("next() called multiple times");
-  });
-
-  describe("cleanup", () => {
-    it("should have default close() method that does nothing", async () => {
-      const pipeline = new TestPipeline();
-
-      // Should not throw any errors
-      await expect(pipeline.close()).resolves.not.toThrow();
-    });
-
-    it("should be able to call close() multiple times", async () => {
-      const pipeline = new TestPipeline();
-
-      // Multiple calls should not throw
-      await expect(pipeline.close()).resolves.not.toThrow();
-      await expect(pipeline.close()).resolves.not.toThrow();
-    });
   });
 });

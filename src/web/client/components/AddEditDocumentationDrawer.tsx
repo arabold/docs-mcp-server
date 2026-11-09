@@ -8,14 +8,17 @@
  * component — Libraries list, Library detail, a failed job's "Edit & retry",
  * etc. — to open it without any local drawer-open state at the call site.
  *
- * - `{ mode: "add" }` — blank form; submitting calls `enqueueScrapeJob` and
- *   shows "Start indexing".
+ * - `{ mode: "add" }` — blank form ("Add library"); submitting calls
+ *   `enqueueScrapeJob` with `onExisting: "reject-library"` and shows "Start
+ *   indexing". With a `library`, it is "Add version" and uses the server's
+ *   default, rejecting an existing version. An existing library or version is
+ *   flagged inline before submit; the server stays authoritative.
  * - `{ mode: "edit", library, version }` — prefills every field from the
  *   version's stored scraper options (via `getScraperOptions`), shows the
  *   destructive amber "this rebuilds from scratch" warning, and submitting
- *   shows "Save & re-index" (still `enqueueScrapeJob` — a full clean
- *   rebuild, as the warning says; incremental refresh is a separate action
- *   pages trigger directly with `useEnqueueRefreshJob`).
+ *   shows "Save & re-index" (still `enqueueScrapeJob`, with `onExisting:
+ *   "replace"` — a full clean rebuild, as the warning says; incremental refresh
+ *   is a separate action pages trigger directly with `useEnqueueRefreshJob`).
  *
  * @example
  * const drawer = useDocumentationDrawer();
@@ -34,9 +37,15 @@ import {
   useMemo,
   useState,
 } from "react";
+import { Link } from "react-router-dom";
 import { ScrapeMode } from "../../../scraper/types";
 import type { AppRouter } from "../../../services/appRouter";
-import { normalizeLibraryName, normalizeVersionLabel } from "../../../store/types";
+import {
+  describeLibraryNameProblem,
+  type ExistingTargetPolicy,
+  libraryNamesMatch,
+  normalizeVersionLabel,
+} from "../../../store/types";
 import {
   useEnqueueScrapeJob,
   useGetScraperOptions,
@@ -97,9 +106,8 @@ function findVersion(
   if (!libraries || !library) return undefined;
   // Match with the same contract the server stores under, or a padded entry
   // looks like a new version instead of the existing one.
-  const targetLibrary = normalizeLibraryName(library);
   const targetVersion = normalizeVersionLabel(version);
-  const lib = libraries.find((l) => normalizeLibraryName(l.library) === targetLibrary);
+  const lib = libraries.find((l) => libraryNamesMatch(l.library, library));
   return lib?.versions.find(
     (v) => normalizeVersionLabel(v.ref.version) === targetVersion,
   );
@@ -302,8 +310,69 @@ function DrawerForm({ open, mode, library, version, onClose }: DrawerFormProps) 
   const trimmedLibrary = libraryName.trim();
   const trimmedVersion = versionName.trim();
   const trimmedUrl = url.trim();
+
+  // "Add library" creates a library, "Add version" adds a version to one, and
+  // "edit" rebuilds an existing version. The server enforces each intent; the
+  // checks below only flag a conflict before submitting. They run while the form
+  // is open and idle: mid-submit, the live library list already holds the
+  // library or version being created.
+  const isAddLibrary = mode === "add" && !library;
+  const onExisting: ExistingTargetPolicy | undefined =
+    mode === "edit" ? "replace" : isAddLibrary ? "reject-library" : undefined;
+  const checking = open && !enqueueScrapeJob.isPending && mode === "add";
+  const conflict = useMemo((): ReactNode => {
+    if (!checking || trimmedLibrary.length === 0) return null;
+    if (!isAddLibrary) {
+      if (!findVersion(libraries, library, versionName)) return null;
+      return (
+        <>
+          {trimmedVersion ? (
+            <>
+              Version <b>{trimmedVersion}</b> of <b>{library}</b> already exists.
+            </>
+          ) : (
+            <>
+              Unversioned documentation for <b>{library}</b> already exists.
+            </>
+          )}{" "}
+          Use <b>Edit &amp; re-index</b> on the library page to rebuild it, or{" "}
+          <b>Refresh</b> to update it in place.
+        </>
+      );
+    }
+    const existing = libraries?.find((l) => libraryNamesMatch(l.library, trimmedLibrary));
+    if (existing) {
+      return (
+        <>
+          A library named <b>{existing.library}</b> already exists.{" "}
+          <Link
+            to={`/libraries/${encodeURIComponent(existing.library)}`}
+            onClick={onClose}
+          >
+            Open it
+          </Link>{" "}
+          to add a version.
+        </>
+      );
+    }
+    const problem = describeLibraryNameProblem(trimmedLibrary);
+    return problem ? <>Library name {problem}.</> : null;
+  }, [
+    checking,
+    isAddLibrary,
+    libraries,
+    library,
+    versionName,
+    trimmedLibrary,
+    trimmedVersion,
+    onClose,
+  ]);
+
   const canSubmit =
-    trimmedLibrary.length > 0 && trimmedUrl.length > 0 && !enqueueScrapeJob.isPending;
+    trimmedLibrary.length > 0 &&
+    trimmedUrl.length > 0 &&
+    conflict === null &&
+    !enqueueScrapeJob.isPending;
 
   const handleSubmit = useCallback(async () => {
     if (!canSubmit) return;
@@ -311,6 +380,8 @@ function DrawerForm({ open, mode, library, version, onClose }: DrawerFormProps) 
       await enqueueScrapeJob.mutateAsync({
         library: trimmedLibrary,
         version: trimmedVersion || undefined,
+        // Undefined for "Add version", so the server's default (reject-version) applies
+        onExisting,
         options: {
           url: trimmedUrl,
           library: trimmedLibrary,
@@ -327,13 +398,15 @@ function DrawerForm({ open, mode, library, version, onClose }: DrawerFormProps) 
           headers: rowsToHeaders(headers),
         },
       });
-      await utils.invalidate();
+      // Close before refreshing the lists, so the refreshed list (which now holds
+      // the new library or version) never meets an open form's conflict check.
+      onClose();
       toast.success(
         mode === "edit"
           ? `Re-indexing ${trimmedLibrary}${trimmedVersion ? ` ${trimmedVersion}` : ""}`
           : `Started indexing ${trimmedLibrary}${trimmedVersion ? ` ${trimmedVersion}` : ""}`,
       );
-      onClose();
+      await utils.invalidate();
     } catch (err) {
       toast.error(
         mode === "edit" ? "Failed to save & re-index" : "Failed to start indexing",
@@ -359,6 +432,7 @@ function DrawerForm({ open, mode, library, version, onClose }: DrawerFormProps) 
     utils,
     toast,
     mode,
+    onExisting,
     onClose,
   ]);
 
@@ -429,6 +503,13 @@ function DrawerForm({ open, mode, library, version, onClose }: DrawerFormProps) 
           />
         </div>
       </div>
+
+      {conflict ? (
+        <div className="note note--err" role="alert">
+          <Icon name="i-x" size="sm" />
+          <span>{conflict}</span>
+        </div>
+      ) : null}
 
       <div className="form-row">
         <label htmlFor="doc-drawer-url">URL</label>

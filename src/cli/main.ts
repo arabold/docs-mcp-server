@@ -9,20 +9,16 @@ import {
 } from "../store/embeddings/EmbeddingFactory";
 import { telemetry } from "../telemetry";
 import { logger } from "../utils/logger";
-import { createCli } from "./index";
+import { CliUsageError, createCli } from "./index";
+import { reportCliError } from "./output";
 
 // Module-level variables are now in ./services.ts
 import {
+  closeActiveBackend,
   getActiveAppServer,
-  getActiveDocService,
   getActiveMcpStdioServer,
-  getActivePipelineManager,
-  getActiveTelemetryService,
   setActiveAppServer,
-  setActiveDocService,
   setActiveMcpStdioServer,
-  setActivePipelineManager,
-  setActiveTelemetryService,
 } from "./services";
 
 let isShuttingDown = false;
@@ -53,30 +49,8 @@ const sigintHandler = async (): Promise<void> => {
       logger.debug("SIGINT: MCP server stopped.");
     }
 
-    // Shutdown active services
-    logger.debug("SIGINT: Shutting down active services...");
-    // Only shutdown pipeline if not managed by AppServer (e.g., in stdio mode)
-    const pipeline = getActivePipelineManager();
-    if (pipeline && !appServer) {
-      await pipeline.stop();
-      setActivePipelineManager(null);
-      logger.debug("SIGINT: PipelineManager stopped.");
-    }
-
-    const docService = getActiveDocService();
-    if (docService) {
-      await docService.shutdown();
-      setActiveDocService(null);
-      logger.debug("SIGINT: DocumentManagementService shut down.");
-    }
-
-    // Cleanup TelemetryService (removes event listeners)
-    const telemetryService = getActiveTelemetryService();
-    if (telemetryService) {
-      telemetryService.shutdown();
-      setActiveTelemetryService(null);
-      logger.debug("SIGINT: TelemetryService shut down.");
-    }
+    // The servers have stopped, so nothing uses the backend any more
+    await closeActiveBackend();
 
     // Analytics shutdown is handled by AppServer.stop() above
     // Only shutdown analytics if no AppServer was running
@@ -107,8 +81,9 @@ export async function cleanupCliCommand(): Promise<void> {
     // Shutdown analytics for non-server CLI commands to ensure clean exit
     await telemetry.shutdown();
 
-    // Avoid hanging processes by explicitly exiting
-    process.exit(0);
+    // Avoid hanging processes by explicitly exiting, with the exit code a
+    // command sets for a failure it reports itself
+    process.exit();
   }
 }
 
@@ -138,15 +113,17 @@ export async function runCli(): Promise<void> {
 
     await cli.parse();
   } catch (error) {
-    // Handle embedding configuration errors with clean, helpful messages
-    if (
-      error instanceof ModelConfigurationError ||
-      error instanceof UnsupportedProviderError
-    ) {
-      // These errors already have properly formatted messages
-      logger.error(error.message);
-    } else {
-      logger.error(`❌ Error in CLI: ${error}`);
+    // A usage error has its help and reason printed already
+    if (!(error instanceof CliUsageError)) {
+      // Embedding configuration errors have properly formatted messages
+      const preformatted =
+        error instanceof ModelConfigurationError ||
+        error instanceof UnsupportedProviderError;
+      const message = error instanceof Error ? error.message : String(error);
+      reportCliError(preformatted ? message : `❌ ${message}`);
+      if (error instanceof Error && error.stack) {
+        logger.debug(error.stack);
+      }
     }
 
     if (!isShuttingDown) {
@@ -179,31 +156,12 @@ export async function runCli(): Promise<void> {
         );
       }
 
-      const pipeline = getActivePipelineManager();
-      if (pipeline && !appServer) {
-        shutdownPromises.push(
-          pipeline
-            .stop()
-            .then(() => {
-              setActivePipelineManager(null);
-            })
-            .catch((e) => logger.error(`❌ Error stopping pipeline: ${e}`)),
-        );
-      }
-
-      const docService = getActiveDocService();
-      if (docService) {
-        shutdownPromises.push(
-          docService
-            .shutdown()
-            .then(() => {
-              setActiveDocService(null);
-            })
-            .catch((e) => logger.error(`❌ Error shutting down doc service: ${e}`)),
-        );
-      }
-
       await Promise.allSettled(shutdownPromises);
+
+      // Close the backend once the servers that use it have stopped
+      await closeActiveBackend().catch((e) =>
+        logger.error(`❌ Error closing backend: ${e}`),
+      );
     }
     process.exit(1);
   }
@@ -226,40 +184,20 @@ if (import.meta.hot) {
     isShuttingDown = true;
 
     try {
-      const shutdownPromises: Promise<void>[] = [];
-
       const appServer = getActiveAppServer();
       if (appServer) {
         logger.debug("Shutting down AppServer...");
-        shutdownPromises.push(
-          appServer.stop().then(() => {
+        // A failed stop still closes the backend below
+        await appServer.stop().then(
+          () => {
             setActiveAppServer(null);
             logger.debug("AppServer shut down.");
-          }),
+          },
+          () => {},
         );
       }
 
-      const pipeline = getActivePipelineManager();
-      if (pipeline && !appServer) {
-        shutdownPromises.push(
-          pipeline.stop().then(() => {
-            setActivePipelineManager(null);
-            logger.debug("PipelineManager stopped.");
-          }),
-        );
-      }
-
-      const docService = getActiveDocService();
-      if (docService) {
-        shutdownPromises.push(
-          docService.shutdown().then(() => {
-            setActiveDocService(null);
-            logger.debug("DocumentManagementService shut down.");
-          }),
-        );
-      }
-
-      await Promise.allSettled(shutdownPromises);
+      await closeActiveBackend();
       logger.debug("Active services shut down.");
     } catch (hmrError) {
       logger.error(`❌ Error during HMR cleanup: ${hmrError}`);

@@ -1,917 +1,383 @@
 /**
- * Behavior tests for AppServer focusing on configuration validation,
- * service composition, and lifecycle management.
+ * Behavior tests for AppServer on a real Fastify server: service composition,
+ * startup log lines, authentication setup, host and origin admission, and
+ * the server's lifecycle. Only the token verifier is mocked.
  */
-
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getFreePort } from "../../test/test-helpers";
 import { EventBusService } from "../events";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
+import type { JobsBackend } from "../services/backend";
 import type { DocumentManagementService } from "../store/DocumentManagementService";
 import { type AppConfig, loadConfig } from "../utils/config";
 import { logger } from "../utils/logger";
 import { AppServer } from "./AppServer";
 import type { AppServerConfig } from "./AppServerConfig";
 
-// Mock implementations - use vi.hoisted to ensure they're available at the top level
-const mockFastify = vi.hoisted(() => ({
-  register: vi.fn(),
-  get: vi.fn(), // Mock for the explicit SPA "/" route
-  listen: vi.fn(),
-  close: vi.fn(),
-  setErrorHandler: vi.fn(), // Add missing mock method
-  setNotFoundHandler: vi.fn(), // Mock for the SPA fallback handler
-  addHook: vi.fn(),
-  server: {
-    on: vi.fn(), // Mock HTTP server for WebSocket upgrade handling
-    closeAllConnections: vi.fn(), // Mock for forcing connection closure
-  },
+const createVerifier = vi.hoisted(() => vi.fn());
+
+vi.mock("../auth/JwtAccessTokenVerifier", () => ({
+  JwtAccessTokenVerifier: { create: createVerifier },
 }));
 
-const mockMcpService = vi.hoisted(() => ({
-  registerMcpService: vi.fn(),
-  cleanupMcpService: vi.fn(),
-}));
+/** The backend a server receives: local, with an empty store and pipeline. */
+function backend(): JobsBackend {
+  return {
+    workerUrl: undefined,
+    docService: {
+      getActiveEmbeddingConfig: () => null,
+    } as unknown as DocumentManagementService,
+    pipeline: {} as IPipeline,
+    eventBus: new EventBusService(),
+    isWorkerConnected: undefined,
+    close: vi.fn(),
+  };
+}
 
-const mockTrpcService = vi.hoisted(() => ({
-  registerTrpcService: vi.fn(),
-  applyTrpcWebSocketHandler: vi.fn(),
-}));
+/** Which services to run; everything off, on a free port, unless overridden. */
+function services(overrides: Partial<AppServerConfig> = {}): AppServerConfig {
+  return {
+    enableWebInterface: false,
+    enableMcpServer: false,
+    enableApiServer: false,
+    port: 0,
+    showLogo: false,
+    ...overrides,
+  };
+}
 
-const mockWorkerService = vi.hoisted(() => ({
-  registerWorkerService: vi.fn(),
-  stopWorkerService: vi.fn(),
-}));
+/** The application config bound to loopback, adjusted by `configure`. */
+function appConfig(configure: (config: AppConfig) => void = () => {}): AppConfig {
+  const config = loadConfig();
+  config.server.host = "127.0.0.1";
+  configure(config);
+  return config;
+}
 
-const mockProxyAuthManager = vi.hoisted(() => ({
-  initialize: vi.fn(),
-  registerRoutes: vi.fn(),
-}));
+/** Enables authentication against a test issuer, behind `publicUrl` when given. */
+function withAuth(
+  overrides: Partial<AppConfig["auth"]> = {},
+  publicUrl?: string,
+): (config: AppConfig) => void {
+  return (config) => {
+    config.auth.enabled = true;
+    config.auth.issuerUrl = "https://auth.example.com";
+    config.auth.audience = "";
+    Object.assign(config.auth, overrides);
+    if (publicUrl) config.server.publicUrl = publicUrl;
+  };
+}
 
-// Apply mocks using hoisted values
-vi.mock("fastify", () => ({
-  default: vi.fn(() => mockFastify),
-}));
+const running: AppServer[] = [];
 
-vi.mock("../services/mcpService", () => mockMcpService);
-vi.mock("../services/trpcService", () => mockTrpcService);
-vi.mock("../services/workerService", () => mockWorkerService);
-vi.mock("../auth", () => ({
-  ProxyAuthManager: vi.fn(function () {
-    return mockProxyAuthManager;
-  }),
-}));
-vi.mock("../utils/paths", () => ({
-  getProjectRoot: vi.fn(() => "/mock/project/root"),
-}));
-vi.mock("@fastify/formbody");
-vi.mock("@fastify/static");
+/** Starts a server and stops it after the test. */
+async function start(serverConfig: AppServerConfig, config: AppConfig = appConfig()) {
+  const server = new AppServer(backend(), serverConfig, config);
+  const app = await server.start();
+  running.push(server);
+  return { server, app, port: (app.server.address() as AddressInfo).port };
+}
 
-describe("AppServer Behavior Tests", () => {
-  let mockDocService: Partial<DocumentManagementService>;
-  let mockPipeline: Partial<IPipeline>;
-  let mockMcpServer: Partial<McpServer>;
-  let eventBus: EventBusService;
-  let appConfig: AppConfig;
+/** The lines the server logged at a level. */
+function logged(level: "info" | "warn"): string[] {
+  return vi.mocked(logger[level]).mock.calls.map(([message]) => String(message));
+}
 
+describe("AppServer", () => {
   beforeEach(() => {
-    eventBus = new EventBusService();
-    // Reset all mocks before each test
     vi.clearAllMocks();
-
-    appConfig = loadConfig();
-
-    // Setup mock dependencies
-    mockDocService = {
-      getActiveEmbeddingConfig: vi.fn().mockReturnValue(null),
-    };
-    mockPipeline = {
-      setCallbacks: vi.fn(), // Add mock for setCallbacks method
-    };
-    mockMcpServer = {};
-
-    // Setup default mock returns
-    mockFastify.register.mockResolvedValue(undefined);
-    mockFastify.listen.mockResolvedValue("http://localhost:3000");
-    mockFastify.close.mockResolvedValue(undefined);
-    mockFastify.addHook.mockReturnValue(undefined);
-    mockMcpService.registerMcpService.mockResolvedValue(mockMcpServer as McpServer);
-    mockMcpService.cleanupMcpService.mockResolvedValue(undefined);
-    mockTrpcService.registerTrpcService.mockResolvedValue(undefined);
-    mockWorkerService.registerWorkerService.mockResolvedValue(undefined);
-    mockWorkerService.stopWorkerService.mockResolvedValue(undefined);
-    mockProxyAuthManager.initialize.mockResolvedValue(undefined);
-    mockProxyAuthManager.registerRoutes.mockReturnValue(undefined);
+    createVerifier.mockResolvedValue({ verifyAccessToken: vi.fn() });
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
+  afterEach(async () => {
+    for (const server of running.splice(0)) await server.stop();
   });
 
-  describe("Configuration Validation", () => {
-    it("should reject web interface without worker or external worker URL", async () => {
-      const config: AppServerConfig = {
-        enableWebInterface: true,
-        enableMcpServer: false,
-        enableApiServer: false,
-        enableWorker: false,
-        port: 3000,
-        // externalWorkerUrl not provided
-      };
+  it("serves only the enabled services", async () => {
+    const cases: Array<{ label: string; web: boolean; mcp: boolean; api: boolean }> = [
+      { label: "no services", web: false, mcp: false, api: false },
+      { label: "web interface only", web: true, mcp: false, api: false },
+      { label: "MCP endpoint only", web: false, mcp: true, api: false },
+      { label: "API only", web: false, mcp: false, api: true },
+      { label: "all services", web: true, mcp: true, api: true },
+    ];
 
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfig,
-      );
-
-      await expect(server.start()).rejects.toThrow(
-        "Web interface requires either embedded worker (enableWorker: true) or external worker (externalWorkerUrl)",
-      );
-    });
-
-    it("should reject MCP server without worker or external worker URL", async () => {
-      const config: AppServerConfig = {
-        enableWebInterface: false,
-        enableMcpServer: true,
-        enableApiServer: false,
-        enableWorker: false,
-        port: 3000,
-        // externalWorkerUrl not provided
-      };
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfig,
-      );
-
-      await expect(server.start()).rejects.toThrow(
-        "MCP server requires either embedded worker (enableWorker: true) or external worker (externalWorkerUrl)",
-      );
-    });
-
-    it("should accept web interface with embedded worker", () => {
-      const config: AppServerConfig = {
-        enableWebInterface: true,
-        enableMcpServer: false,
-        enableApiServer: false,
-        enableWorker: true,
-        port: 3000,
-      };
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfig,
-      );
-
-      expect(() => server.start()).not.toThrow();
-    });
-
-    it("should accept web interface with external worker URL", () => {
-      const config: AppServerConfig = {
-        enableWebInterface: true,
-        enableMcpServer: false,
-        enableApiServer: false,
-        enableWorker: false,
-        port: 3000,
-        externalWorkerUrl: "http://worker.example.com",
-      };
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfig,
-      );
-
-      expect(() => server.start()).not.toThrow();
-    });
-
-    it("should accept all services enabled", () => {
-      const config: AppServerConfig = {
-        enableWebInterface: true,
-        enableMcpServer: true,
-        enableApiServer: true,
-        enableWorker: true,
-        port: 3000,
-      };
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfig,
-      );
-
-      expect(() => server.start()).not.toThrow();
-    });
-  });
-
-  describe("Service Registration Behavior", () => {
-    it("should register no services when all are disabled", async () => {
-      const config: AppServerConfig = {
-        enableWebInterface: false,
-        enableMcpServer: false,
-        enableApiServer: false,
-        enableWorker: false,
-        port: 3000,
-      };
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfig,
-      );
-
-      await server.start();
-
-      // Only core plugins should be registered
-      expect(mockFastify.register).toHaveBeenCalledTimes(1); // Just formbody
-      expect(mockMcpService.registerMcpService).not.toHaveBeenCalled();
-      expect(mockTrpcService.registerTrpcService).not.toHaveBeenCalled();
-      expect(mockWorkerService.registerWorkerService).not.toHaveBeenCalled();
-    });
-
-    it("should register only web interface when enabled", async () => {
-      const config: AppServerConfig = {
-        enableWebInterface: true,
-        enableMcpServer: false,
-        enableApiServer: false,
-        enableWorker: true, // Required for web interface
-        port: 3000,
-      };
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfig,
-      );
-
-      await server.start();
-
-      // Web interface is now just the SPA static file handler + catch-all,
-      // registered after every other route.
-      expect(mockWorkerService.registerWorkerService).toHaveBeenCalledWith(mockPipeline);
-      expect(mockMcpService.registerMcpService).not.toHaveBeenCalled();
-      expect(mockTrpcService.registerTrpcService).not.toHaveBeenCalled();
-      expect(mockFastify.get).toHaveBeenCalledWith("/", expect.any(Function));
-      expect(mockFastify.setNotFoundHandler).toHaveBeenCalled();
-    });
-
-    it("should register only MCP server when enabled", async () => {
-      const config: AppServerConfig = {
-        enableWebInterface: false,
-        enableMcpServer: true,
-        enableApiServer: false,
-        enableWorker: true, // Required for MCP server
-        port: 3000,
-      };
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfig,
-      );
-
-      await server.start();
-
-      expect(mockMcpService.registerMcpService).toHaveBeenCalledWith(
-        mockFastify,
-        mockDocService,
-        mockPipeline,
-        appConfig,
-        undefined, // authManager
-      );
-      expect(mockWorkerService.registerWorkerService).toHaveBeenCalledWith(mockPipeline);
-      // Web interface is disabled: no SPA static handler should be registered
-      expect(mockFastify.setNotFoundHandler).not.toHaveBeenCalled();
-      // tRPC service should not be registered in this mode
-      expect(mockTrpcService.registerTrpcService).not.toHaveBeenCalled();
-    });
-
-    it("should register only API when enabled", async () => {
-      const config: AppServerConfig = {
-        enableWebInterface: false,
-        enableMcpServer: false,
-        enableApiServer: true,
-        enableWorker: false,
-        port: 3000,
-      };
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfig,
-      );
-
-      await server.start();
-
-      expect(mockTrpcService.registerTrpcService).toHaveBeenCalledWith(
-        mockFastify,
-        mockPipeline,
-        mockDocService,
-        expect.any(Object), // eventBus
-        expect.any(Object), // systemInfo
-        undefined, // isWorkerConnected (embedded worker mode)
-      );
-      expect(mockMcpService.registerMcpService).not.toHaveBeenCalled();
-      expect(mockWorkerService.registerWorkerService).not.toHaveBeenCalled();
-      // Web interface is disabled: no SPA static handler should be registered
-      expect(mockFastify.setNotFoundHandler).not.toHaveBeenCalled();
-    });
-
-    it("should register all services when all are enabled", async () => {
-      const config: AppServerConfig = {
-        enableWebInterface: true,
-        enableMcpServer: true,
-        enableApiServer: true,
-        enableWorker: true,
-        port: 3000,
-      };
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfig,
-      );
-
-      await server.start();
-
-      expect(mockMcpService.registerMcpService).toHaveBeenCalledWith(
-        mockFastify,
-        mockDocService,
-        mockPipeline,
-        appConfig,
-        undefined, // authManager
-      );
-      expect(mockTrpcService.registerTrpcService).toHaveBeenCalledWith(
-        mockFastify,
-        mockPipeline,
-        mockDocService,
-        expect.any(Object), // eventBus
-        expect.any(Object), // systemInfo
-        undefined, // isWorkerConnected (embedded worker mode)
-      );
-      expect(mockWorkerService.registerWorkerService).toHaveBeenCalledWith(mockPipeline);
-      // Web interface: SPA static handler registered last
-      expect(mockFastify.get).toHaveBeenCalledWith("/", expect.any(Function));
-      expect(mockFastify.setNotFoundHandler).toHaveBeenCalled();
-    });
-
-    it("should register static files only when web interface is enabled", async () => {
-      const config: AppServerConfig = {
-        enableWebInterface: true,
-        enableMcpServer: false,
-        enableApiServer: false,
-        enableWorker: true,
-        port: 3000,
-      };
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfig,
-      );
-
-      await server.start();
-
-      // formbody + static files
-      expect(mockFastify.register).toHaveBeenCalledTimes(2);
-      // Verify static files registration with correct path
-      expect(mockFastify.register).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({
-          root: expect.stringContaining("public"),
-          prefix: "/",
-          index: false,
-        }),
-      );
-    });
-  });
-
-  describe("Server Lifecycle Behavior", () => {
-    it("should start server on specified port and host", async () => {
-      const config: AppServerConfig = {
-        enableWebInterface: false,
-        enableMcpServer: false,
-        enableApiServer: true,
-        enableWorker: false,
-        port: 4000,
-      };
-
-      const appConfigWithHost: AppConfig = JSON.parse(JSON.stringify(appConfig));
-      appConfigWithHost.server.host = "0.0.0.0";
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfigWithHost,
-      );
-
-      const fastifyInstance = await server.start();
-
-      expect(mockFastify.listen).toHaveBeenCalledWith({
-        port: 4000,
-        host: "0.0.0.0",
-      });
-      expect(fastifyInstance).toBe(mockFastify);
-    });
-
-    it("should log startup URLs using configured bind host instead of listen address", async () => {
-      const infoSpy = vi.spyOn(logger, "info").mockImplementation(() => undefined);
-      const config: AppServerConfig = {
-        enableWebInterface: true,
-        enableMcpServer: true,
-        enableApiServer: true,
-        enableWorker: true,
-        port: 6280,
-        showLogo: false,
-      };
-      const appConfigWithHost: AppConfig = JSON.parse(JSON.stringify(appConfig));
-      appConfigWithHost.server.host = "0.0.0.0";
-      mockFastify.listen.mockResolvedValue("http://127.0.0.1:6280");
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfigWithHost,
-      );
-
-      await server.start();
-
-      expect(infoSpy).toHaveBeenCalledWith(
-        "🚀 Grounded Docs available at http://0.0.0.0:6280",
-      );
-      expect(infoSpy).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "MCP endpoints: http://0.0.0.0:6280/mcp, http://0.0.0.0:6280/sse",
+    const servers = await Promise.all(
+      cases.map(({ web, mcp, api }) =>
+        start(
+          services({
+            enableWebInterface: web,
+            enableMcpServer: mcp,
+            enableApiServer: api,
+          }),
         ),
-      );
-      expect(infoSpy).not.toHaveBeenCalledWith(
-        expect.stringContaining("http://127.0.0.1:6280"),
-      );
-    });
+      ),
+    );
 
-    it("should prefer public origin in startup URLs", async () => {
-      const infoSpy = vi.spyOn(logger, "info").mockImplementation(() => undefined);
-      const config: AppServerConfig = {
-        enableWebInterface: true,
-        enableMcpServer: true,
-        enableApiServer: true,
-        enableWorker: true,
-        port: 6280,
-        showLogo: false,
-      };
-      const appConfigWithPublicOrigin: AppConfig = JSON.parse(JSON.stringify(appConfig));
-      appConfigWithPublicOrigin.server.host = "0.0.0.0";
-      appConfigWithPublicOrigin.server.publicOrigin = "https://docs.example.com";
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfigWithPublicOrigin,
-      );
-
-      await server.start();
-
-      expect(infoSpy).toHaveBeenCalledWith(
-        "🚀 Grounded Docs available at https://docs.example.com",
-      );
-      expect(infoSpy).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "MCP endpoints: https://docs.example.com/mcp, https://docs.example.com/sse",
-        ),
-      );
-    });
-
-    it("should register OAuth metadata with public origin when configured", async () => {
-      const config: AppServerConfig = {
-        enableWebInterface: false,
-        enableMcpServer: true,
-        enableApiServer: false,
-        enableWorker: true,
-        port: 6280,
-        showLogo: false,
-      };
-      const appConfigWithAuth: AppConfig = JSON.parse(JSON.stringify(appConfig));
-      appConfigWithAuth.auth.enabled = true;
-      appConfigWithAuth.auth.issuerUrl = "https://auth.example.com";
-      appConfigWithAuth.auth.audience = "https://docs.example.com";
-      appConfigWithAuth.server.host = "0.0.0.0";
-      appConfigWithAuth.server.publicOrigin = "https://docs.example.com";
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfigWithAuth,
-      );
-
-      await server.start();
-
-      expect(mockProxyAuthManager.registerRoutes).toHaveBeenCalledWith(
-        mockFastify,
-        new URL("https://docs.example.com"),
-      );
-    });
-
-    it("should register OAuth metadata with bind-derived origin when public origin is absent", async () => {
-      const config: AppServerConfig = {
-        enableWebInterface: false,
-        enableMcpServer: true,
-        enableApiServer: false,
-        enableWorker: true,
-        port: 6280,
-        showLogo: false,
-      };
-      const appConfigWithAuth: AppConfig = JSON.parse(JSON.stringify(appConfig));
-      appConfigWithAuth.auth.enabled = true;
-      appConfigWithAuth.auth.issuerUrl = "https://auth.example.com";
-      appConfigWithAuth.auth.audience = "https://docs.example.com";
-      appConfigWithAuth.server.host = "0.0.0.0";
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfigWithAuth,
-      );
-
-      await server.start();
-
-      expect(mockProxyAuthManager.registerRoutes).toHaveBeenCalledWith(
-        mockFastify,
-        new URL("http://0.0.0.0:6280"),
-      );
-    });
-
-    it("should warn when auth uses wildcard bind without public origin", async () => {
-      const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
-      const config: AppServerConfig = {
-        enableWebInterface: false,
-        enableMcpServer: true,
-        enableApiServer: false,
-        enableWorker: true,
-        port: 6280,
-        showLogo: false,
-      };
-      const appConfigWithAuth: AppConfig = JSON.parse(JSON.stringify(appConfig));
-      appConfigWithAuth.auth.enabled = true;
-      appConfigWithAuth.auth.issuerUrl = "https://auth.example.com";
-      appConfigWithAuth.auth.audience = "https://docs.example.com";
-      appConfigWithAuth.server.host = "::";
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfigWithAuth,
-      );
-
-      await server.start();
-
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("public origin"));
-    });
-
-    it("should not warn for wildcard bind when auth is disabled", async () => {
-      const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
-      const config: AppServerConfig = {
-        enableWebInterface: false,
-        enableMcpServer: false,
-        enableApiServer: true,
-        enableWorker: false,
-        port: 6280,
-        showLogo: false,
-      };
-      const appConfigWithHost: AppConfig = JSON.parse(JSON.stringify(appConfig));
-      appConfigWithHost.server.host = "0.0.0.0";
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfigWithHost,
-      );
-
-      await server.start();
-
-      expect(warnSpy).not.toHaveBeenCalled();
-    });
-
-    it("should successfully start server with all services enabled", async () => {
-      const config: AppServerConfig = {
-        enableWebInterface: true,
-        enableMcpServer: true,
-        enableApiServer: true,
-        enableWorker: true,
-        port: 3000,
-      };
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfig,
-      );
-
-      const fastifyInstance = await server.start();
-
-      // Verify server started successfully
-      expect(fastifyInstance).toBe(mockFastify);
-      expect(mockFastify.listen).toHaveBeenCalledWith({
-        port: 3000,
-        host: "127.0.0.1",
-      });
-
-      // Verify all services were registered
-      expect(mockMcpService.registerMcpService).toHaveBeenCalled();
-      expect(mockTrpcService.registerTrpcService).toHaveBeenCalled();
-      expect(mockWorkerService.registerWorkerService).toHaveBeenCalled();
-      // Web interface: SPA static handler registered
-      expect(mockFastify.get).toHaveBeenCalledWith("/", expect.any(Function));
-    });
-
-    it("should successfully start server with external worker configured", async () => {
-      const config: AppServerConfig = {
-        enableWebInterface: true,
-        enableMcpServer: false,
-        enableApiServer: false,
-        enableWorker: false,
-        port: 3000,
-        externalWorkerUrl: "http://worker.example.com",
-      };
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfig,
-      );
-
-      const fastifyInstance = await server.start();
-
-      // Verify server started successfully
-      expect(fastifyInstance).toBe(mockFastify);
-      expect(mockFastify.listen).toHaveBeenCalled();
-
-      // Verify web interface (SPA static handler) was set up but not the
-      // embedded worker
-      expect(mockFastify.get).toHaveBeenCalledWith("/", expect.any(Function));
-      expect(mockWorkerService.registerWorkerService).not.toHaveBeenCalled();
-    });
-
-    it("should handle server startup failure gracefully", async () => {
-      const startupError = new Error("Port already in use");
-      mockFastify.listen.mockRejectedValue(startupError);
-
-      const config: AppServerConfig = {
-        enableWebInterface: false,
-        enableMcpServer: false,
-        enableApiServer: true,
-        enableWorker: false,
-        port: 3000,
-      };
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfig,
-      );
-
-      await expect(server.start()).rejects.toThrow("Port already in use");
-      // Verify that cleanup was attempted
-      expect(mockFastify.close).toHaveBeenCalled();
-    });
+    for (const [index, { label, web, mcp, api }] of cases.entries()) {
+      const { app } = servers[index];
+      const shell = await app.inject({ method: "GET", url: "/" });
+      expect.soft(shell.statusCode, `${label}: GET /`).toBe(web ? 200 : 404);
+      if (web) {
+        expect
+          .soft(shell.headers["content-type"], `${label}: GET /`)
+          .toMatch(/text\/html/);
+      }
+      const mcpResponse = await app.inject({ method: "POST", url: "/mcp", payload: {} });
+      if (mcp) expect.soft(mcpResponse.statusCode, `${label}: POST /mcp`).not.toBe(404);
+      else expect.soft(mcpResponse.statusCode, `${label}: POST /mcp`).toBe(404);
+      const ping = await app.inject({ method: "GET", url: "/api/ping" });
+      expect.soft(ping.statusCode, `${label}: GET /api/ping`).toBe(api ? 200 : 404);
+    }
   });
 
-  describe("Server Shutdown Behavior", () => {
-    it("should stop all services gracefully", async () => {
-      const config: AppServerConfig = {
-        enableWebInterface: true,
-        enableMcpServer: true,
-        enableApiServer: true,
-        enableWorker: true,
-        port: 3000,
-      };
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfig,
-      );
-
-      await server.start();
-      await server.stop();
-
-      expect(mockWorkerService.stopWorkerService).toHaveBeenCalledWith(mockPipeline);
-      expect(mockMcpService.cleanupMcpService).toHaveBeenCalledWith(mockMcpServer);
-      expect(mockFastify.close).toHaveBeenCalled();
-    });
-
-    it("should not stop worker service when not enabled", async () => {
-      const config: AppServerConfig = {
-        enableWebInterface: false,
-        enableMcpServer: false,
-        enableApiServer: true,
-        enableWorker: false,
-        port: 3000,
-      };
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfig,
-      );
-
-      await server.start();
-      await server.stop();
-
-      expect(mockWorkerService.stopWorkerService).not.toHaveBeenCalled();
-      expect(mockMcpService.cleanupMcpService).not.toHaveBeenCalled();
-      expect(mockFastify.close).toHaveBeenCalled();
-    });
-
-    it("should handle shutdown failure and still attempt all cleanup", async () => {
-      const shutdownError = new Error("Cleanup failed");
-      mockWorkerService.stopWorkerService.mockRejectedValue(shutdownError);
-
-      const config: AppServerConfig = {
-        enableWebInterface: false,
-        enableMcpServer: true, // Enable MCP server so it gets cleaned up too
-        enableApiServer: false,
-        enableWorker: true,
-        port: 3000,
-      };
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfig,
-      );
-
-      await server.start();
-      await expect(server.stop()).rejects.toThrow("Cleanup failed");
-
-      // Verify that stopWorkerService was called before the error was thrown
-      expect(mockWorkerService.stopWorkerService).toHaveBeenCalledWith(mockPipeline);
-    });
-  });
-
-  describe("Configuration Edge Cases", () => {
-    it("should handle minimal configuration with only API", async () => {
-      const config: AppServerConfig = {
-        enableWebInterface: false,
-        enableMcpServer: false,
-        enableApiServer: true,
-        enableWorker: false,
-        port: 3000,
-      };
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfig,
-      );
-
-      const fastifyInstance = await server.start();
-
-      expect(fastifyInstance).toBe(mockFastify);
-      expect(mockTrpcService.registerTrpcService).toHaveBeenCalledWith(
-        mockFastify,
-        mockPipeline,
-        mockDocService,
-        expect.any(Object), // eventBus
-        expect.any(Object), // systemInfo
-        undefined, // isWorkerConnected (embedded worker mode)
-      );
-    });
-
-    it("should handle configuration with both embedded and external worker", async () => {
-      const config: AppServerConfig = {
-        enableWebInterface: true,
-        enableMcpServer: false,
-        enableApiServer: false,
-        enableWorker: true,
-        port: 3000,
-        externalWorkerUrl: "http://worker.example.com", // This should be ignored
-      };
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfig,
-      );
-
-      await server.start();
-
-      // Worker should take precedence - external worker should not be registered
-      expect(mockWorkerService.registerWorkerService).toHaveBeenCalledWith(mockPipeline);
-    });
-
-    it("should thread a remote worker mode and connectivity check into the tRPC context when using an external worker", async () => {
-      const config: AppServerConfig = {
-        enableWebInterface: false,
-        enableMcpServer: false,
-        enableApiServer: true,
-        enableWorker: false,
-        port: 3000,
-        externalWorkerUrl: "http://worker.example.com",
-      };
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfig,
-      );
-
-      await server.start();
-
-      expect(mockTrpcService.registerTrpcService).toHaveBeenCalledWith(
-        mockFastify,
-        mockPipeline,
-        mockDocService,
-        expect.any(Object), // eventBus
-        expect.objectContaining({
-          worker: { mode: "remote", url: "http://worker.example.com" },
+  it("logs the URLs clients use to reach the server", async () => {
+    const port = await getFreePort();
+    const cases: Array<{
+      label: string;
+      serverConfig: AppServerConfig;
+      configure: (config: AppConfig) => void;
+      logs: string[];
+      omits?: string[];
+      quiet?: boolean;
+    }> = [
+      {
+        label: "wildcard bind: the bind host, not the listen address, and no warnings",
+        serverConfig: services({
+          enableWebInterface: true,
+          enableMcpServer: true,
+          enableApiServer: true,
+          port,
         }),
-        expect.any(Function), // isWorkerConnected, only populated in remote mode
-      );
-    });
+        configure: (config) => {
+          config.server.host = "0.0.0.0";
+        },
+        logs: [
+          `🚀 Grounded Docs available at http://0.0.0.0:${port}`,
+          `MCP endpoint: http://0.0.0.0:${port}/mcp`,
+        ],
+        omits: ["/sse", `http://127.0.0.1:${port}`],
+        quiet: true,
+      },
+      {
+        label: "public origin",
+        serverConfig: services({
+          enableWebInterface: true,
+          enableMcpServer: true,
+          enableApiServer: true,
+        }),
+        configure: (config) => {
+          config.server.host = "0.0.0.0";
+          config.server.publicOrigin = "https://docs.example.com";
+        },
+        logs: [
+          "🚀 Grounded Docs available at https://docs.example.com",
+          "MCP endpoint: https://docs.example.com/mcp",
+        ],
+      },
+      {
+        label: "public URL with a path",
+        serverConfig: services({ enableMcpServer: true }),
+        configure: (config) => {
+          config.server.publicUrl = "https://docs.example.com/tools";
+        },
+        logs: ["MCP endpoint: https://docs.example.com/tools/mcp"],
+      },
+    ];
 
-    it("should validate port number boundaries", async () => {
-      const config: AppServerConfig = {
-        enableWebInterface: false,
-        enableMcpServer: false,
-        enableApiServer: true,
-        enableWorker: false,
-        port: 65535, // Maximum valid port
-      };
+    for (const { label, serverConfig, configure, logs, omits = [], quiet } of cases) {
+      vi.clearAllMocks();
+      await start(serverConfig, appConfig(configure));
+      const info = logged("info");
 
-      const appConfigWithHost: AppConfig = JSON.parse(JSON.stringify(appConfig));
-      appConfigWithHost.server.host = "0.0.0.0";
+      for (const line of logs) {
+        expect
+          .soft(
+            info.some((message) => message.includes(line)),
+            `${label}: ${line}`,
+          )
+          .toBe(true);
+      }
+      for (const text of omits) {
+        expect
+          .soft(
+            info.filter((message) => message.includes(text)),
+            label,
+          )
+          .toEqual([]);
+      }
+      if (quiet) expect.soft(logged("warn"), label).toEqual([]);
+      for (const server of running.splice(0)) await server.stop();
+    }
+  });
 
+  it("warns about server.publicOrigin when it is in effect or ignored", () => {
+    const cases = [
+      {
+        label: "deprecated when in effect",
+        configure: (config: AppConfig) => {
+          config.server.publicOrigin = "https://docs.example.com";
+        },
+        warning: /publicOrigin is deprecated.*server\.publicUrl/,
+      },
+      {
+        label: "ignored next to server.publicUrl",
+        configure: (config: AppConfig) => {
+          config.server.publicOrigin = "https://old.example.com";
+          config.server.publicUrl = "https://example.com/docs";
+        },
+        warning: /server\.publicOrigin is ignored/,
+      },
+    ];
+
+    for (const { label, configure, warning } of cases) {
+      vi.clearAllMocks();
+      new AppServer(backend(), services({ enableApiServer: true }), appConfig(configure));
+
+      expect
+        .soft(
+          logged("warn").some((message) => warning.test(message)),
+          label,
+        )
+        .toBe(true);
+    }
+  });
+
+  it("refuses to start authentication without a public URL or an issuer", async () => {
+    const cases = [
+      { label: "no public URL", configure: withAuth(), error: /server\.publicUrl/ },
+      {
+        label: "no issuer",
+        configure: withAuth({ issuerUrl: "" }, "https://docs.example.com/tools"),
+        error: /auth\.issuerUrl/,
+      },
+    ];
+
+    for (const { label, configure, error } of cases) {
       const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        config,
-        appConfigWithHost,
+        backend(),
+        services({ enableMcpServer: true }),
+        appConfig(configure),
       );
+      await expect.soft(server.start(), label).rejects.toThrow(error);
+    }
+  });
 
-      await server.start();
+  it("expects the configured audience when one is set", async () => {
+    await start(
+      services({ enableMcpServer: true }),
+      appConfig(
+        withAuth(
+          { audience: "https://api.example.com" },
+          "https://docs.example.com/tools",
+        ),
+      ),
+    );
 
-      expect(mockFastify.listen).toHaveBeenCalledWith({
-        port: 65535,
-        host: "0.0.0.0",
-      });
+    expect(createVerifier).toHaveBeenCalledWith({
+      issuerUrl: "https://auth.example.com",
+      audience: "https://api.example.com",
     });
+  });
+
+  it("states at startup that only the MCP endpoint is protected", async () => {
+    await start(
+      services({ enableMcpServer: true }),
+      appConfig(withAuth({}, "https://docs.example.com/tools")),
+    );
+
+    expect(logged("info")).toContainEqual(
+      expect.stringContaining(
+        "Authentication: protects https://docs.example.com/tools/mcp only; the web UI and API are not protected",
+      ),
+    );
+  });
+
+  it("warns that authentication protects nothing without an MCP endpoint", async () => {
+    await start(services({ enableApiServer: true }), appConfig(withAuth()));
+
+    expect(logged("warn")).toContainEqual(expect.stringContaining("protects nothing"));
+    expect(createVerifier).not.toHaveBeenCalled();
+  });
+
+  it("checks the host on every bind and shields the API from foreign origins only on a loopback bind", async () => {
+    const loopback = await start(services({ enableApiServer: true }));
+    const wildcard = await start(
+      services({ enableApiServer: true }),
+      appConfig((config) => {
+        config.server.host = "0.0.0.0";
+      }),
+    );
+    const foreignOrigin = { host: "127.0.0.1:6280", origin: "https://attacker.example" };
+    const cases = [
+      {
+        label: "loopback, foreign origin, API",
+        server: loopback,
+        headers: foreignOrigin,
+        url: "/api/ping",
+        status: 403,
+      },
+      // The shield covers the API only; this path has no route
+      {
+        label: "loopback, foreign origin, asset",
+        server: loopback,
+        headers: foreignOrigin,
+        url: "/assets/app.js",
+        status: 404,
+      },
+      {
+        label: "loopback, local host name",
+        server: loopback,
+        headers: { host: "localhost:6280" },
+        url: "/api/ping",
+        status: 200,
+      },
+      {
+        label: "wildcard, foreign origin, API",
+        server: wildcard,
+        headers: foreignOrigin,
+        url: "/api/ping",
+        status: 200,
+      },
+      {
+        label: "wildcard, foreign host name",
+        server: wildcard,
+        headers: { host: "attacker.example:6280" },
+        url: "/api/ping",
+        status: 403,
+      },
+    ];
+
+    for (const { label, server, headers, url, status } of cases) {
+      const response = await server.app.inject({ method: "GET", url, headers });
+      expect.soft(response.statusCode, label).toBe(status);
+    }
+  });
+
+  it("fails to start when the port is taken", async () => {
+    const { port } = await start(services({ enableApiServer: true }));
+    const second = new AppServer(
+      backend(),
+      services({ enableApiServer: true, port }),
+      appConfig(),
+    );
+
+    await expect(second.start()).rejects.toThrow(/EADDRINUSE/);
+  });
+
+  it("releases the port when stopped", async () => {
+    const server = new AppServer(
+      backend(),
+      services({ enableApiServer: true }),
+      appConfig(),
+    );
+    const app = await server.start();
+    const url = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}/api/ping`;
+    expect((await fetch(url)).status).toBe(200);
+
+    await server.stop();
+
+    await expect(fetch(url)).rejects.toThrow();
   });
 });

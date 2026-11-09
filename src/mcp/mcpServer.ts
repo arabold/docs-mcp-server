@@ -1,11 +1,19 @@
-import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod/v3";
+import fs from "node:fs";
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
+import { z } from "zod";
 import { PipelineJobStatus } from "../pipeline/types";
-import { TelemetryEvent, telemetry } from "../telemetry";
+import { libraryNamesMatch } from "../store/types";
+import {
+  extractHostname,
+  extractProtocol,
+  TelemetryEvent,
+  telemetry,
+} from "../telemetry";
 import type { JobInfo } from "../tools";
 import { ToolError } from "../tools/errors";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
+import { buildDefaultInstructions } from "./defaultInstructions";
 import type { McpServerTools } from "./tools";
 import { createError, createResponse } from "./utils";
 
@@ -66,26 +74,276 @@ const patternsSchema = z.union([z.string(), z.array(z.string())]).transform((val
 });
 
 /**
+ * Resolves the instructions text advertised to MCP clients during initialization.
+ * `createMcpServerFactory()` calls this once at startup, so the instructions file
+ * is read a single time rather than for every client session.
+ * `server.instructions` and `server.instructionsFile` are mutually exclusive. When
+ * neither is set, the built-in instructions for the current mode are used.
+ * @param config The application configuration.
+ * @returns The configured instructions text, or the built-in instructions.
+ * @throws {Error} If both settings are set, or the configured instructions file cannot be read.
+ */
+export function resolveServerInstructions(config: AppConfig): string {
+  const { instructions, instructionsFile: filePath } = config.server;
+  if (instructions !== undefined && filePath !== undefined) {
+    throw new Error(
+      "Both server.instructions and server.instructionsFile are set; configure only one of them.",
+    );
+  }
+  if (instructions !== undefined) {
+    return instructions;
+  }
+  if (filePath === undefined) {
+    return buildDefaultInstructions(config.app.readOnly);
+  }
+  try {
+    return fs.readFileSync(filePath, "utf8");
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Failed to read MCP server instructions file "${filePath}": ${reason}`,
+    );
+  }
+}
+
+/**
+ * Decodes a URI template variable once. The SDK hands variables over still
+ * percent-encoded; a malformed escape is kept verbatim rather than failing.
+ */
+function decodeUriVariable(value: string | string[]): string {
+  const raw = Array.isArray(value) ? value.join("/") : value;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+/**
+ * Build the input schemas of every tool. They depend only on configuration,
+ * which does not change while the process runs, so one set serves every MCP
+ * server instance. Over HTTP an instance is created per request.
+ * @param config The application configuration.
+ * @returns The input schema for each tool, keyed by the tool's camel-cased name.
+ */
+function createToolInputSchemas(config: AppConfig) {
+  return {
+    scrapeDocs: z.object({
+      url: z.string().url().describe("Documentation root URL to scrape."),
+      library: z.string().trim().describe("Library name."),
+      version: z.string().trim().optional().describe("Library version (optional)."),
+      maxPages: z
+        .number()
+        .optional()
+        .default(config.scraper.maxPages)
+        .describe(
+          `Maximum number of pages to scrape (default: ${config.scraper.maxPages}).`,
+        ),
+      maxDepth: z
+        .number()
+        .optional()
+        .default(config.scraper.maxDepth)
+        .describe(`Maximum navigation depth (default: ${config.scraper.maxDepth}).`),
+      scope: z
+        .enum(["subpages", "hostname", "domain"])
+        .optional()
+        .default("subpages")
+        .describe("Crawling boundary: 'subpages', 'hostname', or 'domain'."),
+      followRedirects: z
+        .boolean()
+        .optional()
+        .default(true)
+        .describe("Follow HTTP redirects (3xx responses)."),
+      replace: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe(
+          "Rebuild the version from scratch if it already exists. Without it, an existing version is left untouched and the request fails.",
+        ),
+      preserveHashes: z
+        .boolean()
+        .optional()
+        .describe("Preserve hash fragments for hash-routed SPA documentation sites."),
+      includePatterns: patternsSchema
+        .optional()
+        .describe(
+          "Patterns for including URLs during scraping. Pass one or more patterns as a comma-separated string or as an array. Commas inside { }, [ ] or ( ) are preserved; escape a literal comma with a backslash. Regex patterns must be wrapped in slashes, e.g. /pattern/. If not set, all are included by default.",
+        ),
+      excludePatterns: patternsSchema
+        .optional()
+        .describe(
+          "Patterns for excluding URLs during scraping. Pass one or more patterns as a comma-separated string or as an array. Commas inside { }, [ ] or ( ) are preserved; escape a literal comma with a backslash. Exclude takes precedence over include. Regex patterns must be wrapped in slashes, e.g. /pattern/.",
+        ),
+    }),
+    refreshVersion: z.object({
+      library: z.string().trim().describe("Library name."),
+      version: z
+        .string()
+        .trim()
+        .optional()
+        .describe("Library version (optional, refreshes latest if omitted)."),
+    }),
+    searchDocs: z.object({
+      library: z.string().trim().describe("Library name."),
+      version: z
+        .string()
+        .trim()
+        .optional()
+        .describe("Library version (exact or X-Range, optional)."),
+      query: z.string().trim().describe("Documentation search query."),
+      limit: z.number().optional().default(5).describe("Maximum number of results."),
+    }),
+    readPage: z.object({
+      library: z.string().trim().describe("Library name."),
+      pathOrUrl: z
+        .string()
+        .trim()
+        .min(1)
+        .describe(
+          "Page URL, or a path matching the end of one page URL (e.g. 'https://react.dev/reference/react' or '/reference/react').",
+        ),
+      version: z
+        .string()
+        .trim()
+        .optional()
+        .describe("Library version (exact or X-Range, optional)."),
+      startChunk: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .default(0)
+        .describe("Chunk to start from, as given by a previous response (default 0)."),
+      maxChars: z
+        .number()
+        .positive()
+        .optional()
+        .default(30000)
+        .describe(
+          "Maximum characters to return (default 30000). Only whole chunks are returned, so a single longer chunk is returned on its own.",
+        ),
+    }),
+    listPages: z.object({
+      library: z.string().trim().describe("Library name."),
+      version: z
+        .string()
+        .trim()
+        .optional()
+        .describe("Library version (exact or X-Range, optional)."),
+      contains: z
+        .string()
+        .trim()
+        .optional()
+        .describe("Only list pages whose URL contains this text (e.g. '/components')."),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .max(200)
+        .optional()
+        .default(50)
+        .describe("Maximum pages to return (default 50, max 200)."),
+      offset: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .default(0)
+        .describe("Number of pages to skip (default 0)."),
+    }),
+    listLibraries: z.object({
+      // no params
+    }),
+    findVersion: z.object({
+      library: z.string().trim().describe("Library name."),
+      targetVersion: z
+        .string()
+        .trim()
+        .optional()
+        .describe("Version pattern to match (exact or X-Range, optional)."),
+    }),
+    listJobs: z.object({
+      status: z
+        .enum(["queued", "running", "completed", "failed", "cancelling", "cancelled"])
+        .optional()
+        .describe("Filter jobs by status (optional)."),
+    }),
+    getJobInfo: z.object({
+      jobId: z.string().uuid().describe("Job ID to query."),
+    }),
+    cancelJob: z.object({
+      jobId: z.string().uuid().describe("Job ID to cancel."),
+    }),
+    removeDocs: z.object({
+      library: z.string().trim().describe("Library name."),
+      version: z
+        .string()
+        .trim()
+        .optional()
+        .describe("Library version (optional, removes latest if omitted)."),
+    }),
+    fetchUrl: z.object({
+      url: z.string().url().describe("URL to fetch and convert to Markdown."),
+      followRedirects: z
+        .boolean()
+        .optional()
+        .default(true)
+        .describe("Follow HTTP redirects (3xx responses)."),
+    }),
+  };
+}
+
+/** Input schemas for every tool, as built by {@link createToolInputSchemas}. */
+type ToolInputSchemas = ReturnType<typeof createToolInputSchemas>;
+
+/**
+ * Build a factory for MCP server instances that share one set of tool input
+ * schemas and one instructions text, for transports that create an instance
+ * per request or connection. Both are resolved here, once, at startup.
+ * @param tools The shared tool instances to use for server operations.
+ * @param config The application configuration.
+ * @returns A function that creates a configured McpServer instance.
+ * @throws {Error} If the configured instructions cannot be resolved.
+ */
+export function createMcpServerFactory(
+  tools: McpServerTools,
+  config: AppConfig,
+): () => McpServer {
+  const instructions = resolveServerInstructions(config);
+  const schemas = createToolInputSchemas(config);
+  return () => createMcpServerInstance(tools, config, instructions, schemas);
+}
+
+/**
  * Creates and configures an instance of the MCP server with registered tools and resources.
  * @param tools The shared tool instances to use for server operations.
  * @param config The application configuration.
+ * @param instructions Instructions text sent to clients during initialization, as
+ *   returned by `resolveServerInstructions()`.
+ * @param schemas The tool input schemas, shared by every instance.
  * @returns A configured McpServer instance.
  */
-export function createMcpServerInstance(
+function createMcpServerInstance(
   tools: McpServerTools,
   config: AppConfig,
+  instructions: string,
+  schemas: ToolInputSchemas,
 ): McpServer {
   const readOnly = config.app.readOnly;
+  const { name, title } = config.server;
   const server = new McpServer(
     {
-      name: "docs-mcp-server",
-      version: "0.1.0",
+      name,
+      ...(title !== undefined ? { title } : {}),
+      version: __APP_VERSION__,
     },
     {
       capabilities: {
         tools: {},
         resources: {},
       },
+      instructions,
     },
   );
 
@@ -94,54 +352,17 @@ export function createMcpServerInstance(
   // Only register write/job tools if not in read-only mode
   if (!readOnly) {
     // Scrape docs tool - suppress deep inference issues
-    server.tool(
+    server.registerTool(
       "scrape_docs",
-      "Scrape and index documentation from a URL for a library. Use this tool to index a new library or a new version.",
       {
-        url: z.string().url().describe("Documentation root URL to scrape."),
-        library: z.string().trim().describe("Library name."),
-        version: z.string().trim().optional().describe("Library version (optional)."),
-        maxPages: z
-          .number()
-          .optional()
-          .default(config.scraper.maxPages)
-          .describe(
-            `Maximum number of pages to scrape (default: ${config.scraper.maxPages}).`,
-          ),
-        maxDepth: z
-          .number()
-          .optional()
-          .default(config.scraper.maxDepth)
-          .describe(`Maximum navigation depth (default: ${config.scraper.maxDepth}).`),
-        scope: z
-          .enum(["subpages", "hostname", "domain"])
-          .optional()
-          .default("subpages")
-          .describe("Crawling boundary: 'subpages', 'hostname', or 'domain'."),
-        followRedirects: z
-          .boolean()
-          .optional()
-          .default(true)
-          .describe("Follow HTTP redirects (3xx responses)."),
-        preserveHashes: z
-          .boolean()
-          .optional()
-          .describe("Preserve hash fragments for hash-routed SPA documentation sites."),
-        includePatterns: patternsSchema
-          .optional()
-          .describe(
-            "Patterns for including URLs during scraping. Pass one or more patterns as a comma-separated string or as an array. Commas inside { }, [ ] or ( ) are preserved; escape a literal comma with a backslash. Regex patterns must be wrapped in slashes, e.g. /pattern/. If not set, all are included by default.",
-          ),
-        excludePatterns: patternsSchema
-          .optional()
-          .describe(
-            "Patterns for excluding URLs during scraping. Pass one or more patterns as a comma-separated string or as an array. Commas inside { }, [ ] or ( ) are preserved; escape a literal comma with a backslash. Exclude takes precedence over include. Regex patterns must be wrapped in slashes, e.g. /pattern/.",
-          ),
-      },
-      {
-        title: "Scrape New Library Documentation",
-        destructiveHint: true, // replaces existing docs
-        openWorldHint: true, // requires internet access
+        description:
+          "Scrape and index documentation from a URL for a library. Use this tool to index a new library or a new version. Scraping a library version that already exists is rejected unless `replace` is true; use refresh_version to update an existing version in place.",
+        inputSchema: schemas.scrapeDocs,
+        annotations: {
+          title: "Scrape New Library Documentation",
+          destructiveHint: true, // replaces existing docs
+          openWorldHint: true, // requires internet access
+        },
       },
       async ({
         url,
@@ -151,6 +372,7 @@ export function createMcpServerInstance(
         maxDepth,
         scope,
         followRedirects,
+        replace,
         preserveHashes,
         includePatterns,
         excludePatterns,
@@ -161,7 +383,8 @@ export function createMcpServerInstance(
           context: "mcp_server",
           library,
           version,
-          url: new URL(url).hostname, // Privacy-safe URL tracking
+          url: extractHostname(url), // Host only, never the full URL
+          urlProtocol: extractProtocol(url),
           maxPages,
           maxDepth,
           scope,
@@ -173,6 +396,7 @@ export function createMcpServerInstance(
             url,
             library,
             version,
+            replace,
             waitForCompletion: false, // Don't wait for completion
             // onProgress: undefined, // Explicitly undefined or omitted
             options: {
@@ -203,21 +427,17 @@ export function createMcpServerInstance(
     );
 
     // Refresh version tool - suppress deep inference issues
-    server.tool(
+    server.registerTool(
       "refresh_version",
-      "Re-scrape a previously indexed library version, updating only changed pages.",
       {
-        library: z.string().trim().describe("Library name."),
-        version: z
-          .string()
-          .trim()
-          .optional()
-          .describe("Library version (optional, refreshes latest if omitted)."),
-      },
-      {
-        title: "Refresh Library Version",
-        destructiveHint: false, // Only updates changed content
-        openWorldHint: true, // requires internet access
+        description:
+          "Re-scrape a previously indexed library version, updating only changed pages.",
+        inputSchema: schemas.refreshVersion,
+        annotations: {
+          title: "Refresh Library Version",
+          destructiveHint: false, // Only updates changed content
+          openWorldHint: true, // requires internet access
+        },
       },
       async ({ library, version }) => {
         // Track MCP tool usage
@@ -254,27 +474,21 @@ export function createMcpServerInstance(
   }
 
   // Search docs tool
-  server.tool(
+  server.registerTool(
     "search_docs",
-    "Search up-to-date documentation for a library or package. Examples:\n\n" +
-      '- {library: "react", query: "hooks lifecycle"} -> matches latest version of React\n' +
-      '- {library: "react", version: "18.0.0", query: "hooks lifecycle"} -> matches React 18.0.0 or earlier\n' +
-      '- {library: "typescript", version: "5.x", query: "ReturnType example"} -> any TypeScript 5.x.x version\n' +
-      '- {library: "typescript", version: "5.2.x", query: "ReturnType example"} -> any TypeScript 5.2.x version',
     {
-      library: z.string().trim().describe("Library name."),
-      version: z
-        .string()
-        .trim()
-        .optional()
-        .describe("Library version (exact or X-Range, optional)."),
-      query: z.string().trim().describe("Documentation search query."),
-      limit: z.number().optional().default(5).describe("Maximum number of results."),
-    },
-    {
-      title: "Search Library Documentation",
-      readOnlyHint: true,
-      destructiveHint: false,
+      description:
+        "Search up-to-date documentation for a library or package. Examples:\n\n" +
+        '- {library: "react", query: "hooks lifecycle"} -> matches latest version of React\n' +
+        '- {library: "react", version: "18.0.0", query: "hooks lifecycle"} -> matches React 18.0.0 or earlier\n' +
+        '- {library: "typescript", version: "5.x", query: "ReturnType example"} -> any TypeScript 5.x.x version\n' +
+        '- {library: "typescript", version: "5.2.x", query: "ReturnType example"} -> any TypeScript 5.2.x version',
+      inputSchema: schemas.searchDocs,
+      annotations: {
+        title: "Search Library Documentation",
+        readOnlyHint: true,
+        destructiveHint: false,
+      },
     },
     async ({ library, version, query, limit }) => {
       // Track MCP tool usage
@@ -283,7 +497,7 @@ export function createMcpServerInstance(
         context: "mcp_server",
         library,
         version,
-        query: query.substring(0, 100), // Truncate query for privacy
+        queryLength: query.length, // Never the query itself
         limit,
       });
 
@@ -316,17 +530,127 @@ ${r.content}\n`,
     },
   );
 
-  // List libraries tool
-  server.tool(
-    "list_libraries",
-    "List all indexed libraries.",
+  // Read page tool
+  server.registerTool(
+    "read_page",
     {
-      // no params
+      description:
+        "Read the full content of an indexed documentation page, for example a URL returned by `search_docs` or `list_pages`. " +
+        "Long pages are returned in parts; the response says how to continue.",
+      inputSchema: schemas.readPage,
+      annotations: {
+        title: "Read Documentation Page",
+        readOnlyHint: true,
+        destructiveHint: false,
+      },
     },
+    async ({ library, pathOrUrl, version, startChunk, maxChars }) => {
+      telemetry.track(TelemetryEvent.TOOL_USED, {
+        tool: "read_page",
+        context: "mcp_server",
+        library,
+        version,
+      });
+
+      try {
+        const result = await tools.readPage.execute({
+          library,
+          pathOrUrl,
+          version,
+          startChunk,
+          maxChars,
+        });
+
+        if (result.startChunk >= result.totalChunks && result.totalChunks > 0) {
+          return createResponse(
+            `startChunk ${result.startChunk} is past the end of ${result.url}, which has ${result.totalChunks} chunks.`,
+          );
+        }
+
+        const end = result.nextChunk ?? result.totalChunks;
+        const notice =
+          result.nextChunk !== null
+            ? `\n\n> Showing chunks ${result.startChunk + 1}-${end} of ${result.totalChunks}. ` +
+              `To continue, call read_page again with startChunk: ${result.nextChunk}.`
+            : "";
+
+        return createResponse(`> Source: ${result.url}\n\n${result.content}${notice}`);
+      } catch (error) {
+        return createError(error);
+      }
+    },
+  );
+
+  // List pages tool
+  server.registerTool(
+    "list_pages",
     {
-      title: "List Libraries",
-      readOnlyHint: true,
-      destructiveHint: false,
+      description:
+        "List the indexed pages of a library version, with an optional URL filter and pagination.",
+      inputSchema: schemas.listPages,
+      annotations: {
+        title: "List Library Pages",
+        readOnlyHint: true,
+        destructiveHint: false,
+      },
+    },
+    async ({ library, version, contains, limit, offset }) => {
+      telemetry.track(TelemetryEvent.TOOL_USED, {
+        tool: "list_pages",
+        context: "mcp_server",
+        library,
+        version,
+        limit,
+        offset,
+      });
+
+      try {
+        const result = await tools.listPages.execute({
+          library,
+          version,
+          contains,
+          limit,
+          offset,
+        });
+
+        if (result.pages.length === 0) {
+          return createResponse(
+            `No pages found for '${library}'${result.version ? `@${result.version}` : ""}${contains ? ` with URLs containing '${contains}'` : ""}.`,
+          );
+        }
+
+        const lines = result.pages.map((p) => {
+          const safeTitle = (p.title || p.url)
+            .replace(/\[/g, "\\[")
+            .replace(/\]/g, "\\]");
+          return `- [${safeTitle}](<${p.url}>)${p.depth !== null ? ` (depth: ${p.depth})` : ""}`;
+        });
+
+        let responseText = `Indexed pages for ${result.library}${result.version ? `@${result.version}` : ""} (${result.total} total pages, showing ${result.offset + 1}-${result.offset + result.pages.length}):\n\n${lines.join("\n")}`;
+
+        if (result.hasMore) {
+          responseText += `\n\nUse offset: ${result.offset + result.pages.length} to see the next batch of pages.`;
+        }
+
+        return createResponse(responseText);
+      } catch (error) {
+        return createError(error);
+      }
+    },
+  );
+
+  // List libraries tool
+  server.registerTool(
+    "list_libraries",
+    {
+      description:
+        "List all indexed libraries and their versions. Use this to find the correct library name.",
+      inputSchema: schemas.listLibraries,
+      annotations: {
+        title: "List Libraries",
+        readOnlyHint: true,
+        destructiveHint: false,
+      },
     },
     async () => {
       // Track MCP tool usage
@@ -351,21 +675,17 @@ ${r.content}\n`,
   );
 
   // Find version tool
-  server.tool(
+  server.registerTool(
     "find_version",
-    "Find the best matching version for a library. Use to identify available or closest versions.",
     {
-      library: z.string().trim().describe("Library name."),
-      targetVersion: z
-        .string()
-        .trim()
-        .optional()
-        .describe("Version pattern to match (exact or X-Range, optional)."),
-    },
-    {
-      title: "Find Library Version",
-      readOnlyHint: true,
-      destructiveHint: false,
+      description:
+        "Find the best matching version for a library. Use to identify available or closest versions.",
+      inputSchema: schemas.findVersion,
+      annotations: {
+        title: "Find Library Version",
+        readOnlyHint: true,
+        destructiveHint: false,
+      },
     },
     async ({ library, targetVersion }) => {
       // Track MCP tool usage
@@ -393,19 +713,16 @@ ${r.content}\n`,
   // Job and write tools - only available when not in read-only mode
   if (!readOnly) {
     // List jobs tool - suppress deep inference issues
-    server.tool(
+    server.registerTool(
       "list_jobs",
-      "List all indexing jobs. Optionally filter by status.",
       {
-        status: z
-          .enum(["queued", "running", "completed", "failed", "cancelling", "cancelled"])
-          .optional()
-          .describe("Filter jobs by status (optional)."),
-      },
-      {
-        title: "List Indexing Jobs",
-        readOnlyHint: true,
-        destructiveHint: false,
+        description: "List all indexing jobs. Optionally filter by status.",
+        inputSchema: schemas.listJobs,
+        annotations: {
+          title: "List Indexing Jobs",
+          readOnlyHint: true,
+          destructiveHint: false,
+        },
       },
       async ({ status }) => {
         // Track MCP tool usage
@@ -438,16 +755,17 @@ ${r.content}\n`,
     );
 
     // Get job info tool
-    server.tool(
+    server.registerTool(
       "get_job_info",
-      "Get details for a specific indexing job. Use the 'list_jobs' tool to find the job ID.",
       {
-        jobId: z.string().uuid().describe("Job ID to query."),
-      },
-      {
-        title: "Get Indexing Job Info",
-        readOnlyHint: true,
-        destructiveHint: false,
+        description:
+          "Get details for a specific indexing job. Use the 'list_jobs' tool to find the job ID.",
+        inputSchema: schemas.getJobInfo,
+        annotations: {
+          title: "Get Indexing Job Info",
+          readOnlyHint: true,
+          destructiveHint: false,
+        },
       },
       async ({ jobId }) => {
         // Track MCP tool usage
@@ -471,15 +789,16 @@ ${r.content}\n`,
     );
 
     // Cancel job tool
-    server.tool(
+    server.registerTool(
       "cancel_job",
-      "Cancel a queued or running indexing job. Use the 'list_jobs' tool to find the job ID.",
       {
-        jobId: z.string().uuid().describe("Job ID to cancel."),
-      },
-      {
-        title: "Cancel Indexing Job",
-        destructiveHint: true,
+        description:
+          "Cancel a queued or running indexing job. Use the 'list_jobs' tool to find the job ID.",
+        inputSchema: schemas.cancelJob,
+        annotations: {
+          title: "Cancel Indexing Job",
+          destructiveHint: true,
+        },
       },
       async ({ jobId }) => {
         // Track MCP tool usage
@@ -501,20 +820,16 @@ ${r.content}\n`,
     );
 
     // Remove docs tool
-    server.tool(
+    server.registerTool(
       "remove_docs",
-      "Remove indexed documentation for a library version. Use only if explicitly instructed.",
       {
-        library: z.string().trim().describe("Library name."),
-        version: z
-          .string()
-          .trim()
-          .optional()
-          .describe("Library version (optional, removes latest if omitted)."),
-      },
-      {
-        title: "Remove Library Documentation",
-        destructiveHint: true,
+        description:
+          "Remove indexed documentation for a library version. Use only if explicitly instructed.",
+        inputSchema: schemas.removeDocs,
+        annotations: {
+          title: "Remove Library Documentation",
+          destructiveHint: true,
+        },
       },
       async ({ library, version }) => {
         // Track MCP tool usage
@@ -539,29 +854,26 @@ ${r.content}\n`,
   }
 
   // Fetch URL tool
-  server.tool(
+  server.registerTool(
     "fetch_url",
-    "Fetch a single URL and convert its content to Markdown. Use this tool to read the content of any web page.",
     {
-      url: z.string().url().describe("URL to fetch and convert to Markdown."),
-      followRedirects: z
-        .boolean()
-        .optional()
-        .default(true)
-        .describe("Follow HTTP redirects (3xx responses)."),
-    },
-    {
-      title: "Fetch URL",
-      readOnlyHint: true,
-      destructiveHint: false,
-      openWorldHint: true, // requires internet access
+      description:
+        "Fetch a single URL and convert its content to Markdown. Use this tool to read the content of any web page.",
+      inputSchema: schemas.fetchUrl,
+      annotations: {
+        title: "Fetch URL",
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true, // requires internet access
+      },
     },
     async ({ url, followRedirects }) => {
       // Track MCP tool usage
       telemetry.track(TelemetryEvent.TOOL_USED, {
         tool: "fetch_url",
         context: "mcp_server",
-        url: new URL(url).hostname, // Privacy-safe URL tracking
+        url: extractHostname(url), // Host only, never the full URL
+        urlProtocol: extractProtocol(url),
         followRedirects,
       });
 
@@ -574,7 +886,7 @@ ${r.content}\n`,
     },
   );
 
-  server.resource(
+  server.registerResource(
     "libraries",
     "docs://libraries",
     {
@@ -592,7 +904,7 @@ ${r.content}\n`,
     },
   );
 
-  server.resource(
+  server.registerResource(
     "versions",
     new ResourceTemplate("docs://libraries/{library}/versions", {
       list: undefined,
@@ -603,7 +915,12 @@ ${r.content}\n`,
     async (uri: URL, { library }) => {
       const result = await tools.listLibraries.execute();
 
-      const lib = result.libraries.find((l: { name: string }) => l.name === library);
+      // The template variable arrives percent-encoded (a name containing "/" must
+      // be sent as %2F), and names match case-insensitively.
+      const requested = decodeUriVariable(library);
+      const lib = result.libraries.find((l: { name: string }) =>
+        libraryNamesMatch(l.name, requested),
+      );
       if (!lib) {
         return { contents: [] };
       }
@@ -624,7 +941,7 @@ ${r.content}\n`,
      * Supports filtering by status via a query parameter (e.g., ?status=running).
      * URI: docs://jobs[?status=<status>]
      */
-    server.resource(
+    server.registerResource(
       "jobs",
       "docs://jobs",
       {
@@ -671,7 +988,7 @@ ${r.content}\n`,
      * Resource handler for retrieving a specific pipeline job by its ID.
      * URI Template: docs://jobs/{jobId}
      */
-    server.resource(
+    server.registerResource(
       "job", // A distinct name for this specific resource type
       new ResourceTemplate("docs://jobs/{jobId}", { list: undefined }),
       {

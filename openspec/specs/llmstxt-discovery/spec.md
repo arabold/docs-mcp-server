@@ -1,7 +1,7 @@
 # llmstxt-discovery Specification
 
 ## Purpose
-Defines automatic llms.txt discovery, crawl seeding, Markdown content negotiation, and Markdown URL preference behavior for web scraping.
+Defines automatic llms.txt discovery, crawl seeding, the default `Accept` header, and Markdown URL preference behavior for web scraping.
 
 ## Requirements
 ### Requirement: Automatic llms.txt detection
@@ -119,12 +119,17 @@ The system SHALL add URLs extracted from a detected llms.txt file to the BFS cra
 - **AND** fetching the original input URL returns `NOT_FOUND`
 - **THEN** the system SHALL fail the normal scrape with a root-page-not-found error
 
-### Requirement: Markdown content negotiation
+### Requirement: HTML-first Accept header
 
-The web scraper SHALL default HTTP(S) web page fetch requests to include `Accept: text/markdown, text/html;q=0.9, */*;q=0.8` unless the caller supplied an explicit `Accept` or `accept` header. This default SHALL apply to llms.txt probes, the original input URL, llms.txt `.md` variant attempts, llms.txt original-URL fallbacks, and normal BFS page fetches. When a server responds with a Markdown MIME type (`text/markdown`, `text/x-markdown`, `text/mdx`, or `text/x-gfm`), the system SHALL treat the response body as Markdown and bypass HTML-to-Markdown conversion. When the server responds with `Content-Type: text/html` (ignoring the Markdown preference), the system SHALL process the response through the normal HTML pipeline. This content negotiation applies to all web-scraped pages regardless of whether they were discovered via llms.txt or BFS link-following.
+The web scraper SHALL NOT ask for Markdown through content negotiation by default. HTTP(S) web page fetch requests SHALL carry the generated browser fingerprint's `Accept` header, which lists `text/html` first, unless the caller supplied an explicit `Accept` or `accept` header. This default SHALL apply to llms.txt probes, the original input URL, llms.txt `.md` variant attempts, llms.txt original-URL fallbacks, and normal BFS page fetches. Markdown that a server converts on request leaves out the site's navigation, which is where a crawl finds most of its links; Markdown a site publishes is reached by its own URL instead, through llms.txt entries and `.md` links. Whatever the request asked for, when a server responds with a Markdown MIME type (`text/markdown`, `text/x-markdown`, `text/mdx`, or `text/x-gfm`), the system SHALL treat the response body as Markdown and bypass HTML-to-Markdown conversion, and when it responds with `Content-Type: text/html`, the system SHALL process the response through the normal HTML pipeline.
 
-#### Scenario: Server returns Markdown via content negotiation
-- **WHEN** fetching any web page with the `Accept: text/markdown` header
+#### Scenario: Default request asks for HTML first
+- **WHEN** fetching any web page without a caller-supplied `Accept` header
+- **THEN** the request's `Accept` header SHALL list `text/html` first
+- **AND** it SHALL NOT list `text/markdown`
+
+#### Scenario: Server returns Markdown
+- **WHEN** fetching any web page
 - **AND** the server responds with HTTP 200 and `Content-Type: text/markdown`
 - **THEN** the system SHALL use the response body as Markdown directly
 - **AND** the content SHALL be processed through the Markdown pipeline (not the HTML pipeline)
@@ -132,21 +137,21 @@ The web scraper SHALL default HTTP(S) web page fetch requests to include `Accept
 #### Scenario: Caller-supplied Accept header is preserved
 - **WHEN** a web scrape is invoked with a custom `Accept` header in `ScraperOptions.headers`
 - **THEN** the system SHALL preserve the caller-provided value
-- **AND** it SHALL NOT overwrite it with the default Markdown-preferred Accept header
+- **AND** it SHALL NOT overwrite it with the generated Accept header
 
-#### Scenario: Server ignores Accept header and returns HTML
-- **WHEN** fetching any web page with the `Accept: text/markdown` header
+#### Scenario: Server returns HTML
+- **WHEN** fetching any web page
 - **AND** the server responds with HTTP 200 and `Content-Type: text/html`
 - **THEN** the system SHALL process the response through the normal HTML-to-Markdown pipeline
 
 #### Scenario: Generic text/plain remains plain text
-- **WHEN** fetching a normal web page with the `Accept: text/markdown` header
+- **WHEN** fetching a normal web page
 - **AND** the server responds with HTTP 200 and `Content-Type: text/plain`
 - **THEN** the system SHALL process the response through the normal text pipeline unless the implementation can conservatively identify it as Markdown content
 
 ### Requirement: Markdown URL preference for llms.txt pages
 
-When fetching a page that was discovered via llms.txt, the system SHALL first attempt to fetch the Markdown variant of the URL before falling back to the original URL. Variant construction SHALL use these path rules: paths ending in `/` append `index.html.md`; paths whose last segment has no `.` append `/index.html.md`; paths whose last segment contains `.` append `.md`. For example, `/guide/` and `/guide` both become `/guide/index.html.md`, while `/guide.html` becomes `/guide.html.md`. The `.md` variant request SHALL include the default Markdown-preferred `Accept` header unless the caller supplied an explicit `Accept` header. The system SHALL accept the `.md` response only if the HTTP status is 200 and the Content-Type is a known Markdown MIME type (`text/markdown`, `text/x-markdown`, `text/mdx`, `text/x-gfm`) or `text/plain`. If the `.md` URL fails (non-200 status, unsupported content type, access-policy rejection, or network error), the system SHALL fall back to fetching the original URL (which also uses content negotiation). Pages discovered via normal BFS link-following (not from llms.txt) SHALL NOT attempt the `.md` variant.
+When fetching a page that was discovered via llms.txt, the system SHALL first attempt to fetch the Markdown variant of the URL before falling back to the original URL. Variant construction SHALL use these path rules: paths ending in `/` append `index.html.md`; paths whose last segment has no `.` append `/index.html.md`; paths whose last segment contains `.` append `.md`. For example, `/guide/` and `/guide` both become `/guide/index.html.md`, while `/guide.html` becomes `/guide.html.md`. The `.md` variant request SHALL use the default HTML-first `Accept` header unless the caller supplied an explicit `Accept` header; the URL, not the header, asks for Markdown. The system SHALL accept the `.md` response only if the HTTP status is 200 and the Content-Type is a known Markdown MIME type (`text/markdown`, `text/x-markdown`, `text/mdx`, `text/x-gfm`) or `text/plain`. If the `.md` URL fails (non-200 status, unsupported content type, access-policy rejection, or network error), the system SHALL fall back to fetching the original URL. Pages discovered via normal BFS link-following (not from llms.txt) SHALL NOT attempt the `.md` variant.
 
 #### Scenario: Successful .md fetch
 - **WHEN** fetching a page listed in llms.txt at `https://example.com/docs/guide.html`
@@ -154,10 +159,10 @@ When fetching a page that was discovered via llms.txt, the system SHALL first at
 - **THEN** the system SHALL use the Markdown content from the `.md` URL
 - **AND** the content SHALL be processed through the Markdown pipeline (not the HTML pipeline)
 
-#### Scenario: .md URL not available, fallback uses content negotiation
+#### Scenario: .md URL not available, fallback fetches the original URL
 - **WHEN** fetching a page listed in llms.txt at `https://example.com/docs/guide.html`
 - **AND** `https://example.com/docs/guide.html.md` returns HTTP 404
-- **THEN** the system SHALL fall back to fetching `https://example.com/docs/guide.html` with the `Accept: text/markdown` header
+- **THEN** the system SHALL fall back to fetching `https://example.com/docs/guide.html` with the default `Accept` header
 - **AND** if the server responds with `Content-Type: text/markdown`, use the Markdown content directly
 - **AND** if the server responds with `Content-Type: text/html`, process it through the normal HTML pipeline
 
@@ -176,7 +181,7 @@ When fetching a page that was discovered via llms.txt, the system SHALL first at
 #### Scenario: Non-llms.txt pages skip .md attempt
 - **WHEN** fetching a page discovered via normal BFS link-following (not from llms.txt)
 - **THEN** the system SHALL NOT attempt the `.md` URL variant
-- **AND** the system SHALL still use content negotiation via the `Accept: text/markdown` header
+- **AND** the system SHALL fetch the page's own URL with the default HTML-first `Accept` header
 
 #### Scenario: .md URL for directory-like URL
 - **WHEN** fetching a page listed in llms.txt at `https://example.com/docs/guide/`

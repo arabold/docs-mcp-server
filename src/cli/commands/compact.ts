@@ -3,7 +3,7 @@
  */
 
 import type { Argv } from "yargs";
-import { createDocumentManagement } from "../../store";
+import { openBackend } from "../../services/backend";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { loadConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
@@ -43,11 +43,12 @@ export function createCompactCommand(cli: Argv) {
 
       const eventBus = getEventBus(argv as CliContext);
 
-      const docService = await createDocumentManagement({
+      const backend = await openBackend({
         serverUrl,
         eventBus,
         appConfig,
       });
+      const { docService } = backend;
       try {
         const result = await docService.compact({ force: argv.force === true });
 
@@ -66,7 +67,7 @@ export function createCompactCommand(cli: Argv) {
         );
         throw error;
       } finally {
-        await docService.shutdown();
+        await backend.close();
       }
     },
   );

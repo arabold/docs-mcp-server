@@ -1425,6 +1425,15 @@ textarea.input {
   color: var(--queued);
   border-color: color-mix(in srgb, var(--queued) 32%, transparent);
 }
+.note--err {
+  background: var(--err-soft);
+  color: var(--err);
+  border-color: color-mix(in srgb, var(--err) 26%, transparent);
+}
+.note a {
+  color: inherit;
+  font-weight: 600;
+}
 
 /* library detail view */
 .back {

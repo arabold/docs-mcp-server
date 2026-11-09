@@ -46,6 +46,34 @@ function createSecurityConfig(
   };
 }
 
+/** One network request checked against a policy built from `network`. */
+type NetworkCase = {
+  label: string;
+  network?: SecurityOverrides["network"];
+  url: string;
+  /** The addresses DNS returns for the URL's hostname, if it is looked up. */
+  resolvesTo?: string[];
+  allowed: boolean;
+};
+
+/** Checks each case on a fresh policy, reporting every row that fails. */
+async function expectNetworkDecisions(cases: NetworkCase[]): Promise<void> {
+  for (const { label, network, url, resolvesTo, allowed } of cases) {
+    lookupMock.mockReset();
+    if (resolvesTo) {
+      lookupMock.mockResolvedValue(resolvesTo.map((address) => ({ address, family: 4 })));
+    }
+    const policy = new ScraperAccessPolicy(createSecurityConfig({ network }));
+    // Settled to a value, so a failing row is reported under its label.
+    const outcome = await policy.assertNetworkUrlAllowed(url).then(
+      () => "allowed",
+      (error) => (error instanceof AccessPolicyError ? "blocked" : String(error)),
+    );
+
+    expect.soft(outcome, label).toBe(allowed ? "allowed" : "blocked");
+  }
+}
+
 describe("ScraperAccessPolicy", () => {
   beforeEach(() => {
     vol.reset();
@@ -57,63 +85,65 @@ describe("ScraperAccessPolicy", () => {
   });
 
   it("blocks loopback targets by default", async () => {
-    const policy = new ScraperAccessPolicy(createSecurityConfig());
-
-    await expect(
-      policy.assertNetworkUrlAllowed("http://127.0.0.1/test"),
-    ).rejects.toBeInstanceOf(AccessPolicyError);
+    await expectNetworkDecisions([
+      { label: "IPv4 loopback", url: "http://127.0.0.1/test", allowed: false },
+      { label: "bracketed IPv6 loopback", url: "http://[::1]/test", allowed: false },
+    ]);
   });
 
-  it("blocks bracketed IPv6 loopback targets by default", async () => {
-    const policy = new ScraperAccessPolicy(createSecurityConfig());
-
-    await expect(
-      policy.assertNetworkUrlAllowed("http://[::1]/test"),
-    ).rejects.toBeInstanceOf(AccessPolicyError);
-  });
-
-  it("allows explicitly allowlisted private hostname targets", async () => {
-    lookupMock.mockResolvedValue([{ address: "10.42.0.10", family: 4 }]);
-    const policy = new ScraperAccessPolicy(
-      createSecurityConfig({
-        network: {
-          allowedHosts: ["docs.internal.example"],
-        },
-      }),
-    );
-
-    await expect(
-      policy.assertNetworkUrlAllowed("https://docs.internal.example/guide"),
-    ).resolves.toBeUndefined();
-  });
-
-  it("keeps host allowlists hostname-bound", async () => {
-    const policy = new ScraperAccessPolicy(
-      createSecurityConfig({
-        network: {
-          allowedHosts: ["docs.internal.example"],
-        },
-      }),
-    );
-
-    await expect(
-      policy.assertNetworkUrlAllowed("https://10.42.0.10/guide"),
-    ).rejects.toBeInstanceOf(AccessPolicyError);
-  });
-
-  it("allows explicitly allowlisted CIDR targets", async () => {
-    lookupMock.mockResolvedValue([{ address: "10.42.0.10", family: 4 }]);
-    const policy = new ScraperAccessPolicy(
-      createSecurityConfig({
-        network: {
-          allowedCidrs: ["10.42.0.0/16"],
-        },
-      }),
-    );
-
-    await expect(
-      policy.assertNetworkUrlAllowed("https://wiki.internal.example/guide"),
-    ).resolves.toBeUndefined();
+  it("allows private targets that the open-mode allowlists name", async () => {
+    await expectNetworkDecisions([
+      {
+        label: "allowlisted private hostname",
+        network: { allowedHosts: ["docs.internal.example"] },
+        url: "https://docs.internal.example/guide",
+        resolvesTo: ["10.42.0.10"],
+        allowed: true,
+      },
+      {
+        // A host allowlist is bound to the hostname, not to the address it resolves to.
+        label: "the IP behind an allowlisted hostname",
+        network: { allowedHosts: ["docs.internal.example"] },
+        url: "https://10.42.0.10/guide",
+        allowed: false,
+      },
+      {
+        label: "hostname resolving into an allowlisted CIDR",
+        network: { allowedCidrs: ["10.42.0.0/16"] },
+        url: "https://wiki.internal.example/guide",
+        resolvesTo: ["10.42.0.10"],
+        allowed: true,
+      },
+      {
+        label: "glob pattern, one subdomain level",
+        network: { allowedHosts: ["*.internal.example"] },
+        url: "https://docs.internal.example/guide",
+        resolvesTo: ["10.42.0.10"],
+        allowed: true,
+      },
+      {
+        label: "glob pattern, two subdomain levels",
+        network: { allowedHosts: ["*.internal.example"] },
+        url: "https://wiki.team.internal.example/page",
+        resolvesTo: ["10.42.0.10"],
+        allowed: true,
+      },
+      {
+        // A leading wildcard does not match the bare apex.
+        label: "glob pattern, bare apex",
+        network: { allowedHosts: ["*.internal.example"] },
+        url: "https://internal.example/",
+        resolvesTo: ["10.42.0.10"],
+        allowed: false,
+      },
+      {
+        label: "regex pattern",
+        network: { allowedHosts: ["/^docs\\d+\\.example\\.com$/"] },
+        url: "https://docs42.example.com/path",
+        resolvesTo: ["10.0.0.5"],
+        allowed: true,
+      },
+    ]);
   });
 
   it("enables invalid TLS only for already-allowed https targets", () => {
@@ -168,7 +198,7 @@ describe("ScraperAccessPolicy", () => {
     expect(resolved.accessPath).toBe("/srv/.config/docs/guide.md");
   });
 
-  it("still blocks hidden segments below the allowed root", async () => {
+  it("still blocks hidden segments below the allowed root and states the rule", async () => {
     vol.fromJSON({
       "/srv/.config/docs/.git/HEAD": "ref",
     });
@@ -182,12 +212,12 @@ describe("ScraperAccessPolicy", () => {
       }),
     );
 
-    await expect(
-      policy.resolveFileAccess("file:///srv/.config/docs/.git/HEAD"),
-    ).rejects.toBeInstanceOf(AccessPolicyError);
+    const attempt = policy.resolveFileAccess("file:///srv/.config/docs/.git/HEAD");
+    await expect(attempt).rejects.toBeInstanceOf(AccessPolicyError);
+    await expect(attempt).rejects.toThrow(/hidden path segment.*configuration\.md/s);
   });
 
-  it("blocks symlink access by default", async () => {
+  it("blocks symlink access by default and states the rule", async () => {
     vol.fromJSON({
       "/docs/real.md": "content",
     });
@@ -201,8 +231,10 @@ describe("ScraperAccessPolicy", () => {
       }),
     );
 
-    await expect(policy.resolveFileAccess("file:///docs/link.md")).rejects.toBeInstanceOf(
-      AccessPolicyError,
+    const attempt = policy.resolveFileAccess("file:///docs/link.md");
+    await expect(attempt).rejects.toBeInstanceOf(AccessPolicyError);
+    await expect(attempt).rejects.toThrow(
+      /resolves through a symlink.*configuration\.md/s,
     );
   });
 
@@ -249,212 +281,120 @@ describe("ScraperAccessPolicy", () => {
     expect(resolved.virtualArchivePath).toBe("guide/intro.md");
   });
 
-  it("matches host allowlist entries by glob across subdomains", async () => {
-    lookupMock.mockResolvedValue([{ address: "10.42.0.10", family: 4 }]);
-    const policy = new ScraperAccessPolicy(
-      createSecurityConfig({
+  it("permits only allowlisted targets in allowlist mode", async () => {
+    await expectNetworkDecisions([
+      // Real public IPs rather than special-use sentinels, so the
+      // post-resolution rebinding check (which runs even for allowlisted
+      // hostnames) does not reject the request on its own.
+      {
+        label: "allowlisted hostname",
         network: {
-          allowedHosts: ["*.internal.example"],
+          mode: "allowlist",
+          allowedHosts: ["docs.python.org", "*.rust-lang.org"],
         },
-      }),
-    );
-
-    await expect(
-      policy.assertNetworkUrlAllowed("https://docs.internal.example/guide"),
-    ).resolves.toBeUndefined();
-    await expect(
-      policy.assertNetworkUrlAllowed("https://wiki.team.internal.example/page"),
-    ).resolves.toBeUndefined();
-  });
-
-  it("does not match the bare apex against a leading-wildcard host pattern", async () => {
-    const policy = new ScraperAccessPolicy(
-      createSecurityConfig({
+        url: "https://docs.python.org/3/",
+        resolvesTo: ["8.8.8.8"],
+        allowed: true,
+      },
+      {
+        label: "hostname matching an allowlisted glob",
         network: {
-          allowedHosts: ["*.internal.example"],
+          mode: "allowlist",
+          allowedHosts: ["docs.python.org", "*.rust-lang.org"],
         },
-      }),
-    );
-
-    lookupMock.mockResolvedValue([{ address: "10.42.0.10", family: 4 }]);
-    await expect(
-      policy.assertNetworkUrlAllowed("https://internal.example/"),
-    ).rejects.toBeInstanceOf(AccessPolicyError);
-  });
-
-  it("supports regex host allowlist entries", async () => {
-    lookupMock.mockResolvedValue([{ address: "10.0.0.5", family: 4 }]);
-    const policy = new ScraperAccessPolicy(
-      createSecurityConfig({
+        url: "https://docs.rust-lang.org/std/",
+        resolvesTo: ["8.8.8.8"],
+        allowed: true,
+      },
+      {
+        label: "hostname not on the allowlist",
         network: {
-          allowedHosts: ["/^docs\\d+\\.example\\.com$/"],
+          mode: "allowlist",
+          allowedHosts: ["docs.python.org", "*.rust-lang.org"],
         },
-      }),
-    );
-
-    await expect(
-      policy.assertNetworkUrlAllowed("https://docs42.example.com/path"),
-    ).resolves.toBeUndefined();
+        url: "https://news.ycombinator.com/",
+        resolvesTo: ["8.8.8.8"],
+        allowed: false,
+      },
+      {
+        label: "direct IP inside an allowed CIDR",
+        network: { mode: "allowlist", allowedCidrs: ["10.42.0.0/16"] },
+        url: "https://10.42.7.1/",
+        allowed: true,
+      },
+      {
+        label: "direct IP outside the allowed CIDRs",
+        network: { mode: "allowlist", allowedCidrs: ["10.42.0.0/16"] },
+        url: "https://10.99.0.1/",
+        allowed: false,
+      },
+      {
+        label: "both lists empty",
+        network: { mode: "allowlist" },
+        url: "https://example.com/",
+        allowed: false,
+      },
+      {
+        label: "allowPrivateNetworks is ignored",
+        network: { mode: "allowlist", allowPrivateNetworks: true },
+        url: "https://10.0.0.1/",
+        allowed: false,
+      },
+      {
+        // `allowedHosts` is authoritative for the named host: adding a hostname
+        // is an explicit trust decision in that name and its DNS answers, so we
+        // do not also require the resolved IP to be in `allowedCidrs`. This
+        // matches `open` mode behavior and lets operators add a single internal
+        // hostname without also pinning its subnet.
+        label: "allowlisted hostname resolving to a private IP",
+        network: { mode: "allowlist", allowedHosts: ["docs.internal.example"] },
+        url: "https://docs.internal.example/",
+        resolvesTo: ["10.42.0.5"],
+        allowed: true,
+      },
+      {
+        label: "allowlisted hostname resolving into allowedCidrs",
+        network: {
+          mode: "allowlist",
+          allowedHosts: ["docs.internal.example"],
+          allowedCidrs: ["10.42.0.0/16"],
+        },
+        url: "https://docs.internal.example/",
+        resolvesTo: ["10.42.0.5"],
+        allowed: true,
+      },
+      {
+        // DNS rebinding: a CIDR-authorized hostname must have every resolved
+        // address inside allowedCidrs.
+        label: "CIDR-authorized hostname with one address outside allowedCidrs",
+        network: { mode: "allowlist", allowedCidrs: ["10.42.0.0/16"] },
+        url: "https://wiki.internal.example/",
+        resolvesTo: ["10.42.0.5", "10.99.0.5"],
+        allowed: false,
+      },
+    ]);
   });
 
-  describe("allowlist mode", () => {
-    it("permits only hostnames that match the allowlist", async () => {
-      // Use a real public IP rather than a special-use sentinel so the
-      // post-resolution rebinding check (which now runs even for allowlisted
-      // hostnames) doesn't reject the request on its own.
-      lookupMock.mockResolvedValue([{ address: "8.8.8.8", family: 4 }]);
-      const policy = new ScraperAccessPolicy(
-        createSecurityConfig({
-          network: {
-            mode: "allowlist",
-            allowedHosts: ["docs.python.org", "*.rust-lang.org"],
-          },
-        }),
-      );
-
-      await expect(
-        policy.assertNetworkUrlAllowed("https://docs.python.org/3/"),
-      ).resolves.toBeUndefined();
-      await expect(
-        policy.assertNetworkUrlAllowed("https://docs.rust-lang.org/std/"),
-      ).resolves.toBeUndefined();
-      await expect(
-        policy.assertNetworkUrlAllowed("https://news.ycombinator.com/"),
-      ).rejects.toBeInstanceOf(AccessPolicyError);
-    });
-
-    it("permits direct IP targets only when inside an allowed CIDR", async () => {
-      const policy = new ScraperAccessPolicy(
-        createSecurityConfig({
-          network: {
-            mode: "allowlist",
-            allowedCidrs: ["10.42.0.0/16"],
-          },
-        }),
-      );
-
-      await expect(
-        policy.assertNetworkUrlAllowed("https://10.42.7.1/"),
-      ).resolves.toBeUndefined();
-      await expect(
-        policy.assertNetworkUrlAllowed("https://10.99.0.1/"),
-      ).rejects.toBeInstanceOf(AccessPolicyError);
-    });
-
-    it("denies everything when both lists are empty", async () => {
-      const policy = new ScraperAccessPolicy(
-        createSecurityConfig({
-          network: { mode: "allowlist" },
-        }),
-      );
-
-      await expect(
-        policy.assertNetworkUrlAllowed("https://example.com/"),
-      ).rejects.toBeInstanceOf(AccessPolicyError);
-    });
-
-    it("ignores allowPrivateNetworks in allowlist mode", async () => {
-      const policy = new ScraperAccessPolicy(
-        createSecurityConfig({
-          network: {
-            mode: "allowlist",
-            allowPrivateNetworks: true,
-          },
-        }),
-      );
-
-      await expect(
-        policy.assertNetworkUrlAllowed("https://10.0.0.1/"),
-      ).rejects.toBeInstanceOf(AccessPolicyError);
-    });
-
-    it("trusts an allowlisted hostname even when DNS resolves it to a private IP", async () => {
-      // `allowedHosts` is authoritative for the named host: adding a hostname
-      // is an explicit trust decision in that name and its DNS answers, so we
-      // do not also require the resolved IP to be in `allowedCidrs`. This
-      // matches `open` mode behavior and lets operators add a single internal
-      // hostname without also pinning its subnet.
-      lookupMock.mockResolvedValue([{ address: "10.42.0.5", family: 4 }]);
-      const policy = new ScraperAccessPolicy(
-        createSecurityConfig({
-          network: {
-            mode: "allowlist",
-            allowedHosts: ["docs.internal.example"],
-          },
-        }),
-      );
-
-      await expect(
-        policy.assertNetworkUrlAllowed("https://docs.internal.example/"),
-      ).resolves.toBeUndefined();
-    });
-
-    it("permits an allowlisted hostname when its resolved IP is covered by allowedCidrs", async () => {
-      lookupMock.mockResolvedValue([{ address: "10.42.0.5", family: 4 }]);
-      const policy = new ScraperAccessPolicy(
-        createSecurityConfig({
-          network: {
-            mode: "allowlist",
-            allowedHosts: ["docs.internal.example"],
-            allowedCidrs: ["10.42.0.0/16"],
-          },
-        }),
-      );
-
-      await expect(
-        policy.assertNetworkUrlAllowed("https://docs.internal.example/"),
-      ).resolves.toBeUndefined();
-    });
-
-    it("rejects CIDR-authorized hostnames when any resolved address falls outside allowedCidrs", async () => {
-      lookupMock.mockResolvedValue([
-        { address: "10.42.0.5", family: 4 },
-        { address: "10.99.0.5", family: 4 },
-      ]);
-      const policy = new ScraperAccessPolicy(
-        createSecurityConfig({
-          network: {
-            mode: "allowlist",
-            allowedCidrs: ["10.42.0.0/16"],
-          },
-        }),
-      );
-
-      await expect(
-        policy.assertNetworkUrlAllowed("https://wiki.internal.example/"),
-      ).rejects.toBeInstanceOf(AccessPolicyError);
-    });
-  });
-
-  describe("invalid-TLS does not bypass network allowlists", () => {
-    it("rejects a private hostname even when allowInvalidTls is true", async () => {
-      lookupMock.mockResolvedValue([{ address: "10.42.0.10", family: 4 }]);
-      const policy = new ScraperAccessPolicy(
-        createSecurityConfig({
-          network: { allowInvalidTls: true },
-        }),
-      );
-
-      await expect(
-        policy.assertNetworkUrlAllowed("https://docs.internal.example/"),
-      ).rejects.toBeInstanceOf(AccessPolicyError);
-    });
-
-    it("rejects a non-allowlisted host in allowlist mode even when allowInvalidTls is true", async () => {
-      const policy = new ScraperAccessPolicy(
-        createSecurityConfig({
-          network: {
-            mode: "allowlist",
-            allowedHosts: ["docs.python.org"],
-            allowInvalidTls: true,
-          },
-        }),
-      );
-
-      await expect(
-        policy.assertNetworkUrlAllowed("https://example.com/"),
-      ).rejects.toBeInstanceOf(AccessPolicyError);
-    });
+  it("never lets allowInvalidTls bypass the network rules", async () => {
+    await expectNetworkDecisions([
+      {
+        label: "private hostname in open mode",
+        network: { allowInvalidTls: true },
+        url: "https://docs.internal.example/",
+        resolvesTo: ["10.42.0.10"],
+        allowed: false,
+      },
+      {
+        label: "host not on the allowlist in allowlist mode",
+        network: {
+          mode: "allowlist",
+          allowedHosts: ["docs.python.org"],
+          allowInvalidTls: true,
+        },
+        url: "https://example.com/",
+        allowed: false,
+      },
+    ]);
   });
 });
 
@@ -582,7 +522,7 @@ describe("file access diagnostics", () => {
     );
   });
 
-  it("warns once per unresolvable configured root", async () => {
+  it("warns once per unresolvable root and that all local file access is blocked", async () => {
     vi.spyOn(os, "homedir").mockReturnValue("/home/tester");
     const policy = new ScraperAccessPolicy(
       createSecurityConfig({
@@ -597,30 +537,15 @@ describe("file access diagnostics", () => {
       policy.resolveFileAccess("file:///srv/docs/other.md"),
     ).rejects.toBeInstanceOf(AccessPolicyError);
 
-    const unresolvedWarnings = warn.mock.calls
-      .map(([message]) => message)
-      .filter((message) => message.includes("Ignoring allowed file root"));
+    const messages = warn.mock.calls.map(([message]) => message);
+    const unresolvedWarnings = messages.filter((message) =>
+      message.includes("Ignoring allowed file root"),
+    );
     expect(unresolvedWarnings).toHaveLength(2);
     expect(unresolvedWarnings.join("\n")).toContain("$DOCUMENTS");
     expect(unresolvedWarnings.join("\n")).toContain("$DOWNLOADS");
-  });
-
-  it("warns that all local file access is blocked when the allowlist grants nothing", async () => {
-    vi.spyOn(os, "homedir").mockReturnValue("/home/tester");
-    const policy = new ScraperAccessPolicy(
-      createSecurityConfig({
-        fileAccess: { mode: "allowedRoots", allowedRoots: ["$DOCUMENTS"] },
-      }),
-    );
-
-    await expect(
-      policy.resolveFileAccess("file:///srv/docs/readme.md"),
-    ).rejects.toBeInstanceOf(AccessPolicyError);
-
     expect(
-      warn.mock.calls.some(([message]) =>
-        message.includes("all file:// indexing is blocked"),
-      ),
+      messages.some((message) => message.includes("all file:// indexing is blocked")),
     ).toBe(true);
   });
 
@@ -657,33 +582,6 @@ describe("file access diagnostics", () => {
     );
   });
 
-  it("states the rule when a symlink blocks access", async () => {
-    vol.fromJSON({ "/srv/allowed/real.md": "hello" });
-    await vol.promises.symlink("/srv/allowed/real.md", "/srv/allowed/link.md");
-    const policy = new ScraperAccessPolicy(
-      createSecurityConfig({
-        fileAccess: { mode: "allowedRoots", allowedRoots: ["/srv/allowed"] },
-      }),
-    );
-
-    await expect(policy.resolveFileAccess("file:///srv/allowed/link.md")).rejects.toThrow(
-      /resolves through a symlink.*configuration\.md/s,
-    );
-  });
-
-  it("states the rule when a hidden segment blocks access", async () => {
-    vol.fromJSON({ "/srv/allowed/.private/readme.md": "hello" });
-    const policy = new ScraperAccessPolicy(
-      createSecurityConfig({
-        fileAccess: { mode: "allowedRoots", allowedRoots: ["/srv/allowed"] },
-      }),
-    );
-
-    await expect(
-      policy.resolveFileAccess("file:///srv/allowed/.private/readme.md"),
-    ).rejects.toThrow(/hidden path segment.*configuration\.md/s);
-  });
-
   it("does not warn about internal bypass roots that do not resolve", async () => {
     vol.fromJSON({ "/srv/allowed/readme.md": "hello" });
     const policy = new ScraperAccessPolicy(
@@ -702,63 +600,52 @@ describe("file access diagnostics", () => {
 });
 
 describe("expandConfiguredRoot", () => {
-  const realCwd = process.cwd();
-
   afterEach(() => {
     vi.restoreAllMocks();
     vol.reset();
   });
 
-  it("returns null when $DOCUMENTS cannot be resolved", async () => {
-    vi.spyOn(os, "homedir").mockReturnValue("/missing-home");
-    const result = await expandConfiguredRoot("$DOCUMENTS");
-    expect(result).toBeNull();
-  });
+  it("expands a root token to its directory, or to null when that cannot resolve", async () => {
+    const homedir = vi.spyOn(os, "homedir");
+    const cases: Array<{
+      token: string;
+      home: string;
+      files?: Record<string, string>;
+      expected: string | null;
+    }> = [
+      { token: "$DOCUMENTS", home: "/missing-home", expected: null },
+      {
+        token: "$DOCUMENTS",
+        home: "/home/tester",
+        files: { "/home/tester/Documents/readme.md": "hello" },
+        expected: "/home/tester/Documents",
+      },
+      // $HOME does not need to exist on the mock file system.
+      { token: "$HOME", home: "/home/tester", expected: "/home/tester" },
+      { token: "$HOME", home: "", expected: null },
+      {
+        token: "$DOWNLOADS",
+        home: "/home/tester",
+        files: { "/home/tester/Downloads/x.txt": "" },
+        expected: "/home/tester/Downloads",
+      },
+      {
+        token: "$DESKTOP",
+        home: "/home/tester",
+        files: { "/home/tester/Desktop/x.txt": "" },
+        expected: "/home/tester/Desktop",
+      },
+      { token: "$DOWNLOADS", home: "/home/tester", expected: null },
+      { token: "$CWD", home: "/home/tester", expected: process.cwd() },
+    ];
 
-  it("resolves $DOCUMENTS when the directory exists", async () => {
-    vi.spyOn(os, "homedir").mockReturnValue("/home/tester");
-    vol.fromJSON({
-      "/home/tester/Documents/readme.md": "hello",
-    });
-
-    const result = await expandConfiguredRoot("$DOCUMENTS");
-    expect(result).toBe("/home/tester/Documents");
-  });
-
-  it("resolves $HOME without requiring the directory to exist on the mock fs", async () => {
-    vi.spyOn(os, "homedir").mockReturnValue("/home/tester");
-    const result = await expandConfiguredRoot("$HOME");
-    expect(result).toBe("/home/tester");
-  });
-
-  it("returns null for $HOME when homedir is empty", async () => {
-    vi.spyOn(os, "homedir").mockReturnValue("");
-    const result = await expandConfiguredRoot("$HOME");
-    expect(result).toBeNull();
-  });
-
-  it("resolves $DOWNLOADS to <home>/Downloads when present", async () => {
-    vi.spyOn(os, "homedir").mockReturnValue("/home/tester");
-    vol.fromJSON({ "/home/tester/Downloads/x.txt": "" });
-    const result = await expandConfiguredRoot("$DOWNLOADS");
-    expect(result).toBe("/home/tester/Downloads");
-  });
-
-  it("resolves $DESKTOP to <home>/Desktop when present", async () => {
-    vi.spyOn(os, "homedir").mockReturnValue("/home/tester");
-    vol.fromJSON({ "/home/tester/Desktop/x.txt": "" });
-    const result = await expandConfiguredRoot("$DESKTOP");
-    expect(result).toBe("/home/tester/Desktop");
-  });
-
-  it("returns null for $DOWNLOADS when the directory is missing", async () => {
-    vi.spyOn(os, "homedir").mockReturnValue("/home/tester");
-    const result = await expandConfiguredRoot("$DOWNLOADS");
-    expect(result).toBeNull();
-  });
-
-  it("resolves $CWD to the process working directory", async () => {
-    const result = await expandConfiguredRoot("$CWD");
-    expect(result).toBe(realCwd);
+    for (const { token, home, files = {}, expected } of cases) {
+      vol.reset();
+      vol.fromJSON(files);
+      homedir.mockReturnValue(home);
+      expect
+        .soft(await expandConfiguredRoot(token), `${token} with home "${home}"`)
+        .toBe(expected);
+    }
   });
 });

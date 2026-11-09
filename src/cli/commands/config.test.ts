@@ -2,6 +2,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
+import { setConfigValue } from "../../utils/config";
+import { logger } from "../../utils/logger";
 import { createConfigCommand } from "./config";
 
 const stdoutWriteMock = vi.fn();
@@ -48,118 +50,77 @@ describe("config command", () => {
     stdoutWriteSpy.mockRestore();
   });
 
-  describe("config (no subcommand)", () => {
-    it("prints current configuration as JSON", async () => {
-      const parser = yargs().scriptName("test");
-      createConfigCommand(parser);
+  /** Runs `args` through a parser that knows only the config command. */
+  async function run(args: string): Promise<void> {
+    const parser = yargs().scriptName("test");
+    createConfigCommand(parser);
+    await parser.parse(args);
+  }
 
-      await parser.parse("config");
+  /** Everything the command wrote to stdout. */
+  const printed = () =>
+    stdoutWriteMock.mock.calls.map(([chunk]) => String(chunk)).join("");
 
-      expect(stdoutWriteMock).toHaveBeenCalledWith(expect.stringContaining('"scraper"'));
-    });
+  it("prints the configuration in the format --output names", async () => {
+    const cases: Array<{ args: string; shows: string }> = [
+      { args: "config", shows: '"scraper"' },
+      { args: "config --output yaml", shows: "scraper:" },
+      { args: "config --output toon", shows: "maxPages: 1000" },
+      { args: "config get scraper.fetcher --output yaml", shows: "maxRetries:" },
+      { args: "config get scraper.fetcher --output toon", shows: "maxRetries: 6" },
+    ];
 
-    it("prints configuration as YAML with --yaml flag", async () => {
-      const parser = yargs().scriptName("test");
-      createConfigCommand(parser);
-
-      await parser.parse("config --output yaml");
-
-      expect(stdoutWriteMock).toHaveBeenCalledWith(expect.stringContaining("scraper:"));
-    });
-
-    it("prints configuration as TOON with --output toon", async () => {
-      const parser = yargs().scriptName("test");
-      createConfigCommand(parser);
-
-      await parser.parse("config --output toon");
-
-      expect(stdoutWriteMock).toHaveBeenCalledWith(
-        expect.stringContaining("maxPages: 1000"),
-      );
-    });
+    for (const { args, shows } of cases) {
+      stdoutWriteMock.mockReset();
+      await run(args);
+      expect.soft(printed(), args).toContain(shows);
+    }
   });
 
-  describe("config get", () => {
-    it("gets a scalar value", async () => {
-      const parser = yargs().scriptName("test");
-      createConfigCommand(parser);
+  it("gets a scalar value as plain text and an object value as JSON", async () => {
+    await run("config get scraper.maxPages");
+    expect(printed()).toBe("1000\n");
 
-      await parser.parse("config get scraper.maxPages");
-
-      expect(stdoutWriteMock).toHaveBeenCalledWith("1000\n");
-    });
-
-    it("gets an object value as JSON", async () => {
-      const parser = yargs().scriptName("test");
-      createConfigCommand(parser);
-
-      await parser.parse("config get scraper.fetcher");
-
-      expect(stdoutWriteMock).toHaveBeenCalledWith(
-        expect.stringContaining('"maxRetries"'),
-      );
-    });
-
-    it("errors on invalid path", async () => {
-      const parser = yargs().scriptName("test");
-      createConfigCommand(parser);
-
-      await parser.parse("config get invalid.path");
-
-      expect(process.exitCode).toBe(1);
-    });
-
-    it("outputs YAML with --yaml flag", async () => {
-      const parser = yargs().scriptName("test");
-      createConfigCommand(parser);
-
-      await parser.parse("config get scraper.fetcher --output yaml");
-
-      expect(stdoutWriteMock).toHaveBeenCalledWith(
-        expect.stringContaining("maxRetries:"),
-      );
-    });
-
-    it("outputs TOON with --output toon", async () => {
-      const parser = yargs().scriptName("test");
-      createConfigCommand(parser);
-
-      await parser.parse("config get scraper.fetcher --output toon");
-
-      expect(stdoutWriteMock).toHaveBeenCalledWith(
-        expect.stringContaining("maxRetries: 6"),
-      );
-    });
+    stdoutWriteMock.mockReset();
+    await run("config get scraper.fetcher");
+    expect(JSON.parse(printed())).toEqual({ maxRetries: 6 });
   });
 
-  describe("config set", () => {
-    it("sets a value and confirms", async () => {
-      const parser = yargs().scriptName("test");
-      createConfigCommand(parser);
+  it("sets a value and confirms", async () => {
+    await run("config set scraper.maxPages 500");
 
-      await parser.parse("config set scraper.maxPages 500");
+    expect(printed()).toContain("Updated scraper.maxPages");
+  });
 
-      expect(stdoutWriteMock).toHaveBeenCalledWith(
-        expect.stringContaining("Updated scraper.maxPages"),
-      );
-    });
+  it("refuses to set a value it cannot save, with exit code 1", async () => {
+    const cases: Array<{ label: string; args: string; reason: RegExp }> = [
+      {
+        label: "unknown path",
+        args: "config set invalid.path value",
+        reason: /Invalid config path 'invalid.path'/,
+      },
+      {
+        label: "explicit --config file (read-only)",
+        args: "config set scraper.maxPages 500 --config /some/path.yaml",
+        reason: /Cannot modify configuration when using explicit --config file/,
+      },
+      {
+        label: "path to an object",
+        args: "config set scraper.fetcher 5",
+        reason: /refers to an object/,
+      },
+    ];
 
-    it("errors on invalid path", async () => {
-      const parser = yargs().scriptName("test");
-      createConfigCommand(parser);
+    for (const { label, args, reason } of cases) {
+      vi.mocked(logger.error).mockClear();
+      process.exitCode = undefined;
 
-      await parser.parse("config set invalid.path value");
+      await run(args);
 
-      expect(process.exitCode).toBe(1);
-    });
-
-    it("errors when --config is specified (read-only mode)", async () => {
-      const parser = yargs().scriptName("test");
-      createConfigCommand(parser);
-
-      await parser.parse("config set scraper.maxPages 500 --config /some/path.yaml");
-
-      expect(process.exitCode).toBe(1);
-    });
+      expect.soft(process.exitCode, label).toBe(1);
+      const logged = vi.mocked(logger.error).mock.calls.map(([message]) => message);
+      expect.soft(logged.join("\n"), label).toMatch(reason);
+    }
+    expect(setConfigValue).not.toHaveBeenCalled();
   });
 });

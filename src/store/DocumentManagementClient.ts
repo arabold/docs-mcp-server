@@ -1,14 +1,11 @@
 /**
- * tRPC client for the document management API.
- * Implements IDocumentManagement and delegates to /api data router.
+ * Document management backed by a remote worker: every operation calls the
+ * worker's application API through a shared {@link ApiClient}.
  */
-import { createTRPCProxyClient, httpBatchLink } from "@trpc/client";
-import superjson from "superjson";
 import type { ScraperOptions } from "../scraper/types";
-import { logger } from "../utils/logger";
+import type { ApiClient } from "../services/apiClient";
 import type { EmbeddingModelConfig } from "./embeddings/EmbeddingConfig";
 import type { IDocumentManagement } from "./trpc/interfaces";
-import type { DataRouter } from "./trpc/router";
 import type {
   ActivityHistory,
   CompactResult,
@@ -16,8 +13,12 @@ import type {
   EmbeddingConfigInfo,
   FindVersionResult,
   LibrarySummary,
+  ListPagesOptions,
+  ListPagesResult,
   ListVersionChunksOptions,
   ListVersionChunksResult,
+  PageContentOptions,
+  PageContentResult,
   StoredScraperOptions,
   StoreSearchResult,
   VersionChunkStats,
@@ -26,40 +27,23 @@ import type {
   VersionStatus,
 } from "./types";
 
+/**
+ * How long the health report waits for the worker's embedding config before the
+ * last known value stands in; a worker that drops traffic would otherwise hold
+ * the report open.
+ */
+const EMBEDDING_CONFIG_TIMEOUT_MS = 3000;
+
+/**
+ * Implements {@link IDocumentManagement} by delegating every operation to a
+ * remote worker.
+ */
 export class DocumentManagementClient implements IDocumentManagement {
-  private readonly baseUrl: string;
-  private readonly client: ReturnType<typeof createTRPCProxyClient<DataRouter>>;
+  /** The worker's last reported embedding config; `undefined` until it answers once. */
+  private lastEmbeddingConfig: EmbeddingConfigInfo | null | undefined;
 
-  constructor(serverUrl: string) {
-    this.baseUrl = serverUrl.replace(/\/$/, "");
-    this.client = createTRPCProxyClient<DataRouter>({
-      links: [
-        httpBatchLink({
-          url: this.baseUrl,
-          transformer: superjson,
-        }),
-      ],
-    });
-    logger.debug(`DocumentManagementClient (tRPC) created for: ${this.baseUrl}`);
-  }
-
-  async initialize(): Promise<void> {
-    // Connectivity check using ping procedure
-    try {
-      await this.client.ping.query();
-    } catch (error) {
-      logger.debug(
-        `Failed to connect to DocumentManagement server at ${this.baseUrl}: ${error}`,
-      );
-      throw new Error(
-        `Failed to connect to server at ${this.baseUrl}.\n\nPlease verify the server URL includes the correct port (default 8080) and ends with '/api' (e.g., 'http://localhost:8080/api').`,
-      );
-    }
-  }
-
-  async shutdown(): Promise<void> {
-    // no-op for HTTP client
-  }
+  /** @param client The worker's API client. Whoever created it checks and closes it. */
+  constructor(private readonly client: ApiClient) {}
 
   async listLibraries(): Promise<LibrarySummary[]> {
     return this.client.listLibraries.query();
@@ -85,12 +69,38 @@ export class DocumentManagementClient implements IDocumentManagement {
     return this.client.search.query({ library, version: version ?? null, query, limit });
   }
 
-  async removeVersion(library: string, version?: string | null): Promise<void> {
-    await this.client.removeVersion.mutate({ library, version });
+  async getPageContent(
+    library: string,
+    version: string | null | undefined,
+    pathOrUrl: string,
+    options?: PageContentOptions,
+  ): Promise<PageContentResult> {
+    return this.client.getPageContent.query({
+      library,
+      version: version ?? null,
+      pathOrUrl,
+      options,
+    });
   }
 
-  async removeAllDocuments(library: string, version?: string | null): Promise<void> {
-    await this.client.removeAllDocuments.mutate({ library, version: version ?? null });
+  async listPages(
+    library: string,
+    version: string | null | undefined,
+    options?: ListPagesOptions,
+  ): Promise<ListPagesResult> {
+    return this.client.listPages.query({
+      library,
+      version: version ?? null,
+      options,
+    });
+  }
+
+  /**
+   * Removes the version on the worker the way every entry point removes one:
+   * the worker first cancels a queued or running job of its own for it.
+   */
+  async removeVersion(library: string, version?: string | null): Promise<void> {
+    await this.client.removeDocs.mutate({ library, version });
   }
 
   async compact(options?: { force?: boolean; vacuum?: boolean }): Promise<CompactResult> {
@@ -138,11 +148,29 @@ export class DocumentManagementClient implements IDocumentManagement {
     return null;
   }
 
+  /**
+   * The worker's embedding config, fetched over the wire because that is where
+   * embeddings live; the local `getActiveEmbeddingConfig` (null) would misreport
+   * "FTS only". The config is fixed for the worker's lifetime, so while the
+   * worker does not answer in time, the last value it reported stands in.
+   *
+   * @throws Error when the worker does not answer in time and never has.
+   */
   async getEmbeddingConfigInfo(): Promise<EmbeddingConfigInfo | null> {
-    // Fetch the remote worker's embedding config over the wire — this is where
-    // embeddings actually live when the worker is remote, so the local
-    // getActiveEmbeddingConfig (null) would otherwise misreport "FTS only".
-    return this.client.getEmbeddingConfig.query();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), EMBEDDING_CONFIG_TIMEOUT_MS);
+    try {
+      this.lastEmbeddingConfig = await this.client.getEmbeddingConfig.query(undefined, {
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (this.lastEmbeddingConfig === undefined) {
+        throw error;
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+    return this.lastEmbeddingConfig;
   }
 
   async listVersionChunks(

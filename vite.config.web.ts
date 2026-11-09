@@ -8,6 +8,9 @@ import { defineConfig } from "vite";
 // and the existing favicon/manifest files untouched by this build.
 export default defineConfig({
   root: path.resolve(__dirname, "src/web/client"),
+  // Relative asset URLs: the server injects <base href> for the public URL's
+  // path at serve time, so one build works at the root and under any path.
+  base: "./",
   // Disable Vite's public-dir copy step. The favicons/manifest.json this build
   // serves already live in the output dir (public/), so there's nothing to
   // copy — and pointing publicDir at outDir triggers a warning + copy ambiguity.

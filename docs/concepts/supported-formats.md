@@ -1,50 +1,48 @@
 # Supported Formats
 
-The server processes a wide range of file formats through a pipeline architecture. Each content type is routed to a specialized pipeline that extracts text, preserves structure, and produces searchable chunks.
+What the server indexes depends on each item's MIME type. Each content pipeline declares the MIME types it reads. The first pipeline in a fixed order that accepts an item's type processes it, and an item that no pipeline accepts is skipped. [Content Processing](content-processing.md) describes how the pipelines work.
+
+## How an Item Gets Its MIME Type
+
+| Source | MIME type comes from |
+|:-------|:---------------------|
+| Websites | The response's `Content-Type` header; a URL with a Markdown extension served as `text/plain` counts as Markdown |
+| Local files and archive entries | The file extension |
+| GitHub repositories | The file extension, when it is known and `raw.githubusercontent.com` answers `text/plain` or `application/octet-stream`; otherwise the header |
+
+`MimeTypeUtils.detectMimeTypeFromPath()` looks an extension up in the project's own table, `CUSTOM_MIME_TYPES`, and then in the `mime` package. The table covers formats the `mime` package does not know or gives a misleading type, such as `.ts`, which it reads as an MPEG transport stream. A query string or fragment is ignored, so `report.pdf?token=abc` resolves to `application/pdf`.
+
+Types from a `Content-Type` header or from the `mime` package pass through `normalizeMimeType()`, which turns known misfilings into text types, for example `video/mp2t` into `text/x-typescript` and `application/x-perl` into `text/x-perl`. The full list is `MIME_TYPE_NORMALIZATION`.
+
+A local file whose extension neither the table nor the `mime` package knows gets `application/octet-stream` and is skipped. This includes files without an extension, such as `Dockerfile`, `Makefile` or `LICENSE`.
+
+**Code reference:** [src/utils/mimeTypeUtils.ts](../../src/utils/mimeTypeUtils.ts)
 
 ## Pipeline Routing
 
-Content is routed to the first pipeline whose `canProcess()` method matches the MIME type. Pipelines are evaluated in this order:
+Pipelines are tried in this order:
 
-| Priority | Pipeline | Purpose | Output |
-|----------|----------|---------|--------|
-| 1 | JsonPipeline | JSON documents | JSON (structural splitting) |
-| 2 | SourceCodePipeline | Programming languages | Source code (AST-aware or line-based splitting) |
-| 3 | DocumentPipeline | Binary and rich documents | Markdown (converted via Xberg) |
-| 4 | HtmlPipeline | Web pages | Markdown (converted via middleware chain) |
-| 5 | MarkdownPipeline | Markdown files | Markdown (passthrough with metadata extraction) |
-| 6 | TextPipeline | Universal fallback | Plain text (line-based splitting) |
+| Order | Pipeline | Accepts | Output |
+|:------|:---------|:--------|:-------|
+| 1 | `JsonPipeline` | `application/json`, `text/json`, `text/x-json` | JSON, split along its structure |
+| 2 | `SourceCodePipeline` | Any MIME type that has a language mapping (see [Source Code](#source-code)) | Source text, split at declarations or by size |
+| 3 | `DocumentPipeline` | The document types listed under [Documents](#documents) | Markdown converted by Xberg |
+| 4 | `HtmlPipeline` | `text/html`, `application/xhtml+xml` | Markdown converted by the HTML middleware chain |
+| 5 | `MarkdownPipeline` | `text/markdown`, `text/x-markdown`, `text/mdx`, `text/x-gfm` | Markdown |
+| 6 | `TextPipeline` | Any other `text/*` type, unless the content contains a null byte | Plain text |
 
-**Code Reference:**
-- `src/scraper/pipelines/PipelineFactory.ts` - Pipeline ordering and selection
-- `src/utils/mimeTypeUtils.ts` - MIME type classification functions
+Order matters where two pipelines accept a type. `application/json`, for example, also has a language mapping, and `JsonPipeline` takes it first.
 
-## Archives
-
-Archive files are treated as content sources, not as a file format to extract text from. When the server encounters an archive, it unpacks the contents and processes each file individually through the appropriate pipeline.
-
-Archives are supported as input for both local file scraping (`file://` URLs) and web scraping (when an archive URL is the scrape target).
-
-| Format | Extensions | Library |
-|--------|------------|---------|
-| ZIP | `.zip` | `yauzl` |
-| TAR | `.tar` | `tar` |
-| Gzipped TAR | `.tar.gz`, `.tgz` | `tar` |
-
-**Code Reference:**
-- `src/utils/archive/ZipAdapter.ts` - ZIP extraction
-- `src/utils/archive/TarAdapter.ts` - TAR/gzip extraction
-- `src/utils/archive/ArchiveFactory.ts` - Format detection (extension-based)
-- `src/scraper/strategies/LocalFileStrategy.ts` - Archive entry enumeration and processing
+**Code reference:** [src/scraper/pipelines/PipelineFactory.ts](../../src/scraper/pipelines/PipelineFactory.ts) for the order, and each pipeline's `canProcess()` for what it accepts.
 
 ## Documents
 
-The DocumentPipeline uses [Xberg](https://github.com/xberg-io/xberg) (`@xberg-io/xberg`) to extract content from binary and rich document formats. All documents are converted to Markdown. Xberg's Markdown renderer emits the full document structure — for spreadsheets, each sheet appears as a heading followed by a Markdown table — so the rendered content is used directly; per-table Markdown serves only as a fallback when the rendered content is empty.
+`DocumentPipeline` uses [Xberg](https://github.com/xberg-io/xberg) (`@xberg-io/xberg`) to convert binary and rich documents to Markdown. Xberg renders the whole document structure; a spreadsheet becomes one heading per sheet, each followed by a Markdown table. The title comes from the document's metadata, or else from the file name.
 
-Documents are subject to a configurable size limit (`scraper.document.maxSize`, default 10 MB).
+A document larger than `scraper.document.maxSize` (10 MB by default) is not converted; the pipeline returns an error and no content. A website must serve a document under its own MIME type: a response labeled `application/octet-stream` is skipped.
 
 | Format | Extensions | MIME Type |
-|--------|------------|-----------|
+|:-------|:-----------|:----------|
 | PDF | `.pdf` | `application/pdf` |
 | Word (modern) | `.docx` | `application/vnd.openxmlformats-officedocument.wordprocessingml.document` |
 | Word (legacy) | `.doc` | `application/msword` |
@@ -60,189 +58,98 @@ Documents are subject to a configurable size limit (`scraper.document.maxSize`, 
 | FictionBook | `.fb2` | `application/x-fictionbook+xml` |
 | Jupyter Notebook | `.ipynb` | `application/x-ipynb+json` |
 
-**Code Reference:**
-- `src/scraper/pipelines/DocumentPipeline.ts` - Xberg integration and content extraction
-- `src/utils/mimeTypeUtils.ts` - `isSupportedDocument()` gate function
+**Code reference:** [src/scraper/pipelines/DocumentPipeline.ts](../../src/scraper/pipelines/DocumentPipeline.ts) and `MimeTypeUtils.isSupportedDocument()`
 
 ## Web Pages
 
-The HtmlPipeline converts HTML to Markdown through a multi-stage middleware chain: optional Playwright rendering for JavaScript-heavy pages, DOM parsing, metadata extraction, link discovery, content sanitization, URL normalization, and Markdown conversion.
+`HtmlPipeline` converts HTML to Markdown through its middleware chain; [Content Processing](content-processing.md#html) describes the stages.
 
 | Format | Extensions | MIME Type |
-|--------|------------|-----------|
+|:-------|:-----------|:----------|
 | HTML | `.html`, `.htm` | `text/html` |
 | XHTML | `.xhtml` | `application/xhtml+xml` |
 
-**Code Reference:** `src/scraper/pipelines/HtmlPipeline.ts`
+**Code reference:** [src/scraper/pipelines/HtmlPipeline.ts](../../src/scraper/pipelines/HtmlPipeline.ts)
 
 ## Markdown
 
-The MarkdownPipeline processes Markdown files with frontmatter and metadata extraction. Content passes through to the semantic splitter with minimal transformation.
+`MarkdownPipeline` reads the title from front matter or the first heading and splits the text by headings.
 
 | Format | Extensions | MIME Type |
-|--------|------------|-----------|
+|:-------|:-----------|:----------|
 | Markdown | `.md`, `.markdown`, `.mkd`, `.mkdn`, `.mkdown`, `.mdown`, `.mdwn`, `.ronn`, `.gfm` | `text/markdown`, `text/x-markdown`, `text/x-gfm` |
 | MDX | `.mdx` | `text/mdx` |
 
-**Code Reference:** `src/scraper/pipelines/MarkdownPipeline.ts`
+**Code reference:** [src/scraper/pipelines/MarkdownPipeline.ts](../../src/scraper/pipelines/MarkdownPipeline.ts)
 
 ## JSON
 
-The JsonPipeline validates JSON structure and applies hierarchical splitting that preserves object and array boundaries for context-aware chunking.
+`JsonPipeline` splits JSON along its objects and arrays, so each chunk keeps its place in the document.
 
 | Format | Extensions | MIME Type |
-|--------|------------|-----------|
+|:-------|:-----------|:----------|
 | JSON | `.json` | `application/json`, `text/json`, `text/x-json` |
 
-**Code Reference:** `src/scraper/pipelines/JsonPipeline.ts`
+**Code reference:** [src/scraper/pipelines/JsonPipeline.ts](../../src/scraper/pipelines/JsonPipeline.ts)
 
 ## Source Code
 
-The SourceCodePipeline handles programming languages with language detection. TypeScript, JavaScript, and Python use full tree-sitter AST parsing for structure-aware splitting. All other languages use line-based splitting.
+`SourceCodePipeline` accepts every MIME type that `MimeTypeUtils.extractLanguageFromMimeType()` maps to a language name. For files, the extension decides the MIME type through `CUSTOM_MIME_TYPES` or the `mime` package. Together the two tables cover programming languages, shell scripts, stylesheets, web framework components, configuration and build files, infrastructure as code, query and schema languages, and TeX. Both tables live in [src/utils/mimeTypeUtils.ts](../../src/utils/mimeTypeUtils.ts); check there for a specific extension.
 
-### Languages with AST-Aware Splitting
+Some formats reach this pipeline that the name does not suggest:
 
-These languages use tree-sitter for semantic boundary detection (function, class, and module boundaries):
+- Lightweight markup, such as reStructuredText (`.rst`), AsciiDoc (`.adoc`, `.asciidoc`), Org (`.org`), Textile, Pod, RDoc, wiki markup and R Markdown (`.rmd`), is indexed as source text. It is not converted the way Markdown is.
+- YAML (`.yaml`, `.yml`), TOML (`.toml`) and XML (`.xml` and its relatives such as `.xsd`, `.xslt` and `.wsdl`) are indexed as source text too.
+
+Java is an exception. The `mime` package gives `.java` the type `text/x-java-source`, which has no language mapping, so `TextPipeline` indexes Java files.
+
+### Languages Split at Declarations
+
+These languages have a tree-sitter parser. Each function, method, class or other declaration becomes its own chunk; [Source Code Splitter](source-code-splitter.md) describes the rules.
 
 | Language | Extensions |
-|----------|------------|
+|:---------|:-----------|
 | TypeScript | `.ts`, `.mts`, `.cts` |
 | TSX | `.tsx` |
 | JavaScript | `.js`, `.cjs`, `.mjs` |
 | JSX | `.jsx` |
 | Python | `.py`, `.pyw`, `.pyi` |
 
-### Languages with Line-Based Splitting
+Every other language is split by size only: a file that fits in `splitter.maxChunkSize` stays one chunk, and a larger one is cut at blank lines, then line breaks, then spaces.
 
-These languages are recognized and processed with line-based splitting:
-
-| Category | Languages | Extensions |
-|----------|-----------|------------|
-| Systems | C | `.c`, `.h` |
-| | C++ | `.cpp`, `.cxx`, `.cc`, `.hpp`, `.hxx` |
-| | Go | `.go` |
-| | Rust | `.rs` |
-| | Zig | `.zig` |
-| | Nim | `.nim` |
-| | V | `.v` |
-| | Crystal | `.cr` |
-| JVM | Java | `.java` |
-| | Kotlin | `.kt`, `.kts` |
-| | Scala | `.scala` |
-| | Groovy | `.groovy`, `.gradle` |
-| .NET | C# | `.cs` |
-| Apple/Mobile | Swift | `.swift` |
-| | Dart | `.dart` |
-| Scripting | Ruby | `.rb`, `.rake` |
-| | PHP | `.php` |
-| | Lua | `.lua` |
-| | Perl | `.pl`, `.pm` |
-| | R | `.r` |
-| | Cython | `.pyx`, `.pxd` |
-| Functional | Haskell | `.hs`, `.lhs` |
-| | Elm | `.elm` |
-| | Erlang | `.erl` |
-| | Elixir | `.ex`, `.exs` |
-| | Clojure | `.clj`, `.cljs`, `.cljc` |
-| | Julia | `.jl` |
-| Shell | Bash | `.sh`, `.bash`, `.zsh`, `.fish` |
-| | PowerShell | `.ps1` |
-| Web Frameworks | Vue | `.vue` |
-| | Svelte | `.svelte` |
-| | Astro | `.astro` |
-| Stylesheets | CSS | `.css` |
-| | SCSS | `.scss` |
-| | Sass | `.sass` |
-| | Less | `.less` |
-| Web3 | Solidity | `.sol` |
-| | Move | `.move` |
-| | Cairo | `.cairo` |
-
-**Code Reference:**
-- `src/scraper/pipelines/SourceCodePipeline.ts` - Language detection and splitting
-- `src/utils/mimeTypeUtils.ts` - `extractLanguageFromMimeType()` mapping
-
-## Markup and Documentation Formats
-
-These lightweight markup languages are processed as source code (line-based splitting), not as Markdown:
-
-| Format | Extensions |
-|--------|------------|
-| reStructuredText | `.rst` |
-| AsciiDoc | `.adoc`, `.asciidoc` |
-| Org Mode | `.org` |
-| Textile | `.textile` |
-| Pod | `.pod` |
-| RDoc | `.rdoc` |
-| Wiki | `.wiki` |
-| R Markdown | `.rmd` |
-
-## Configuration and Data Formats
-
-These formats are processed as source code with language detection:
-
-| Category | Format | Extensions |
-|----------|--------|------------|
-| Config | TOML | `.toml` |
-| | INI | `.ini`, `.cfg` |
-| | General config | `.conf` |
-| | Properties | `.properties` |
-| | Dotenv | `.env` |
-| Build Systems | Dockerfile | `.dockerfile`, `.containerfile` |
-| | Makefile | `.makefile` |
-| | CMake | `.cmake` |
-| | Bazel | `.bazel`, `.bzl` |
-| | Buck | `.buck` |
-| IaC | Terraform | `.tf`, `.tfvars` |
-| | HCL | `.hcl` |
-| Data/Query | SQL | `.sql` |
-| | GraphQL | `.graphql`, `.gql` |
-| | XML | `.xml` |
-| | YAML | `.yaml`, `.yml` |
-| Schema/API | Protocol Buffers | `.proto` |
-| | Prisma | `.prisma` |
-| | Thrift | `.thrift` |
-| | Avro | `.avro` |
-| TeX | TeX | `.tex` |
-| | LaTeX | `.latex` |
+**Code reference:** [src/scraper/pipelines/SourceCodePipeline.ts](../../src/scraper/pipelines/SourceCodePipeline.ts) and [src/splitter/treesitter/LanguageParserRegistry.ts](../../src/splitter/treesitter/LanguageParserRegistry.ts)
 
 ## Text Fallback
 
-The TextPipeline acts as a universal fallback for any `text/*` MIME type not claimed by a higher-priority pipeline. It rejects binary content via null-byte detection.
+`TextPipeline` takes any `text/*` type that no earlier pipeline accepts. It refuses content that contains a null byte, which marks it as binary. Common cases:
 
-Common formats handled by the text fallback:
+| Format | Extensions | MIME Type |
+|:-------|:-----------|:----------|
+| Plain text | `.txt`, `.log` | `text/plain` |
+| CSV | `.csv` | `text/csv` |
+| TSV | `.tsv` | `text/tab-separated-values` |
 
-| Format | Extensions |
-|--------|------------|
-| Plain text | `.txt` |
-| CSV | `.csv` |
-| TSV | `.tsv` |
-| Log files | `.log` |
+**Code reference:** [src/scraper/pipelines/TextPipeline.ts](../../src/scraper/pipelines/TextPipeline.ts)
 
-## MIME Type Detection
+## Archives
 
-File format detection uses a layered approach:
+An archive is a container, not a format with text of its own. The server unpacks it and routes each entry through the pipelines by the entry's file extension.
 
-1. **HTTP Content-Type header** (for web content)
-2. **`detectMimeTypeFromPath()`** - Extension-based detection using the `mime` package supplemented with custom mappings for formats the `mime` package misidentifies (e.g., `.ts` files detected as MPEG-2 transport streams)
-3. **Content sniffing** - Binary detection via null-byte scanning
+| Format | Extensions | Library |
+|:-------|:-----------|:--------|
+| ZIP | `.zip` | `yauzl` |
+| TAR | `.tar` | `tar` |
+| Gzipped TAR | `.tar.gz`, `.tgz`, and any other `.gz` | `tar` |
 
-URL query parameters and hash fragments are stripped before extension detection, so `report.pdf?token=abc` correctly resolves to `application/pdf`.
+Detection uses the extension only. DOCX, XLSX, EPUB and the OpenDocument formats are ZIP files inside, and they must reach `DocumentPipeline` rather than be unpacked.
 
-### MIME Type Normalization
+- Local scrapes (`file://`) open every archive they meet, at the start path or inside a scanned directory.
+- Web scrapes unpack an archive only when it is the start URL. Archive links found during a crawl are not followed.
 
-Some external MIME types (from HTTP headers or OS detection) are automatically corrected:
+**Code reference:** [src/utils/archive/ArchiveFactory.ts](../../src/utils/archive/ArchiveFactory.ts) and [src/scraper/strategies/LocalFileStrategy.ts](../../src/scraper/strategies/LocalFileStrategy.ts)
 
-| External MIME Type | Corrected To | Reason |
-|---|---|---|
-| `video/mp2t` | `text/x-typescript` | `.ts` / `.mts` MPEG-2 conflict |
-| `application/node` | `text/javascript` | `.cjs` files |
-| `application/rls-services+xml` | `text/x-rust` | `.rs` files |
-| `application/vnd.lotus-organizer` | `text/x-org` | `.org` files |
-| `application/vnd.dart` | `text/x-dart` | `.dart` files |
-| `application/x-perl` | `text/x-perl` | `.pl` / `.pm` files |
-| `application/x-tex` | `text/x-tex` | `.tex` files |
-| `application/x-latex` | `text/x-latex` | `.latex` files |
-| `application/toml` | `text/x-toml` | `.toml` files |
+## GitHub Repositories
 
-**Code Reference:** `src/utils/mimeTypeUtils.ts` - `normalizeMimeType()` and `detectMimeTypeFromPath()`
+A GitHub scrape fetches only the files its own filter accepts: known text and document extensions, common file names such as `README`, `LICENSE` and `Dockerfile`, a few name patterns such as `.env` files, and any other file whose extension resolves to a `text/*` type. The selected files then go through the pipelines like any other content.
+
+**Code reference:** `TEXT_EXTENSIONS`, `DOCUMENT_EXTENSIONS` and `COMMON_TEXT_FILES` in [src/scraper/strategies/GitHubScraperStrategy.ts](../../src/scraper/strategies/GitHubScraperStrategy.ts)

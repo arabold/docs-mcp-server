@@ -2,8 +2,9 @@
  * End-to-end tests for version label normalization and resolution.
  *
  * These run against a real SQLite store rather than a mocked one, so they cover
- * the links a unit test cannot: that every write path lands in the same version
- * row, and that the label a caller gets back is the one actually in the store.
+ * the link a unit test cannot: that every write path lands in the same version
+ * row. How a request resolves against the stored labels is tested in
+ * src/store/DocumentManagementService.test.ts.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -13,11 +14,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { EventBusService } from "../src/events";
 import { PipelineManager } from "../src/pipeline/PipelineManager";
 import { pipelineRouter } from "../src/pipeline/trpc/router";
+import { appRouter, createAppRouterContext } from "../src/services/appRouter";
+import { buildSystemInfo } from "../src/services/systemInfo";
 import { DocumentManagementService } from "../src/store/DocumentManagementService";
 import { normalizeVersionLabel } from "../src/store/types";
-import { VersionNotFoundInStoreError } from "../src/store/errors";
 import { RefreshVersionTool } from "../src/tools/RefreshVersionTool";
 import { ScrapeTool } from "../src/tools/ScrapeTool";
+import { SearchTool } from "../src/tools/SearchTool";
 import { type AppConfig, loadConfig } from "../src/utils/config";
 
 describe("Version resolution end-to-end", () => {
@@ -30,12 +33,13 @@ describe("Version resolution end-to-end", () => {
     tempDir = mkdtempSync(join(tmpdir(), "version-resolution-e2e-"));
     appConfig = loadConfig();
     appConfig.app.storePath = tempDir;
+    appConfig.app.embeddingModel = ""; // FTS-only: the read path searches without credentials
     docService = new DocumentManagementService(new EventBusService(), appConfig);
     await docService.initialize();
     // Never started: jobs stay QUEUED, so nothing is actually scraped and we can
     // inspect the version label each entry point recorded.
     pipeline = new PipelineManager(docService, new EventBusService(), {
-      recoverJobs: false,
+      interruptedJobs: "fail",
       appConfig,
     });
   });
@@ -50,6 +54,10 @@ describe("Version resolution end-to-end", () => {
      * Drives a version label through one real entry point and returns the label
      * that reaches the store layer, so a regression in any entry point's own
      * normalizer shows up as a different label rather than passing silently.
+     *
+     * Each scrape requests replacement: some cases send variants of one label
+     * through several entry points on purpose, and without it every submission
+     * after the first would be rejected as an existing version.
      */
     const labelFromEntryPoint = async (
       entryPoint: "scrapeTool" | "refreshTool" | "trpc" | "pipeline",
@@ -65,6 +73,7 @@ describe("Version resolution end-to-end", () => {
               version,
               url: "https://example.com/docs",
               waitForCompletion: false,
+              replace: true,
             })) as { jobId: string }
           ).jobId;
           break;
@@ -95,15 +104,18 @@ describe("Version resolution end-to-end", () => {
               library,
               version,
               options: { url: "https://example.com/docs", library } as never,
+              onExisting: "replace",
             })
           ).jobId;
           break;
         }
         case "pipeline":
-          jobId = await pipeline.enqueueScrapeJob(library, version, {
-            url: "https://example.com/docs",
+          jobId = await pipeline.enqueueScrapeJob(
             library,
-          } as never);
+            version,
+            { url: "https://example.com/docs", library } as never,
+            { onExisting: "replace" },
+          );
           break;
       }
       return (await pipeline.getJob(jobId))?.version ?? null;
@@ -131,22 +143,17 @@ describe("Version resolution end-to-end", () => {
     );
 
     it("lands one version row no matter which entry point wrote the label", async () => {
-      // Every entry point feeds the same library, so a normalizer that let a
-      // variant through would show up here as a second bucket.
+      // Every entry point that creates a version feeds the same library, so
+      // one that stored a variant would show up here as a second row. The
+      // refresh tool is left out: it needs the row to exist already.
       const library = "paritylib";
+      const writers = ["scrapeTool", "trpc", "pipeline"] as const;
       const variants = [" 1.0.0 ", "1.0.0", "1.0.0 ", " 1.0.0"];
 
-      const ids: number[] = [];
       for (const [i, variant] of variants.entries()) {
-        const label = await labelFromEntryPoint(
-          ENTRY_POINTS[i % ENTRY_POINTS.length],
-          library,
-          variant,
-        );
-        ids.push(await docService.ensureVersion({ library, version: label ?? "" }));
+        await labelFromEntryPoint(writers[i % writers.length], library, variant);
       }
 
-      expect(new Set(ids).size).toBe(1);
       expect(await docService.listVersions(library)).toEqual(["1.0.0"]);
     });
 
@@ -181,125 +188,96 @@ describe("Version resolution end-to-end", () => {
       expect(partial).not.toBe(full);
       expect(await docService.listVersions(library)).toEqual(["1.20.0", "1.20"]);
     });
-
-    it("accepts a non-version label through the scrape and refresh tools", async () => {
-      // Both tools used to reject anything that was not strict semver.
-      await expect(
-        labelFromEntryPoint("scrapeTool", "taglib-scrape", " STABLE "),
-      ).resolves.toBe("stable");
-      await expect(
-        labelFromEntryPoint("refreshTool", "taglib-refresh", "stable"),
-      ).resolves.toBe("stable");
-    });
   });
 
-  describe("resolution against a real store", () => {
-    it("resolves an opaque tag by its own name and with no target", async () => {
-      // Regression for issue #475.
-      const library = "medusa";
-      await docService.ensureVersion({ library, version: "latest" });
+  describe("read path parity", () => {
+    const library = "readparity";
+    const pageUrls = {
+      "3.0.0": "https://example.com/v3/refine",
+      "4.1.0": "https://example.com/v4/refine",
+    };
+    let api: ReturnType<typeof appRouter.createCaller>;
 
-      await expect(docService.findBestVersion(library, "latest")).resolves.toEqual({
-        bestMatch: "latest",
-        hasUnversioned: false,
-      });
-      await expect(docService.findBestVersion(library)).resolves.toEqual({
-        bestMatch: "latest",
-        hasUnversioned: false,
-      });
-    });
-
-    it("resolves a partial version by its own name", async () => {
-      // Regression for issue #480.
-      const library = "cilium";
-      await docService.ensureVersion({ library, version: "1.20" });
-
-      await expect(docService.findBestVersion(library, "1.20")).resolves.toEqual({
-        bestMatch: "1.20",
-        hasUnversioned: false,
-      });
-      await expect(docService.findBestVersion(library, "1.x")).resolves.toEqual({
-        bestMatch: "1.20",
-        hasUnversioned: false,
-      });
-    });
-
-    it("prefers a prerelease over an older major for the requested version", async () => {
-      const library = "prelib";
-      await docService.ensureVersion({ library, version: "1.0.0" });
-      await docService.ensureVersion({ library, version: "2.0.0-beta" });
-
-      await expect(docService.findBestVersion(library, "2.0.0")).resolves.toEqual({
-        bestMatch: "2.0.0-beta",
-        hasUnversioned: false,
-      });
-      await expect(docService.findBestVersion(library)).resolves.toEqual({
-        bestMatch: "2.0.0-beta",
-        hasUnversioned: false,
-      });
-    });
-
-    it("lets a released version supersede its own prerelease", async () => {
-      const library = "prelib2";
-      await docService.ensureVersion({ library, version: "1.0.0" });
-      await docService.ensureVersion({ library, version: "2.0.0-beta" });
-      await docService.ensureVersion({ library, version: "2.0.0" });
-
-      await expect(docService.findBestVersion(library)).resolves.toEqual({
-        bestMatch: "2.0.0",
-        hasUnversioned: false,
-      });
-    });
-
-    it("refuses to rank multiple tags and lists them in the error", async () => {
-      const library = "multitag";
-      await docService.ensureVersion({ library, version: "stable" });
-      await docService.ensureVersion({ library, version: "next" });
-
-      const error = (await docService
-        .findBestVersion(library)
-        .catch((e) => e)) as VersionNotFoundInStoreError;
-
-      expect(error).toBeInstanceOf(VersionNotFoundInStoreError);
-      expect(error.availableVersions).toEqual(
-        expect.arrayContaining(["stable", "next"]),
+    beforeAll(async () => {
+      // The API the web UI and remote clients call, with a request's context.
+      api = appRouter.createCaller(
+        createAppRouterContext({
+          pipeline,
+          docService,
+          eventBus: new EventBusService(),
+          systemInfo: buildSystemInfo(
+            { enableWebInterface: true, enableMcpServer: true, enableApiServer: true, port: 0 },
+            appConfig,
+            "http://127.0.0.1:6280/mcp",
+            undefined,
+          ),
+        }),
       );
-    });
 
-    it("errors on ambiguous tags when an empty version row holds no documents", async () => {
-      // An unversioned *row* is not unversioned *documentation*: resolution
-      // checks for documents, so an empty bucket is no fallback and the
-      // ambiguous tags still surface as an error listing the labels.
-      const library = "multitag-unversioned";
-      for (const version of ["stable", "next", ""]) {
-        await docService.ensureVersion({ library, version });
+      for (const [version, url] of Object.entries(pageUrls)) {
+        await docService.addScrapeResult(library, version, 1, {
+          url,
+          title: "Refinements",
+          sourceContentType: "text/markdown",
+          contentType: "text/markdown",
+          textContent: "",
+          links: [],
+          errors: [],
+          chunks: [
+            {
+              types: ["text"],
+              content: "Use refine to add custom validation logic.",
+              section: { level: 1, path: ["Refinements"] },
+            },
+          ],
+        });
       }
-
-      await expect(docService.findBestVersion(library)).rejects.toThrow(
-        VersionNotFoundInStoreError,
-      );
     });
 
-    it("orders listings newest first, with tags last", async () => {
-      const library = "orderlib";
-      for (const version of ["1.9.0", "1.10.0", "stable", "2.0.0-beta"]) {
-        await docService.ensureVersion({ library, version });
-      }
+    /**
+     * Searches through one real entry point and returns the URLs it found, so
+     * an entry point that skips version resolution shows up as other results.
+     */
+    const urlsFromEntryPoint = async (
+      entryPoint: "searchTool" | "trpc",
+      version: string | undefined,
+    ): Promise<string[]> => {
+      const request = { library, version, query: "refine" };
+      const { results } =
+        entryPoint === "searchTool"
+          ? // What the MCP search_docs tool runs.
+            await new SearchTool(docService).execute(request)
+          : // What the web UI's search playground calls.
+            await api.searchDocs(request);
+      return results.map((result) => result.url);
+    };
 
-      expect(await docService.listVersions(library)).toEqual([
-        "2.0.0-beta",
-        "1.10.0",
-        "1.9.0",
-        "stable",
-      ]);
+    const READ_ENTRY_POINTS = ["searchTool", "trpc"] as const;
 
-      // The listing surface and the resolver agree on the newest version.
-      const [summary] = (await docService.listLibraries()).filter(
-        (l) => l.library === library,
-      );
-      expect(summary.versions[0].ref.version).toBe("2.0.0-beta");
-      const { bestMatch } = await docService.findBestVersion(library);
-      expect(bestMatch).toBe("2.0.0-beta");
+    it.each([
+      // An MCP client omits the version; the playground's "Latest" sends "".
+      { requested: "no version", version: undefined, expected: pageUrls["4.1.0"] },
+      { requested: "an empty version", version: "", expected: pageUrls["4.1.0"] },
+      { requested: "a version range", version: "3.x", expected: pageUrls["3.0.0"] },
+    ])(
+      "resolves $requested to the same version at every entry point",
+      async ({ version, expected }) => {
+        const urls = await Promise.all(
+          READ_ENTRY_POINTS.map((e) => urlsFromEntryPoint(e, version)),
+        );
+
+        expect(urls).toEqual(READ_ENTRY_POINTS.map(() => [expected]));
+      },
+    );
+
+    it("keeps the store-level search literal for remote clients", async () => {
+      // Remote clients send `search` a version that is already resolved, so it
+      // searches the bucket it is given; "" is the unversioned one.
+      await expect(
+        api.search({ library, version: "", query: "refine" }),
+      ).resolves.toEqual([]);
+      const [result] = await api.search({ library, version: "3.0.0", query: "refine" });
+      expect(result.url).toBe(pageUrls["3.0.0"]);
     });
   });
 });

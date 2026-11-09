@@ -6,11 +6,6 @@ import { WebScraperStrategy } from "./WebScraperStrategy";
 export class NpmScraperStrategy implements ScraperStrategy {
   private defaultStrategy: WebScraperStrategy;
 
-  canHandle(url: string): boolean {
-    const { hostname } = new URL(url);
-    return ["npmjs.org", "npmjs.com", "www.npmjs.com"].includes(hostname);
-  }
-
   constructor(config: AppConfig) {
     this.defaultStrategy = new WebScraperStrategy(config, {
       urlNormalizerOptions: {

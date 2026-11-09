@@ -1,13 +1,30 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Embeddings } from "@langchain/core/embeddings";
+import type { Database as DatabaseType, Statement } from "better-sqlite3";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type MockedFunction,
+  vi,
+} from "vitest";
 import type { ScrapeResult } from "../scraper/types";
 import type { Chunk } from "../splitter/types";
-import { loadConfig, markVectorDimensionSource } from "../utils/config";
+import { type AppConfig, loadConfig, markVectorDimensionSource } from "../utils/config";
+import { logger } from "../utils/logger";
+import { DocumentRetrieverService } from "./DocumentRetrieverService";
 import { DocumentStore } from "./DocumentStore";
 import { EmbeddingConfig } from "./embeddings/EmbeddingConfig";
-import { DimensionError, EmbeddingModelChangedError } from "./errors";
+import {
+  DimensionError,
+  EmbeddingModelChangedError,
+  InvalidLibraryNameError,
+  LibraryAlreadyExistsError,
+} from "./errors";
 import { VersionStatus } from "./types";
 
 const mockEmbeddingDimension = vi.hoisted(() => ({ value: 1536 }));
@@ -75,7 +92,15 @@ vi.mock("./embeddings/EmbeddingFactory", async () => {
   };
 });
 
-const appConfig = loadConfig();
+/**
+ * Returns a fresh config with the given embedding model, so that no describe
+ * block depends on the mode another one left behind.
+ */
+function configWith(embeddingModel: string): AppConfig {
+  const config = loadConfig();
+  config.app.embeddingModel = embeddingModel;
+  return config;
+}
 
 /**
  * Helper function to create minimal ScrapeResult for testing.
@@ -114,21 +139,80 @@ function createScrapeResult(
 }
 
 /**
+ * Returns the store's embedding model, and fails the test when embeddings are
+ * disabled so that an embedding test cannot pass without exercising them.
+ */
+function embeddingsOf(store: DocumentStore): Embeddings {
+  // @ts-expect-error Accessing private property for testing
+  const embeddings: Embeddings | null = store.embeddings;
+  if (!embeddings) {
+    throw new Error("Embeddings are not enabled for this store");
+  }
+  return embeddings;
+}
+
+/**
+ * Runs `action` and returns its result together with the query plan of the
+ * first statement it ran whose SQL contains `sqlFragment`, bound to the same
+ * parameters. Throws when no such statement ran.
+ */
+async function queryPlanOf<T>(
+  store: DocumentStore,
+  sqlFragment: string,
+  action: () => Promise<T>,
+): Promise<{ result: T; plan: string[] }> {
+  // @ts-expect-error Accessing private property for testing
+  const db: DatabaseType = store.db;
+  const statementPrototype: Statement = Object.getPrototypeOf(db.prepare("SELECT 1"));
+  const all = vi.spyOn(statementPrototype, "all");
+  let result: T;
+  let captured: { source: string; params: unknown[] } | undefined;
+  try {
+    result = await action();
+    const statements = all.mock.contexts as Statement[];
+    const call = statements.findIndex((statement) =>
+      statement.source.includes(sqlFragment),
+    );
+    if (call >= 0) {
+      captured = { source: statements[call].source, params: all.mock.calls[call] };
+    }
+  } finally {
+    all.mockRestore();
+  }
+  if (!captured) {
+    throw new Error(`No statement containing "${sqlFragment}" ran`);
+  }
+  const plan = db
+    .prepare(`EXPLAIN QUERY PLAN ${captured.source}`)
+    .all(...captured.params) as { detail: string }[];
+  return { result, plan: plan.map((row) => row.detail) };
+}
+
+/**
+ * Asserts that a full-text plan filters by version from the covering indexes
+ * before it reads any document, and that the match runs once rather than once
+ * per chunk id (`0:=M` means SQLite handed the id list to FTS5).
+ */
+function expectVersionFilteredFullTextPlan(plan: string[]): void {
+  expect(plan).toContainEqual(expect.stringMatching(/^SCAN f VIRTUAL TABLE INDEX 0:M\d/));
+  expect(plan).toContain(
+    "SEARCH vd USING COVERING INDEX idx_documents_sort_order (page_id=?)",
+  );
+}
+
+/**
  * Tests for DocumentStore with embeddings enabled
  * Uses explicit embedding configuration and tests hybrid search functionality
  */
 describe("DocumentStore - With Embeddings", () => {
   let store: DocumentStore;
+  let appConfig: AppConfig;
 
   beforeEach(async () => {
     mockEmbeddingDimension.value = 1536;
-    // Create explicit embedding configuration for tests
-    const embeddingConfig = EmbeddingConfig.parseEmbeddingConfig(
-      "openai:text-embedding-3-small",
-    );
-
-    // Enable embeddings via appConfig before creating the store
-    appConfig.app.embeddingModel = embeddingConfig.modelSpec;
+    // The provider only needs a key to be present; the embedding model is mocked
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    appConfig = configWith("openai:text-embedding-3-small");
 
     // Create a fresh in-memory database for each test with explicit config
     store = new DocumentStore(":memory:", appConfig);
@@ -139,115 +223,69 @@ describe("DocumentStore - With Embeddings", () => {
     if (store) {
       await store.shutdown();
     }
+    vi.unstubAllEnvs();
   });
 
   describe("Document Storage and Retrieval", () => {
-    it("should store and retrieve documents with proper metadata", async () => {
-      // Add two pages separately
+    it("stores each embedding as a float32 blob identical to its indexed vector", async () => {
       await store.addDocuments(
-        "testlib",
+        "bloblib",
         "1.0.0",
         1,
         createScrapeResult(
-          "JS Tutorial",
-          "https://example.com/js-tutorial",
-          "JavaScript programming tutorial with examples",
-          ["programming", "javascript"],
-        ),
-      );
-      await store.addDocuments(
-        "testlib",
-        "1.0.0",
-        1,
-        createScrapeResult(
-          "Python DS",
-          "https://example.com/python-ds",
-          "Python data science guide with pandas",
-          ["programming", "python"],
+          "Blob Storage",
+          "https://example.com/blob-storage",
+          "Embeddings are stored in their binary form",
         ),
       );
 
-      // Verify documents were stored
-      expect(await store.checkDocumentExists("testlib", "1.0.0")).toBe(true);
+      // @ts-expect-error Accessing private property for testing
+      const db = store.db;
+      const rows = db
+        .prepare(`
+          SELECT typeof(d.embedding) AS type, length(d.embedding) AS bytes,
+                 (SELECT dv.embedding FROM documents_vec dv WHERE dv.rowid = d.id)
+                   = d.embedding AS matchesIndex
+          FROM documents d
+        `)
+        .all() as Array<{ type: string; bytes: number; matchesIndex: number }>;
 
-      // Verify library versions are tracked correctly
-      const versions = await store.queryUniqueVersions("testlib");
-      expect(versions).toContain("1.0.0");
-
-      // Verify library version details
-      const libraryVersions = await store.queryLibraryVersions();
-      expect(libraryVersions.has("testlib")).toBe(true);
-
-      const testlibVersions = libraryVersions.get("testlib")!;
-      expect(testlibVersions).toHaveLength(1);
-      expect(testlibVersions[0].version).toBe("1.0.0");
-      expect(testlibVersions[0].documentCount).toBe(2);
-      expect(testlibVersions[0].uniqueUrlCount).toBe(2);
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) {
+        expect(row).toEqual({ type: "blob", bytes: 1536 * 4, matchesIndex: 1 });
+      }
     });
 
-    it("treats library names case-insensitively and reuses same library id", async () => {
-      const a = await store.resolveVersionId("React", "");
-      const b = await store.resolveVersionId("react", "");
-      const c = await store.resolveVersionId("REACT", "");
-      expect(a).toBe(b);
-      expect(b).toBe(c);
-    });
-
-    it("should handle document deletion correctly", async () => {
-      await store.addDocuments(
-        "templib",
-        "1.0.0",
-        1,
-        createScrapeResult(
-          "Temp Doc",
-          "https://example.com/temp",
-          "Temporary document for deletion test",
-          ["temp"],
-        ),
-      );
-      expect(await store.checkDocumentExists("templib", "1.0.0")).toBe(true);
-
-      const deletedCount = await store.deletePages("templib", "1.0.0");
-      expect(deletedCount).toBe(1);
-      expect(await store.checkDocumentExists("templib", "1.0.0")).toBe(false);
-    });
-
-    it("should completely remove a version including pages and documents", async () => {
-      // Add two pages
+    it("removes a version with its pages, and the library with its last version", async () => {
       await store.addDocuments(
         "removelib",
         "1.0.0",
         1,
-        createScrapeResult(
-          "Doc 1",
-          "https://example.com/doc1",
-          "First document for removal test",
-          ["docs"],
-        ),
+        createScrapeResult("V1 Doc", "https://example.com/v1", "Version 1 document"),
       );
-      await store.addDocuments(
-        "removelib",
-        "1.0.0",
-        1,
-        createScrapeResult(
-          "Doc 2",
-          "https://example.com/doc2",
-          "Second document for removal test",
-          ["docs"],
-        ),
-      );
-      expect(await store.checkDocumentExists("removelib", "1.0.0")).toBe(true);
+      for (const page of ["doc1", "doc2"]) {
+        await store.addDocuments(
+          "removelib",
+          "2.0.0",
+          1,
+          createScrapeResult(page, `https://example.com/${page}`, `${page} for removal`),
+        );
+      }
 
-      // Remove the version
-      const result = await store.removeVersion("removelib", "1.0.0", true);
-
-      // Verify the results
-      expect(result.documentsDeleted).toBe(2);
-      expect(result.versionDeleted).toBe(true);
-      expect(result.libraryDeleted).toBe(true);
-
-      // Verify documents no longer exist
+      expect(await store.removeVersion("removelib", "1.0.0", true)).toEqual({
+        documentsDeleted: 1,
+        versionDeleted: true,
+        libraryDeleted: false,
+      });
       expect(await store.checkDocumentExists("removelib", "1.0.0")).toBe(false);
+      expect(await store.checkDocumentExists("removelib", "2.0.0")).toBe(true);
+
+      expect(await store.removeVersion("removelib", "2.0.0", true)).toEqual({
+        documentsDeleted: 2,
+        versionDeleted: true,
+        libraryDeleted: true,
+      });
+      expect(await store.checkDocumentExists("removelib", "2.0.0")).toBe(false);
     });
 
     it("aggregates per-day indexing activity from page and chunk timestamps", async () => {
@@ -291,6 +329,43 @@ describe("DocumentStore - With Embeddings", () => {
       expect(history.since <= history.until).toBe(true);
     });
 
+    it("counts a page's chunks on the day the page was first indexed", async () => {
+      const page = ["Page", "https://example.com/page"] as const;
+      await store.addDocuments(
+        "activitylib",
+        "1.0.0",
+        1,
+        createScrapeResult(...page, "v1"),
+      );
+      // @ts-expect-error Accessing private property for testing
+      store.db.prepare("UPDATE pages SET created_at = datetime('now', '-3 days')").run();
+      // A refresh keeps the page row but replaces its chunks.
+      await store.addDocuments(
+        "activitylib",
+        "1.0.0",
+        1,
+        createScrapeResult(...page, "v2"),
+      );
+
+      const history = await store.getActivityHistory(7);
+
+      expect(history.days.at(-4)).toMatchObject({ pages: 1, chunks: 1 });
+      expect(history.days.at(-1)).toMatchObject({ pages: 0, chunks: 0 });
+    });
+
+    it("counts activity through indexes instead of scanning pages or documents", async () => {
+      const { plan } = await queryPlanOf(store, "WITH RECURSIVE calendar", () =>
+        store.getActivityHistory(90),
+      );
+
+      expect(plan).toContain(
+        "SEARCH p USING COVERING INDEX idx_pages_created_at (created_at>?)",
+      );
+      expect(plan).toContain(
+        "SEARCH c USING COVERING INDEX idx_documents_sort_order (page_id=?)",
+      );
+    });
+
     it("clamps the activity window and zero-fills empty stores", async () => {
       const history = await store.getActivityHistory(0);
       // A non-positive window is clamped to a single day, still zero-filled.
@@ -300,7 +375,7 @@ describe("DocumentStore - With Embeddings", () => {
       expect(history.days[0]).toMatchObject({ pages: 0, chunks: 0 });
     });
 
-    it("computes a per-version content-type breakdown", async () => {
+    it("computes a per-version content-type breakdown, empty for an unknown version", async () => {
       await store.addDocuments(
         "complib",
         "1.0.0",
@@ -330,11 +405,9 @@ describe("DocumentStore - With Embeddings", () => {
       const mimePages = comp.mimeTypes.reduce((sum, m) => sum + m.pages, 0);
       expect(mimePages).toBe(2);
       expect(comp.mimeTypes[0]?.label).toContain("text/html");
-    });
 
-    it("returns an empty breakdown for an unknown version", async () => {
-      const comp = await store.getVersionComposition("nope", "9.9.9");
-      expect(comp.mimeTypes).toEqual([]);
+      // An unknown version has an empty breakdown
+      expect((await store.getVersionComposition("nope", "9.9.9")).mimeTypes).toEqual([]);
     });
 
     it("surfaces a failed version's error message in the library listing", async () => {
@@ -355,122 +428,53 @@ describe("DocumentStore - With Embeddings", () => {
       expect(versions?.[0]?.status).toBe(VersionStatus.FAILED);
       expect(versions?.[0]?.errorMessage).toBe("boom: could not fetch");
     });
-
-    it("should remove version but keep library when other versions exist", async () => {
-      // Add two versions
-      await store.addDocuments(
-        "multilib",
-        "1.0.0",
-        1,
-        createScrapeResult("V1 Doc", "https://example.com/v1", "Version 1 document", [
-          "v1",
-        ]),
-      );
-      await store.addDocuments(
-        "multilib",
-        "2.0.0",
-        1,
-        createScrapeResult("V2 Doc", "https://example.com/v2", "Version 2 document", [
-          "v2",
-        ]),
-      );
-
-      // Remove only version 1.0.0
-      const result = await store.removeVersion("multilib", "1.0.0", true);
-
-      // Verify version 1 was deleted but library remains
-      expect(result.documentsDeleted).toBe(1);
-      expect(result.versionDeleted).toBe(true);
-      expect(result.libraryDeleted).toBe(false);
-
-      // Verify version 1 no longer exists but version 2 does
-      expect(await store.checkDocumentExists("multilib", "1.0.0")).toBe(false);
-      expect(await store.checkDocumentExists("multilib", "2.0.0")).toBe(true);
-    });
-
-    it("should handle multiple versions of the same library", async () => {
-      await store.addDocuments(
-        "versionlib",
-        "1.0.0",
-        1,
-        createScrapeResult(
-          "V1 Features",
-          "https://example.com/v1",
-          "Version 1.0 feature documentation",
-          ["features"],
-        ),
-      );
-      await store.addDocuments(
-        "versionlib",
-        "2.0.0",
-        1,
-        createScrapeResult(
-          "V2 Features",
-          "https://example.com/v2",
-          "Version 2.0 feature documentation with new capabilities",
-          ["features"],
-        ),
-      );
-
-      expect(await store.checkDocumentExists("versionlib", "1.0.0")).toBe(true);
-      expect(await store.checkDocumentExists("versionlib", "2.0.0")).toBe(true);
-
-      const versions = await store.queryUniqueVersions("versionlib");
-      expect(versions).toContain("1.0.0");
-      expect(versions).toContain("2.0.0");
-    });
-
-    it("should store and retrieve etag and lastModified metadata", async () => {
-      const testEtag = '"abc123-def456"';
-      const testLastModified = "2023-12-01T10:30:00Z";
-
-      await store.addDocuments(
-        "etagtest",
-        "1.0.0",
-        1,
-        createScrapeResult(
-          "ETag Test Doc",
-          "https://example.com/etag-test",
-          "Test document with etag and lastModified",
-          ["test"],
-          { etag: testEtag, lastModified: testLastModified },
-        ),
-      );
-
-      // Query the database directly to verify the etag and last_modified are stored
-      // @ts-expect-error Accessing private property for testing
-      const db = store.db;
-      const pageResult = db
-        .prepare(`
-        SELECT p.etag, p.last_modified
-        FROM pages p
-        JOIN versions v ON p.version_id = v.id
-        JOIN libraries l ON v.library_id = l.id
-        WHERE l.name = ? AND COALESCE(v.name, '') = ? AND p.url = ?
-      `)
-        .get("etagtest", "1.0.0", "https://example.com/etag-test") as
-        | {
-            etag: string | null;
-            last_modified: string | null;
-          }
-        | undefined;
-
-      expect(pageResult).toBeDefined();
-      expect(pageResult?.etag).toBe(testEtag);
-      expect(pageResult?.last_modified).toBe(testLastModified);
-
-      // Also verify we can retrieve the document and it contains the metadata
-      const results = await store.findByContent("etagtest", "1.0.0", "etag", 10);
-      expect(results.length).toBeGreaterThan(0);
-
-      const doc = results[0];
-      expect(doc.url).toBe("https://example.com/etag-test");
-    });
   });
 
   describe("Hybrid Search with Embeddings", () => {
-    beforeEach(async () => {
-      // Set up test documents with known semantic relationships for ranking tests
+    it("returns chunk positions, so search groups nearby chunks of a page", async () => {
+      const page = createScrapeResult("Hooks", "https://example.com/hooks", "unused");
+      page.chunks = ["First", "Second", "Third"].map((word, index) => ({
+        types: ["text"],
+        content: `${word} note about hooks.`,
+        section: { level: 0, path: [`part ${index}`] },
+      }));
+      await store.addDocuments("grouping", "1.0.0", 1, page);
+
+      const results = await new DocumentRetrieverService(store, appConfig).search(
+        "grouping",
+        "1.0.0",
+        "hooks",
+        10,
+      );
+
+      expect(results).toHaveLength(1);
+    });
+
+    it("orders results that score the same by URL, not by when they were stored", async () => {
+      // Anagram URLs give both pages the same mock embedding and the same bm25 score
+      for (const url of ["https://example.com/ba", "https://example.com/ab"]) {
+        await store.addDocuments(
+          "ties",
+          "1.0.0",
+          1,
+          createScrapeResult("Same Title", url, "identical tie content", ["same"]),
+        );
+      }
+
+      const results = await store.findByContent(
+        "ties",
+        "1.0.0",
+        "identical tie content",
+        10,
+      );
+
+      expect(results.map((result) => result.url)).toEqual([
+        "https://example.com/ab",
+        "https://example.com/ba",
+      ]);
+    });
+
+    it("filters full-text hits by version before reading other libraries' rows", async () => {
       await store.addDocuments(
         "searchtest",
         "1.0.0",
@@ -479,245 +483,145 @@ describe("DocumentStore - With Embeddings", () => {
           "JavaScript Programming Guide",
           "https://example.com/js-guide",
           "JavaScript programming tutorial with code examples and functions",
-          ["programming", "javascript"],
         ),
       );
       await store.addDocuments(
-        "searchtest",
+        "otherlib",
         "1.0.0",
         1,
         createScrapeResult(
-          "JavaScript Frameworks",
-          "https://example.com/js-frameworks",
-          "Advanced JavaScript frameworks like React and Vue for building applications",
-          ["programming", "javascript", "frameworks"],
+          "Other JavaScript Guide",
+          "https://other.example.com/js-guide",
+          "JavaScript programming tutorial from another library",
         ),
       );
-      await store.addDocuments(
-        "searchtest",
-        "1.0.0",
-        1,
-        createScrapeResult(
-          "Python Programming",
-          "https://example.com/python-guide",
-          "Python programming language tutorial for data science and machine learning",
-          ["programming", "python"],
-        ),
+
+      // Capturing the hybrid query's own CTE proves the hybrid path ran.
+      const { result, plan } = await queryPlanOf(
+        store,
+        "fts_scores AS MATERIALIZED",
+        () => store.findByContent("searchtest", "1.0.0", "JavaScript programming", 10),
       );
+
+      expect(result.map((r) => r.url)).toEqual(["https://example.com/js-guide"]);
+      expectVersionFilteredFullTextPlan(plan);
     });
 
-    it("should perform hybrid search combining vector and FTS", async () => {
-      const results = await store.findByContent(
-        "searchtest",
-        "1.0.0",
-        "JavaScript programming",
-        10,
+    it("scores a chunk found by one search method with that method's RRF term alone", async () => {
+      // Each method returns as many candidates as the limit, so with a limit
+      // of 3 the vector search misses the farthest page.
+      await store.shutdown();
+      store = new DocumentStore(":memory:", {
+        ...appConfig,
+        search: {
+          ...appConfig.search,
+          overfetchFactor: 1,
+          vectorMultiplier: 1,
+          weightVec: 1,
+          weightFts: 1,
+        },
+      });
+      await store.initialize();
+
+      // Vector distance from the query grows with the angle: a, b, d, then c.
+      const angles: Record<string, number> = {
+        "https://example.com/a": 0,
+        "https://example.com/b": 10,
+        "https://example.com/d": 20,
+        "https://example.com/c": 80,
+      };
+      const direction = (degrees: number) => {
+        const vector = new Array(mockEmbeddingDimension.value).fill(0);
+        vector[0] = Math.cos((degrees * Math.PI) / 180);
+        vector[1] = Math.sin((degrees * Math.PI) / 180);
+        return vector;
+      };
+      const embeddings = embeddingsOf(store);
+      vi.mocked(embeddings.embedQuery).mockImplementation(async () => direction(0));
+      vi.mocked(embeddings.embedDocuments).mockImplementation(async (texts) =>
+        texts.map((text) => {
+          const url = Object.keys(angles).find((u) => text.includes(`<url>${u}</url>`));
+          return direction(url ? angles[url] : 90);
+        }),
       );
 
-      expect(results.length).toBeGreaterThan(0);
-
-      // JavaScript documents should rank higher than non-JavaScript documents
-      const topResult = results[0];
-      expect(topResult.content.toLowerCase()).toContain("javascript");
-
-      // Results should have both vector and FTS ranking metadata
-      const hybridResults = results.filter(
-        (r) => r.vec_rank !== undefined && r.fts_rank !== undefined,
-      );
-
-      // At least some results should be hybrid matches
-      if (hybridResults.length > 0) {
-        for (const result of hybridResults) {
-          expect(result.vec_rank).toBeGreaterThan(0);
-          expect(result.fts_rank).toBeGreaterThan(0);
-          expect(result.score).toBeGreaterThan(0);
-        }
-      }
-
-      // All results should have valid scores
-      for (const result of results) {
-        expect(result.score).toBeGreaterThan(0);
-        expect(typeof result.score).toBe("number");
-        // Results should have either vec_rank, fts_rank, or both
-        expect(result.vec_rank !== undefined || result.fts_rank !== undefined).toBe(true);
-      }
-    });
-
-    it("should demonstrate semantic similarity through vector search", async () => {
-      const results = await store.findByContent(
-        "searchtest",
-        "1.0.0",
-        "programming tutorial", // Should match both exact terms and semantically similar content
-        10,
-      );
-
-      expect(results.length).toBeGreaterThan(0);
-
-      // Should find programming documents
-      const programmingResults = results.filter((r) =>
-        r.content.toLowerCase().includes("programming"),
-      );
-
-      expect(programmingResults.length).toBeGreaterThan(0);
-
-      // At least some results should have vector ranks (semantic/embedding matching)
-      // If no vector results, it might be because embeddings were disabled in this test run
-      const vectorResults = results.filter((r) => r.vec_rank !== undefined);
-      const ftsResults = results.filter((r) => r.fts_rank !== undefined);
-
-      // Either we have vector results (hybrid search) or FTS results (fallback)
-      expect(vectorResults.length > 0 || ftsResults.length > 0).toBe(true);
-
-      // All results should have valid scores
-      for (const result of results) {
-        expect(result.score).toBeGreaterThan(0);
-      }
-    });
-
-    it("should use partition-filtered vector search for hybrid results", async () => {
-      const originalApiKey = process.env.OPENAI_API_KEY;
-      try {
-        process.env.OPENAI_API_KEY = "test-key-for-partition-search";
-        await store.shutdown();
-
-        const cfg = loadConfig();
-        const embeddingConfig = EmbeddingConfig.parseEmbeddingConfig(
-          "openai:text-embedding-3-small",
-        );
-        cfg.app.embeddingModel = embeddingConfig.modelSpec;
-        store = new DocumentStore(":memory:", cfg);
-        await store.initialize();
-
+      // Only a and c contain the query word; c ranks first in full-text search.
+      const pages = [
+        ["A", "a", "A needle hidden somewhere in a long description of the haystack"],
+        ["B", "b", "A haystack described without the word"],
+        ["C", "c", "needle needle"],
+        ["D", "d", "Another haystack described without the word"],
+      ];
+      for (const [title, path, content] of pages) {
         await store.addDocuments(
-          "searchtest",
+          "rrflib",
           "1.0.0",
           1,
-          createScrapeResult(
-            "JavaScript Programming Guide",
-            "https://example.com/js-guide",
-            "JavaScript programming tutorial with code examples and functions",
-            ["programming", "javascript"],
-          ),
+          createScrapeResult(title, `https://example.com/${path}`, content),
         );
-        await store.addDocuments(
-          "searchtest",
-          "1.0.0",
-          1,
-          createScrapeResult(
-            "JavaScript Frameworks",
-            "https://example.com/js-frameworks",
-            "Advanced JavaScript frameworks like React and Vue for building applications",
-            ["programming", "javascript", "frameworks"],
-          ),
-        );
-
-        // @ts-expect-error Accessing private property for testing
-        const db = store.db;
-        const ddl = db
-          .prepare(
-            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
-          )
-          .get() as { sql: string };
-        expect(ddl.sql).toContain("library_id INTEGER partition key");
-        expect(ddl.sql).toContain("version_id INTEGER partition key");
-
-        const results = await store.findByContent(
-          "searchtest",
-          "1.0.0",
-          "application building",
-          10,
-        );
-        // @ts-expect-error Accessing private property for testing
-        const vector = await store.embeddings.embedQuery("application building");
-
-        expect(results.length).toBeGreaterThan(0);
-
-        const vectorResults = db
-          .prepare(`
-            SELECT dv.rowid, dv.distance
-            FROM documents_vec dv
-            WHERE dv.library_id = (
-              SELECT id FROM libraries WHERE name = ?
-            )
-              AND dv.version_id = (
-                SELECT v.id
-                FROM versions v
-                JOIN libraries l ON v.library_id = l.id
-                WHERE l.name = ? AND v.name = ?
-              )
-              AND dv.embedding MATCH ?
-              AND dv.k = ?
-            ORDER BY dv.distance
-          `)
-          .all("searchtest", "searchtest", "1.0.0", JSON.stringify(vector), 10);
-        expect(vectorResults.length).toBeGreaterThan(0);
-      } finally {
-        if (originalApiKey === undefined) {
-          delete process.env.OPENAI_API_KEY;
-        } else {
-          process.env.OPENAI_API_KEY = originalApiKey;
-        }
       }
+
+      const results = await store.findByContent("rrflib", "1.0.0", "needle", 3);
+
+      expect(
+        results.map((r) => ({ url: r.url, vec_rank: r.vec_rank, fts_rank: r.fts_rank })),
+      ).toEqual([
+        { url: "https://example.com/a", vec_rank: 1, fts_rank: 2 },
+        { url: "https://example.com/c", vec_rank: undefined, fts_rank: 1 },
+        { url: "https://example.com/b", vec_rank: 2, fts_rank: undefined },
+      ]);
+      expect(results.map((r) => r.score)).toEqual([1 / 61 + 1 / 62, 1 / 61, 1 / 62]);
     });
   });
 
   describe("Embedding Batch Processing", () => {
-    let mockEmbedDocuments: ReturnType<typeof vi.fn>;
+    let mockEmbedDocuments: MockedFunction<Embeddings["embedDocuments"]>;
 
     beforeEach(() => {
       mockEmbeddingDimension.value = 1536;
-      // Get reference to the mocked embedDocuments function if embeddings are enabled
-      // @ts-expect-error Accessing private property for testing
-      if (store.embeddings?.embedDocuments) {
-        // @ts-expect-error Accessing private property for testing
-        mockEmbedDocuments = vi.mocked(store.embeddings.embedDocuments);
-        mockEmbedDocuments.mockClear();
-      }
+      mockEmbedDocuments = vi.mocked(embeddingsOf(store).embedDocuments);
+      mockEmbedDocuments.mockClear();
     });
 
-    it("should successfully embed and store large batches of documents", async () => {
-      // Skip if embeddings are disabled
-      // @ts-expect-error Accessing private property for testing
-      if (!store.embeddings) {
-        return;
-      }
+    it("splits a page's chunks into batches within batchChars and batchSize, embedding every chunk", async () => {
+      // Five 15 KB chunks add up to more than batchChars (50 000), so one page
+      // needs several batches. Neither the URL nor the path holds "Batch", so
+      // only the indexed title can match the full-text query below.
+      const page = createScrapeResult("Batch Guide", "https://example.com/big-page", "");
+      page.chunks = Array.from({ length: 5 }, (_, i) => ({
+        types: ["text"],
+        content: `${String.fromCharCode(97 + i)}`.repeat(15_000),
+        section: { level: 0, path: [`part${i}`] },
+      }));
+      await store.addDocuments("batchtest", "1.0.0", 1, page);
 
-      // Add multiple large documents to verify batching works correctly
-      const docCount = 5;
-      const contentSize = 15000; // 15KB each - ensures batching behavior
-
-      for (let i = 0; i < docCount; i++) {
-        await store.addDocuments(
-          "batchtest",
-          "1.0.0",
-          1,
-          createScrapeResult(
-            `Batch Doc ${i + 1}`,
-            `https://example.com/batch-doc${i + 1}`,
-            "x".repeat(contentSize),
-            ["section"],
-          ),
+      const batches = mockEmbedDocuments.mock.calls.map(([texts]) => texts);
+      expect(batches.length).toBeGreaterThan(1);
+      for (const texts of batches) {
+        expect(texts.join("").length).toBeLessThanOrEqual(
+          appConfig.embeddings.batchChars,
         );
+        expect(texts.length).toBeLessThanOrEqual(appConfig.embeddings.batchSize);
       }
+      expect(batches.flat()).toHaveLength(5);
+      const { chunks } = await store.listVersionChunks("batchtest", "1.0.0", {
+        limit: 10,
+      });
+      expect(chunks.map((chunk) => chunk.hasEmbedding)).toEqual([
+        true,
+        true,
+        true,
+        true,
+        true,
+      ]);
 
-      // Verify all documents were successfully embedded and stored
-      expect(await store.checkDocumentExists("batchtest", "1.0.0")).toBe(true);
-
-      // Verify embedDocuments was called (batching occurred)
-      expect(mockEmbedDocuments).toHaveBeenCalled();
-
-      // Verify all documents are searchable (embeddings were applied)
-      const searchResults = await store.findByContent("batchtest", "1.0.0", "Batch", 10);
-      expect(searchResults.length).toBe(docCount);
+      // The title column is indexed for full-text search
+      const results = await store.findByContent("batchtest", "1.0.0", "Batch", 10);
+      expect(results).toHaveLength(5);
+      expect(results.every((result) => result.fts_rank !== undefined)).toBe(true);
     });
 
     it("should include proper document headers in embedding text", async () => {
-      // Skip if embeddings are disabled
-      // @ts-expect-error Accessing private property for testing
-      if (!store.embeddings) {
-        return;
-      }
-
       await store.addDocuments(
         "testlib",
         "1.0.0",
@@ -741,186 +645,98 @@ describe("DocumentStore - With Embeddings", () => {
   });
 
   describe("Status Tracking and Metadata", () => {
-    it("should update version status correctly", async () => {
-      await store.addDocuments(
-        "statuslib",
-        "1.0.0",
-        1,
-        createScrapeResult(
-          "Status Test",
-          "https://example.com/status-test",
-          "Status tracking test content",
-          ["test"],
-        ),
-      );
-      const versionId = await store.resolveVersionId("statuslib", "1.0.0");
+    const backdated = "2000-01-01 00:00:00";
 
-      await store.updateVersionStatus(versionId, VersionStatus.QUEUED);
+    async function seedStatus(status: VersionStatus): Promise<number> {
+      const versionId = await store.resolveVersionId("statuslib", status);
+      await store.updateVersionStatus(versionId, status);
+      return versionId;
+    }
 
-      const queuedVersions = await store.getVersionsByStatus([VersionStatus.QUEUED]);
-      expect(queuedVersions).toHaveLength(1);
-      expect(queuedVersions[0].library_name).toBe("statuslib");
-      expect(queuedVersions[0].name).toBe("1.0.0");
-      expect(queuedVersions[0].status).toBe(VersionStatus.QUEUED);
+    /** Sets every version's updated_at to `backdated`, as a long-silent run leaves it. */
+    function backdateVersions() {
+      // @ts-expect-error Accessing private property for testing
+      const db: DatabaseType = store.db;
+      // Without the trigger, which sets updated_at on every update, the rows can be backdated
+      db.exec("DROP TRIGGER versions_updated_at");
+      db.prepare("UPDATE versions SET updated_at = ?").run(backdated);
+    }
+
+    it("marks only queued and running versions alive", async () => {
+      const queued = await seedStatus(VersionStatus.QUEUED);
+      const running = await seedStatus(VersionStatus.RUNNING);
+      const completed = await seedStatus(VersionStatus.COMPLETED);
+      backdateVersions();
+
+      await store.markVersionsAlive([queued, running, completed]);
+
+      const updatedAt = async (versionId: number) =>
+        (await store.getVersionById(versionId))?.updated_at;
+      expect(await updatedAt(queued)).not.toBe(backdated);
+      expect(await updatedAt(running)).not.toBe(backdated);
+      expect(await updatedAt(completed)).toBe(backdated);
     });
 
-    it("should store and retrieve scraper options", async () => {
-      const versionId = await store.resolveVersionId("optionslib", "1.0.0");
+    it("claims an interrupted version once per read", async () => {
+      const running = await seedStatus(VersionStatus.RUNNING);
+      backdateVersions();
 
-      const scraperOptions = {
-        url: "https://example.com/docs",
-        library: "optionslib",
-        version: "1.0.0",
-        maxDepth: 3,
-        maxPages: 100,
-        scope: "subpages" as const,
-        followRedirects: true,
-        preserveHashes: true,
-      };
-
-      await store.storeScraperOptions(versionId, scraperOptions);
-      const retrieved = await store.getScraperOptions(versionId);
-
-      expect(retrieved).not.toBeNull();
-      expect(retrieved?.options.maxDepth).toBe(3);
-      expect(retrieved?.options.maxPages).toBe(100);
-      expect(retrieved?.options.scope).toBe("subpages");
-      expect(retrieved?.options.preserveHashes).toBe(true);
+      expect(await store.claimInterruptedVersion(running, backdated)).toBe(true);
+      expect(await store.getVersionById(running)).toMatchObject({
+        status: VersionStatus.RUNNING,
+        updated_at: expect.not.stringMatching(backdated),
+      });
+      // Another process read the same version, but this one claimed it first
+      expect(await store.claimInterruptedVersion(running, backdated)).toBe(false);
     });
   });
 
   describe("Embedding Retry Logic", () => {
-    let mockEmbedDocuments: ReturnType<typeof vi.fn>;
+    let mockEmbedDocuments: MockedFunction<Embeddings["embedDocuments"]>;
     let callCount: number;
 
-    beforeEach(async () => {
+    beforeEach(() => {
       callCount = 0;
-      // Get reference to the mocked embedDocuments function
-      // @ts-expect-error Accessing private property for testing
-      if (store.embeddings?.embedDocuments) {
-        // @ts-expect-error Accessing private property for testing
-        mockEmbedDocuments = vi.mocked(store.embeddings.embedDocuments);
-        mockEmbedDocuments.mockClear();
-      }
+      mockEmbedDocuments = vi.mocked(embeddingsOf(store).embedDocuments);
+      mockEmbedDocuments.mockClear();
     });
 
-    it("should successfully handle normal embedding without errors", async () => {
-      // Skip if embeddings are disabled
-      // @ts-expect-error Accessing private property for testing
-      if (!store.embeddings) {
-        return;
-      }
-
-      await store.addDocuments(
-        "normaltest",
-        "1.0.0",
-        1,
-        createScrapeResult(
-          "Normal Doc",
-          "https://example.com/normal",
-          "This is a normal sized document that should embed without issues",
-          ["test"],
-        ),
-      );
-
-      expect(mockEmbedDocuments).toHaveBeenCalled();
-      expect(await store.checkDocumentExists("normaltest", "1.0.0")).toBe(true);
-    });
-
-    it("should retry and split batch when size error occurs", async () => {
-      // Skip if embeddings are disabled
-      // @ts-expect-error Accessing private property for testing
-      if (!store.embeddings) {
-        return;
-      }
-
-      // Mock embedDocuments to fail first time with size error, then succeed on splits
+    it("splits a batch in half until the provider accepts it", async () => {
+      // The provider rejects every batch of more than one text
       mockEmbedDocuments.mockImplementation(async (texts: string[]) => {
-        callCount++;
-
-        // First call with multiple texts: simulate size error
-        if (callCount === 1 && texts.length > 1) {
+        if (texts.length > 1) {
           throw new Error("maximum context length exceeded");
         }
-
-        // Subsequent calls (after split): succeed with dummy embeddings
         return texts.map(() => new Array(1536).fill(0.1));
       });
 
-      // Create a scrape result with multiple chunks to trigger batching
-      const result = createScrapeResult(
-        "Batch Doc",
-        "https://example.com/batch",
-        "Content chunk 1",
-        ["section1"],
-      );
-      result.chunks = [
-        {
-          types: ["text"],
-          content: "Content chunk 1",
-          section: { level: 0, path: ["section1"] },
-        },
-        {
-          types: ["text"],
-          content: "Content chunk 2",
-          section: { level: 0, path: ["section2"] },
-        },
-      ];
+      const result = createScrapeResult("Multi Split", "https://example.com/multi", "");
+      result.chunks = [1, 2, 3, 4].map((n) => ({
+        types: ["text"],
+        content: `Chunk ${n}`,
+        section: { level: 0, path: [`s${n}`] },
+      }));
 
-      await store.addDocuments("retrytest", "1.0.0", 1, result);
+      await store.addDocuments("multisplit", "1.0.0", 1, result);
 
-      // Should have been called multiple times (initial failure + successful retries)
-      expect(callCount).toBeGreaterThan(1);
-      expect(await store.checkDocumentExists("retrytest", "1.0.0")).toBe(true);
-    });
-
-    it("should truncate single oversized text when size error occurs", async () => {
-      // Skip if embeddings are disabled
-      // @ts-expect-error Accessing private property for testing
-      if (!store.embeddings) {
-        return;
-      }
-
-      // Mock embedDocuments to fail first time with size error for single large text
-      mockEmbedDocuments.mockImplementation(async (texts: string[]) => {
-        callCount++;
-
-        // First call with full text: simulate size error
-        if (callCount === 1) {
-          throw new Error("This model's maximum context length is 8191 tokens");
-        }
-
-        // Second call (after truncation): succeed
-        return texts.map(() => new Array(1536).fill(0.1));
+      expect(mockEmbedDocuments.mock.calls.map(([texts]) => texts.length)).toEqual([
+        4, 2, 2, 1, 1, 1, 1,
+      ]);
+      const { chunks } = await store.listVersionChunks("multisplit", "1.0.0", {
+        limit: 10,
       });
-
-      // Create a document with very large content
-      const largeContent = "x".repeat(50000); // 50KB
-      await store.addDocuments(
-        "truncatetest",
-        "1.0.0",
-        1,
-        createScrapeResult("Large Doc", "https://example.com/large", largeContent, [
-          "section",
-        ]),
-      );
-
-      // Should have been called twice (initial failure + successful retry with truncated text)
-      expect(callCount).toBe(2);
-      expect(await store.checkDocumentExists("truncatetest", "1.0.0")).toBe(true);
+      expect(chunks.map((chunk) => chunk.hasEmbedding)).toEqual([true, true, true, true]);
     });
 
     it("should truncate an oversized single text after splitting a batch", async () => {
-      // Skip if embeddings are disabled
-      // @ts-expect-error Accessing private property for testing
-      if (!store.embeddings) {
-        return;
-      }
-
+      const maxTextLength = 800;
+      const singleTexts: string[] = [];
       mockEmbedDocuments.mockImplementation(async (texts: string[]) => {
-        callCount++;
+        if (texts.length === 1) {
+          singleTexts.push(texts[0]);
+        }
 
-        if (texts.length > 1 || texts[0].includes("oversized")) {
+        if (texts.length > 1 || texts[0].length > maxTextLength) {
           throw new Error("maximum context length exceeded");
         }
 
@@ -944,17 +760,16 @@ describe("DocumentStore - With Embeddings", () => {
 
       await store.addDocuments("splittruncatetest", "1.0.0", 1, result);
 
-      expect(callCount).toBeGreaterThan(2);
+      const oversizedAttempts = singleTexts.filter((text) => text.includes("oversized"));
+      expect(oversizedAttempts).toHaveLength(2);
+      const [original, retried] = oversizedAttempts;
+      expect(original.length).toBeGreaterThan(maxTextLength);
+      expect(retried.length).toBeLessThan(original.length);
+      expect(original.startsWith(retried)).toBe(true);
       expect(await store.checkDocumentExists("splittruncatetest", "1.0.0")).toBe(true);
     });
 
     it("should detect various size error messages", async () => {
-      // Skip if embeddings are disabled
-      // @ts-expect-error Accessing private property for testing
-      if (!store.embeddings) {
-        return;
-      }
-
       const sizeErrorMessages = [
         "maximum context length exceeded",
         "input is too long",
@@ -996,127 +811,54 @@ describe("DocumentStore - With Embeddings", () => {
       }
     });
 
-    it("should wrap non-size embedding errors without retry", async () => {
-      // Skip if embeddings are disabled
-      // @ts-expect-error Accessing private property for testing
-      if (!store.embeddings) {
-        return;
-      }
-
-      // Mock embedDocuments to fail with non-size error
-      mockEmbedDocuments.mockRejectedValue(
-        new Error("Network error: connection refused"),
-      );
-
-      const error = await store
-        .addDocuments(
-          "networkerror",
-          "1.0.0",
-          1,
-          createScrapeResult(
-            "Network Error Test",
+    it("wraps a provider error in a message with the page, the batch and a hint, without retrying", async () => {
+      const cases: [label: string, url: string, error: Error, expected: string[]][] = [
+        [
+          "a network error",
+          "https://example.com/network-error",
+          new Error("Network error: connection refused"),
+          [
+            "Failed to generate embeddings",
             "https://example.com/network-error",
-            "Test content",
-            ["test"],
-          ),
-        )
-        .catch((error: unknown) => error);
-
-      expect(error).toBeInstanceOf(Error);
-      const message = error instanceof Error ? error.message : String(error);
-      expect(message).toContain("Failed to generate embeddings");
-      expect(message).toContain("https://example.com/network-error");
-      expect(message).toContain("embedding service appears unreachable");
-      expect(message).toContain("Network error: connection refused");
-
-      // Should have been called only once (no retry for non-size errors)
-      expect(mockEmbedDocuments).toHaveBeenCalledTimes(1);
-    });
-
-    it("should include embedding context when provider response fails", async () => {
-      // Skip if embeddings are disabled
-      // @ts-expect-error Accessing private property for testing
-      if (!store.embeddings) {
-        return;
-      }
-
-      mockEmbedDocuments.mockRejectedValue(
-        new TypeError("Cannot read properties of undefined (reading '0')"),
-      );
-
-      const error = await store
-        .addDocuments(
-          "malformedresponse",
-          "1.0.0",
-          1,
-          createScrapeResult(
-            "Malformed Response Test",
+            "embedding service appears unreachable",
+            "Network error: connection refused",
+          ],
+        ],
+        [
+          "a malformed provider response",
+          "https://example.com/malformed-response",
+          new TypeError("Cannot read properties of undefined (reading '0')"),
+          [
+            "Failed to generate embeddings",
             "https://example.com/malformed-response",
-            "Test content",
-            ["test"],
-          ),
-        )
-        .catch((error: unknown) => error);
-
-      expect(error).toBeInstanceOf(Error);
-      const message = error instanceof Error ? error.message : String(error);
-      expect(message).toContain("Failed to generate embeddings");
-      expect(message).toContain("https://example.com/malformed-response");
-      expect(message).toContain("openai:text-embedding-3-small");
-      expect(message).toContain("Batch 1");
-      expect(message).toContain("Verify embedding provider configuration");
-      expect(message).toContain("request size");
-      expect(message).toContain("backend logs");
-      expect(message).toContain("Cannot read properties of undefined");
-    });
-
-    it("should handle nested retry for multiple batch splits", async () => {
-      // Skip if embeddings are disabled
-      // @ts-expect-error Accessing private property for testing
-      if (!store.embeddings) {
-        return;
-      }
-
-      // Mock to fail multiple times, requiring nested splits
-      mockEmbedDocuments.mockImplementation(async (texts: string[]) => {
-        callCount++;
-
-        // Fail on first two calls (requiring splits), succeed on smaller batches
-        if (callCount <= 2 && texts.length > 1) {
-          throw new Error("maximum context length exceeded");
-        }
-
-        return texts.map(() => new Array(1536).fill(0.1));
-      });
-
-      // Create multiple chunks to trigger multiple splits
-      const result = createScrapeResult(
-        "Multi Split",
-        "https://example.com/multi",
-        "Chunk 1",
-        ["s1"],
-      );
-      result.chunks = [
-        { types: ["text"], content: "Chunk 1", section: { level: 0, path: ["s1"] } },
-        { types: ["text"], content: "Chunk 2", section: { level: 0, path: ["s2"] } },
-        { types: ["text"], content: "Chunk 3", section: { level: 0, path: ["s3"] } },
-        { types: ["text"], content: "Chunk 4", section: { level: 0, path: ["s4"] } },
+            "openai:text-embedding-3-small",
+            "Batch 1",
+            "Verify embedding provider configuration",
+            "request size",
+            "backend logs",
+            "Cannot read properties of undefined",
+          ],
+        ],
       ];
 
-      await store.addDocuments("multisplit", "1.0.0", 1, result);
+      for (const [label, url, providerError, expected] of cases) {
+        mockEmbedDocuments.mockReset();
+        mockEmbedDocuments.mockRejectedValue(providerError);
 
-      // Should have been called multiple times due to splits
-      expect(callCount).toBeGreaterThan(2);
-      expect(await store.checkDocumentExists("multisplit", "1.0.0")).toBe(true);
+        const error = await store
+          .addDocuments(label, "1.0.0", 1, createScrapeResult(label, url, "Test content"))
+          .catch((e: unknown) => e);
+
+        const message = error instanceof Error ? error.message : String(error);
+        for (const part of expected) {
+          expect.soft(message, label).toContain(part);
+        }
+        // Not a size error, so no retry
+        expect.soft(mockEmbedDocuments, label).toHaveBeenCalledTimes(1);
+      }
     });
 
     it("should fail after retry if truncated text still too large", async () => {
-      // Skip if embeddings are disabled
-      // @ts-expect-error Accessing private property for testing
-      if (!store.embeddings) {
-        return;
-      }
-
       // Mock embedDocuments to always fail with size error (even after truncation)
       mockEmbedDocuments.mockRejectedValue(
         new Error("maximum context length exceeded - even after truncation"),
@@ -1148,55 +890,16 @@ describe("DocumentStore - With Embeddings", () => {
  */
 describe("DocumentStore - Without Embeddings (FTS-only)", () => {
   let store: DocumentStore;
-  let originalEnv: NodeJS.ProcessEnv;
+  let appConfig: AppConfig;
 
   beforeEach(() => {
-    // Save and clear environment variables to disable embeddings
-    originalEnv = { ...process.env };
-    delete process.env.OPENAI_API_KEY;
-    delete process.env.GOOGLE_API_KEY;
-    delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
-    delete process.env.AWS_ACCESS_KEY_ID;
-    delete process.env.AWS_SECRET_ACCESS_KEY;
-    delete process.env.AZURE_OPENAI_API_KEY;
+    appConfig = configWith("");
   });
 
   afterEach(async () => {
-    // Restore original environment
-    process.env = originalEnv;
-
     if (store) {
       await store.shutdown();
     }
-  });
-
-  describe("Initialization without embeddings", () => {
-    it("should initialize successfully without embedding credentials", async () => {
-      store = new DocumentStore(":memory:", appConfig);
-      await expect(store.initialize()).resolves.not.toThrow();
-    });
-
-    it("should store documents without vectorization", async () => {
-      store = new DocumentStore(":memory:", appConfig);
-      await store.initialize();
-
-      await expect(
-        store.addDocuments(
-          "react",
-          "18.0.0",
-          1,
-          createScrapeResult(
-            "React Hooks Guide",
-            "https://example.com/react-hooks",
-            "This is a test document about React hooks.",
-            ["React", "Hooks"],
-          ),
-        ),
-      ).resolves.not.toThrow();
-
-      const exists = await store.checkDocumentExists("react", "18.0.0");
-      expect(exists).toBe(true);
-    });
   });
 
   describe("FTS-only Search", () => {
@@ -1228,39 +931,134 @@ describe("DocumentStore - Without Embeddings (FTS-only)", () => {
       );
     });
 
-    it("should perform FTS-only search", async () => {
-      const results = await store.findByContent("testlib", "1.0.0", "React hooks", 5);
+    it("returns chunk positions, so search groups nearby chunks of a page", async () => {
+      const page = createScrapeResult("Hooks", "https://example.com/hooks", "unused");
+      page.chunks = ["First", "Second", "Third"].map((word, index) => ({
+        types: ["text"],
+        content: `${word} note about hooks.`,
+        section: { level: 0, path: [`part ${index}`] },
+      }));
+      await store.addDocuments("grouping", "1.0.0", 1, page);
 
-      expect(results.length).toBeGreaterThan(0);
-      expect(results[0].content).toContain("React hooks");
-      expect(results[0]).toHaveProperty("score");
-      expect(results[0]).toHaveProperty("fts_rank");
-      // Should NOT have vector rank since vectorization is disabled
-      expect((results[0] as any).vec_rank).toBeUndefined();
+      const results = await new DocumentRetrieverService(store, appConfig).search(
+        "grouping",
+        "1.0.0",
+        "hooks",
+        10,
+      );
+
+      expect(results).toHaveLength(1);
     });
 
-    it("should handle various search queries correctly", async () => {
-      const jsResults = await store.findByContent("testlib", "1.0.0", "TypeScript", 5);
-      expect(jsResults.length).toBeGreaterThan(0);
-      expect(jsResults[0].content).toContain("TypeScript");
+    it("orders results that score the same by URL, not by when they were stored", async () => {
+      // Anagram URLs give both pages the same mock embedding and the same bm25 score
+      for (const url of ["https://example.com/ba", "https://example.com/ab"]) {
+        await store.addDocuments(
+          "ties",
+          "1.0.0",
+          1,
+          createScrapeResult("Same Title", url, "identical tie content", ["same"]),
+        );
+      }
 
-      // Empty query should return empty results
-      const emptyResults = await store.findByContent("testlib", "1.0.0", "", 5);
-      expect(emptyResults).toHaveLength(0);
+      const results = await store.findByContent(
+        "ties",
+        "1.0.0",
+        "identical tie content",
+        10,
+      );
+
+      expect(results.map((result) => result.url)).toEqual([
+        "https://example.com/ab",
+        "https://example.com/ba",
+      ]);
     });
 
-    it("should escape FTS queries safely", async () => {
-      const maliciousQueries = [
-        "'; DROP TABLE documents; --",
-        "programming & development",
-        "function()",
-        "test* wildcard",
+    it("filters full-text hits by version before reading other libraries' rows", async () => {
+      await store.addDocuments(
+        "otherlib",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "Other Hooks Guide",
+          "https://other.example.com/react-hooks",
+          "React hooks from another library.",
+        ),
+      );
+
+      const { result, plan } = await queryPlanOf(store, "documents_fts MATCH", () =>
+        store.findByContent("testlib", "1.0.0", "React hooks", 5),
+      );
+
+      expect(result.map((r) => r.url)).toEqual(["https://example.com/react-hooks"]);
+      expectVersionFilteredFullTextPlan(plan);
+      // Ranked by full-text search alone, with no vector rank
+      expect(result[0].fts_rank).toBe(1);
+      expect(result[0].vec_rank).toBeUndefined();
+    });
+
+    it("returns nothing for an empty query", async () => {
+      expect(await store.findByContent("testlib", "1.0.0", "", 5)).toEqual([]);
+    });
+  });
+
+  describe("Stop words in queries", () => {
+    const hooksContent = "Hooks let function components keep state.";
+    const shelfContent = "It is on the shelf and in the box.";
+
+    beforeEach(async () => {
+      store = new DocumentStore(":memory:", appConfig);
+      await store.initialize();
+
+      await store.addDocuments(
+        "stopwords",
+        "1.0.0",
+        1,
+        createScrapeResult("Hooks", "https://example.com/hooks", hooksContent),
+      );
+      await store.addDocuments(
+        "stopwords",
+        "1.0.0",
+        1,
+        createScrapeResult("Shelf", "https://example.com/shelf", shelfContent),
+      );
+    });
+
+    const search = async (query: string) =>
+      (await store.findByContent("stopwords", "1.0.0", query, 10)).map(
+        (result) => result.content,
+      );
+
+    it("matches stop words only when the query has nothing else or quotes them", async () => {
+      const cases: [label: string, query: string, expected: unknown][] = [
+        [
+          "a chunk is found by its other words when the query also has stop words",
+          "What is the use of hooks?",
+          [hooksContent],
+        ],
+        [
+          "chunks do not match on stop words alone when the query has other words",
+          "Is it, in the sidecar?",
+          [],
+        ],
+        [
+          "stop words match when the query has nothing else",
+          "is it in the",
+          [shelfContent],
+        ],
+        [
+          "stop words match when the rest of the query is punctuation",
+          "is it in the ?",
+          [shelfContent],
+        ],
+        [
+          "stop words the user put in quotes are kept",
+          '"on the" hooks',
+          expect.arrayContaining([hooksContent, shelfContent]),
+        ],
       ];
-
-      for (const query of maliciousQueries) {
-        await expect(
-          store.findByContent("testlib", "1.0.0", query, 10),
-        ).resolves.not.toThrow();
+      for (const [label, query, expected] of cases) {
+        expect.soft(await search(query), label).toEqual(expected);
       }
     });
   });
@@ -1283,7 +1081,9 @@ describe("DocumentStore - Without Embeddings (FTS-only)", () => {
       );
     });
 
-    it("reports hasEmbedding false and embeddedChunkCount 0 when vector search is disabled", async () => {
+    it("reports no embeddings and no active embedding config when vector search is disabled", async () => {
+      expect(store.getActiveEmbeddingConfig()).toBeNull();
+
       const result = await store.listVersionChunks("testlib", "1.0.0", { limit: 10 });
       expect(result.chunks.length).toBeGreaterThan(0);
       for (const chunk of result.chunks) {
@@ -1304,13 +1104,13 @@ describe("DocumentStore - Without Embeddings (FTS-only)", () => {
  */
 describe("DocumentStore - Common Functionality", () => {
   let store: DocumentStore;
+  let appConfig: AppConfig;
 
-  // Use embeddings for these tests
+  // An embedding model without credentials, as on an install without an API
+  // key: the store falls back to full-text search.
   beforeEach(async () => {
-    const embeddingConfig = EmbeddingConfig.parseEmbeddingConfig(
-      "openai:text-embedding-3-small",
-    );
-    appConfig.app.embeddingModel = embeddingConfig.modelSpec;
+    vi.stubEnv("OPENAI_API_KEY", "");
+    appConfig = configWith("openai:text-embedding-3-small");
     store = new DocumentStore(":memory:", appConfig);
     await store.initialize();
   });
@@ -1319,37 +1119,116 @@ describe("DocumentStore - Common Functionality", () => {
     if (store) {
       await store.shutdown();
     }
+    vi.unstubAllEnvs();
   });
 
-  describe("getActiveEmbeddingConfig", () => {
-    it("should return null when no embedding config is provided", async () => {
-      // Create a store without embedding config (FTS-only mode)
-      appConfig.app.embeddingModel = "";
-      const ftsOnlyStore = new DocumentStore(":memory:", appConfig);
-      await ftsOnlyStore.initialize();
+  describe("Library Identity", () => {
+    type StatementMap = Record<string, { run: (...args: unknown[]) => unknown }>;
+    const statementsOf = (target: DocumentStore) =>
+      (target as unknown as { statements: StatementMap }).statements;
 
-      const config = ftsOnlyStore.getActiveEmbeddingConfig();
-      expect(config).toBeNull();
+    const listedLibraries = async () => [...(await store.queryLibraryVersions()).keys()];
 
-      await ftsOnlyStore.shutdown();
-    });
-  });
+    it("stores the trimmed name as entered and keeps it on later writes", async () => {
+      const first = await store.resolveVersionId(" Next.js Docs ", "");
+      const second = await store.resolveVersionId("next.js docs", "");
 
-  describe("Case Sensitivity", () => {
-    it("treats version names case-insensitively within a library", async () => {
-      const v1 = await store.resolveVersionId("cslib", "1.0.0");
-      const v2 = await store.resolveVersionId("cslib", "1.0.0");
-      const v3 = await store.resolveVersionId("cslib", "1.0.0");
-      expect(v1).toBe(v2);
-      expect(v2).toBe(v3);
+      expect(second).toBe(first);
+      expect(await listedLibraries()).toEqual(["Next.js Docs"]);
     });
 
-    it("collapses mixed-case version names to a single version id", async () => {
-      const v1 = await store.resolveVersionId("mixcase", "Alpha");
-      const v2 = await store.resolveVersionId("mixcase", "alpha");
-      const v3 = await store.resolveVersionId("mixcase", "ALPHA");
-      expect(v1).toBe(v2);
-      expect(v2).toBe(v3);
+    it("rejects an invalid new library name through either entry point and creates nothing", async () => {
+      const cases: [label: string, create: () => Promise<unknown>][] = [
+        ["an empty name", () => store.resolveVersionId("", "")],
+        ["a whitespace-only name", () => store.resolveVersionId("   ", "")],
+        ["a newline", () => store.resolveVersionId("React\nDocs", "")],
+        ["a tab", () => store.resolveVersionId("React\tDocs", "")],
+        [
+          "a claim with 101 code points",
+          () => store.claimVersion("a".repeat(101), "", "replace"),
+        ],
+      ];
+
+      for (const [label, create] of cases) {
+        await expect
+          .soft(create(), label)
+          .rejects.toBeInstanceOf(InvalidLibraryNameError);
+      }
+      expect(await listedLibraries()).toEqual([]);
+    });
+
+    it("creates a library and its first version atomically", async () => {
+      vi.spyOn(statementsOf(store).insertVersion, "run").mockImplementation(() => {
+        throw new Error("injected version insert failure");
+      });
+
+      await expect(store.resolveVersionId("Atomic", "1.0.0")).rejects.toThrow(
+        "injected version insert failure",
+      );
+      vi.restoreAllMocks();
+
+      expect(await store.getLibrary("Atomic")).toBeNull();
+    });
+
+    describe("findVersion", () => {
+      it("returns null for an unknown library or version and creates nothing", async () => {
+        await store.resolveVersionId("React", "18.0.0");
+        const before = await store.queryLibraryVersions();
+
+        expect(await store.findVersion("vue", "")).toBeNull();
+        expect(await store.findVersion("react", "99.0.0")).toBeNull();
+        expect(await store.queryLibraryVersions()).toEqual(before);
+      });
+    });
+
+    describe("removeVersion", () => {
+      it("rolls back every delete when a later one fails", async () => {
+        await store.addDocuments(
+          "React",
+          "",
+          0,
+          createScrapeResult("Doc", "https://example.com/react", "content"),
+        );
+        vi.spyOn(statementsOf(store).deleteLibraryById, "run").mockImplementation(() => {
+          throw new Error("injected library delete failure");
+        });
+
+        await expect(store.removeVersion("react", "")).rejects.toThrow();
+        vi.restoreAllMocks();
+
+        expect(await store.findVersion("react", "")).not.toBeNull();
+        expect(await store.checkDocumentExists("react", "")).toBe(true);
+        expect(
+          (await store.queryLibraryVersions()).get("React")?.[0].uniqueUrlCount,
+        ).toBe(1);
+      });
+    });
+
+    it("lets the database arbitrate claims made through separate connections", async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "docs-mcp-claim-"));
+      const dbPath = join(tempDir, "claims.sqlite");
+      const first = new DocumentStore(dbPath, configWith(""));
+      await first.initialize();
+      const second = new DocumentStore(dbPath, configWith(""));
+      await second.initialize();
+
+      try {
+        const results = await Promise.allSettled([
+          first.claimVersion("Svelte", "", "reject-library"),
+          second.claimVersion("svelte", "", "reject-library"),
+        ]);
+
+        expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+        const rejected = results.filter((r) => r.status === "rejected");
+        expect(rejected).toHaveLength(1);
+        expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(
+          LibraryAlreadyExistsError,
+        );
+      } finally {
+        await first.shutdown();
+        await second.shutdown();
+        rmSync(tempDir, { recursive: true, force: true });
+      }
     });
   });
 
@@ -1389,13 +1268,6 @@ describe("DocumentStore - Common Functionality", () => {
       await expect(store.deletePages("paritylib", " 1.0.0 ")).resolves.toBeGreaterThan(0);
       await expect(store.checkDocumentExists("paritylib", "1.0.0")).resolves.toBe(false);
     });
-
-    it("resolves a library by a padded name", async () => {
-      await store.resolveVersionId("padlib", "1.0.0");
-      await expect(store.getLibrary(" PADLIB ")).resolves.toMatchObject({
-        name: "padlib",
-      });
-    });
   });
 
   describe("Version Listing Order", () => {
@@ -1417,41 +1289,6 @@ describe("DocumentStore - Common Functionality", () => {
       ]);
       // Unversioned leads the listing; it is not the newest *version*.
       expect(versions.filter((v) => v.version !== "")[0].version).toBe("2.0.0-beta");
-    });
-  });
-
-  describe("Version Label Normalization", () => {
-    it("collapses surrounding whitespace into a single version id", async () => {
-      const padded = await store.resolveVersionId("wslib", " 1.0.0 ");
-      const bare = await store.resolveVersionId("wslib", "1.0.0");
-      expect(padded).toBe(bare);
-    });
-
-    it("treats a whitespace-only label as unversioned", async () => {
-      const blank = await store.resolveVersionId("wslib2", "   ");
-      const empty = await store.resolveVersionId("wslib2", "");
-      expect(blank).toBe(empty);
-    });
-
-    it("keeps a partial version distinct from its full form", async () => {
-      // "1.20" is stored verbatim, never coerced to "1.20.0" — they are
-      // separate buckets that each remain addressable.
-      const partial = await store.resolveVersionId("partiallib", "1.20");
-      const full = await store.resolveVersionId("partiallib", "1.20.0");
-      expect(partial).not.toBe(full);
-    });
-
-    it("accepts a non-version label without rejecting it", async () => {
-      const tag = await store.resolveVersionId("taglib", "stable");
-      expect(typeof tag).toBe("number");
-      const versions = await store.queryUniqueVersions("taglib");
-      expect(versions).toContain("stable");
-    });
-
-    it("collapses surrounding whitespace on the library name too", async () => {
-      const padded = await store.resolveVersionId(" spacedlib ", "1.0.0");
-      const bare = await store.resolveVersionId("spacedlib", "1.0.0");
-      expect(padded).toBe(bare);
     });
   });
 
@@ -1528,104 +1365,57 @@ describe("DocumentStore - Common Functionality", () => {
       expect(pagesAfter.length).toBe(0); // Pages should be deleted too
       expect(await store.checkDocumentExists(library, version)).toBe(false);
     });
+  });
 
-    it("should retrieve documents by ID", async () => {
-      await store.addDocuments(
-        "idtest",
-        "1.0.0",
-        1,
-        createScrapeResult(
-          "ID Test Doc",
-          "https://example.com/id-test",
-          "Test document for ID retrieval",
-          ["test"],
-        ),
-      );
-      const results = await store.findByContent("idtest", "1.0.0", "test document", 10);
-      expect(results.length).toBeGreaterThan(0);
+  describe("Child Chunk Lookup", () => {
+    const library = "tree-lib";
+    const version = "1.0.0";
 
-      const doc = results[0];
-      expect(doc.id).toBeDefined();
+    it("returns the chunks one level below the parent's path", async () => {
+      const cases: [label: string, paths: string[][], expected: string[][]][] = [
+        [
+          "a path that only shares a text prefix with the parent is ignored",
+          [["A"], ["AB", "X"], ["A", "B"]],
+          [["A", "B"]],
+        ],
+        [
+          "LIKE wildcards in path segments are literal text",
+          [["a_c%"], ["abcd", "X"], ["a_c%", "Y"]],
+          [["a_c%", "Y"]],
+        ],
+        [
+          "path segments may contain quotes, backslashes or non-ASCII text",
+          [['Say "hi" \\ 日本語'], ['Say "hi" \\ 日本語', "Détails"]],
+          [['Say "hi" \\ 日本語', "Détails"]],
+        ],
+        [
+          "top-level chunks are the children of a root chunk",
+          [[], ["A"], [], ["A", "B"]],
+          [["A"]],
+        ],
+      ];
 
-      const retrievedDoc = await store.getById(doc.id);
-      expect(retrievedDoc).not.toBeNull();
-      expect(retrievedDoc?.title).toBe("ID Test Doc");
-    });
+      for (const [index, [label, paths, expected]] of cases.entries()) {
+        const url = `https://example.com/tree-${index}`;
+        await store.addDocuments(library, version, 1, {
+          ...createScrapeResult("Tree", url, "tree"),
+          chunks: paths.map((path) => ({
+            types: ["text"],
+            content: `chunk ${path.join("/")}`,
+            section: { level: path.length, path },
+          })),
+        });
+        const [parent] = await store.findChunksByUrl(library, version, url);
 
-    it("should handle URL pre-deletion correctly", async () => {
-      const library = "url-update-test";
-      const version = "1.0.0";
-      const url = "https://example.com/test-page";
+        const children = await store.findChildChunks(library, version, parent.id, 10);
 
-      // Helper function to count documents
-      async function countDocuments(targetUrl?: string): Promise<number> {
-        let query = `
-          SELECT COUNT(*) as count
-          FROM documents d
-          JOIN pages p ON d.page_id = p.id
-          JOIN versions v ON p.version_id = v.id  
-          JOIN libraries l ON v.library_id = l.id
-          WHERE l.name = ? AND COALESCE(v.name, '') = ?
-        `;
-        const params: any[] = [library.toLowerCase(), version.toLowerCase()];
-
-        if (targetUrl) {
-          query += " AND p.url = ?";
-          params.push(targetUrl);
-        }
-
-        const result = (store as any).db.prepare(query).get(...params) as {
-          count: number;
-        };
-        return result.count;
+        expect
+          .soft(
+            children.map((child) => child.metadata.path),
+            label,
+          )
+          .toEqual(expected);
       }
-
-      // Add initial page with 2 chunks
-      await store.addDocuments(library, version, 1, {
-        ...createScrapeResult("Initial Test Page", url, "Initial content chunk 1", [
-          "section1",
-        ]),
-        chunks: [
-          {
-            types: ["text"],
-            content: "Initial content chunk 1",
-            section: { level: 0, path: ["section1"] },
-          },
-          {
-            types: ["text"],
-            content: "Initial content chunk 2",
-            section: { level: 0, path: ["section2"] },
-          },
-        ],
-      });
-      expect(await countDocuments()).toBe(2);
-      expect(await countDocuments(url)).toBe(2);
-
-      // Update with new page (should trigger pre-deletion)
-      await store.addDocuments(library, version, 1, {
-        ...createScrapeResult("Updated Test Page", url, "Updated content chunk 1", [
-          "updated-section1",
-        ]),
-        chunks: [
-          {
-            types: ["text"],
-            content: "Updated content chunk 1",
-            section: { level: 0, path: ["updated-section1"] },
-          },
-          {
-            types: ["text"],
-            content: "Updated content chunk 2",
-            section: { level: 0, path: ["updated-section2"] },
-          },
-          {
-            types: ["text"],
-            content: "Updated content chunk 3",
-            section: { level: 0, path: ["updated-section3"] },
-          },
-        ],
-      });
-      expect(await countDocuments()).toBe(3);
-      expect(await countDocuments(url)).toBe(3);
     });
   });
 
@@ -1655,36 +1445,55 @@ describe("DocumentStore - Common Functionality", () => {
       );
     });
 
-    it("should safely handle malicious queries", async () => {
-      const maliciousQuery = "'; DROP TABLE documents; --";
+    it("escapes queries with SQL, FTS syntax and special characters, finding the indexed words", async () => {
+      await store.addDocuments(
+        "security-test",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "Special Chars",
+          "https://example.com/special",
+          "Use @decorator or $variable in your code.",
+          ["syntax"],
+        ),
+      );
+      const programming = "https://example.com/programming";
+      const cliOptions = "https://example.com/cli-options";
+      const special = "https://example.com/special";
 
-      await expect(
-        store.findByContent("security-test", "1.0.0", maliciousQuery, 10),
-      ).resolves.not.toThrow();
+      // Each row lists the pages the query must find; an empty list only
+      // requires that the query runs without an FTS syntax error.
+      const cases: [query: string, expected: string[]][] = [
+        ["'; DROP TABLE documents; --", []],
+        ["programming & development", [programming]],
+        ["software (lifecycle)", []],
+        ["price: $99.99", []],
+        ["100% coverage", []],
+        ["function()", []],
+        ["test* wildcard", []],
+        ['"@decorator"', [special]],
+        ['"$variable"', [special]],
+        ['"foo-bar-baz"', []],
+        ['"test.method()"', []],
+        // An unbalanced quote is closed automatically
+        ['"--error-on-warnings', [cliOptions]],
+      ];
 
-      // Verify database is still functional
-      const normalResults = await store.findByContent(
+      for (const [query, expected] of cases) {
+        const urls = (await store.findByContent("security-test", "1.0.0", query, 10)).map(
+          (result) => result.url,
+        );
+        expect.soft(urls, query).toEqual(expect.arrayContaining(expected));
+      }
+
+      // The database still answers normal queries
+      const normal = await store.findByContent(
         "security-test",
         "1.0.0",
         "programming",
         10,
       );
-      expect(normalResults.length).toBeGreaterThan(0);
-    });
-
-    it("should handle special characters safely", async () => {
-      const specialCharQueries = [
-        "programming & development",
-        "software (lifecycle)",
-        "price: $99.99",
-        "100% coverage",
-      ];
-
-      for (const query of specialCharQueries) {
-        await expect(
-          store.findByContent("security-test", "1.0.0", query, 10),
-        ).resolves.not.toThrow();
-      }
+      expect(normal.map((result) => result.url)).toEqual([programming]);
     });
 
     it("should handle quoted strings with hyphens (issue #262)", async () => {
@@ -1702,44 +1511,6 @@ describe("DocumentStore - Common Functionality", () => {
       expect(
         results.some((result) => result.content.includes("--error-on-warnings")),
       ).toBe(true);
-    });
-
-    it("should handle other quoted strings with special characters", async () => {
-      await store.addDocuments(
-        "security-test",
-        "1.0.0",
-        1,
-        createScrapeResult(
-          "Special Chars",
-          "https://example.com/special",
-          "Use @decorator or $variable in your code.",
-          ["syntax"],
-        ),
-      );
-
-      // Test various quoted strings with special characters
-      const testQueries = [
-        '"@decorator"',
-        '"$variable"',
-        '"foo-bar-baz"',
-        '"test.method()"',
-      ];
-
-      for (const query of testQueries) {
-        await expect(
-          store.findByContent("security-test", "1.0.0", query, 10),
-        ).resolves.not.toThrow();
-      }
-    });
-
-    it("should handle unbalanced quotes by auto-closing them", async () => {
-      // User forgot closing quote
-      const query = '"--error-on-warnings';
-
-      // Should not throw syntax error
-      await expect(
-        store.findByContent("security-test", "1.0.0", query, 10),
-      ).resolves.not.toThrow();
     });
 
     it("should preserve phrase search when user provides quotes", async () => {
@@ -1797,7 +1568,7 @@ describe("DocumentStore - Common Functionality", () => {
       ).toBe(true);
     });
 
-    it("should treat FTS operators as literal keywords when in unquoted position", async () => {
+    it("treats the FTS operators OR and NOT as literal keywords in unquoted position", async () => {
       await store.addDocuments(
         "security-test",
         "1.0.0",
@@ -1809,25 +1580,6 @@ describe("DocumentStore - Common Functionality", () => {
           ["queries"],
         ),
       );
-
-      // Query: "queries" OR malicious
-      // With OR semantics, each term is treated as optional
-      // So this becomes: exact match "queries OR malicious" OR ("queries" OR "OR" OR "malicious")
-      // This document contains "queries" and "OR", so it will match
-      const results = await store.findByContent(
-        "security-test",
-        "1.0.0",
-        '"queries" OR malicious',
-        10,
-      );
-
-      // This document contains "queries" and "OR" which satisfies the OR condition
-      expect(results.length).toBeGreaterThan(0);
-      expect(results[0].content).toContain("queries");
-      expect(results[0].content).toContain("OR");
-    });
-
-    it("should handle NOT operator as a literal keyword", async () => {
       await store.addDocuments(
         "security-test",
         "1.0.0",
@@ -1840,20 +1592,17 @@ describe("DocumentStore - Common Functionality", () => {
         ),
       );
 
-      // Query with NOT - treated as literal keyword with OR semantics
-      // Becomes: exact match "production NOT unsafe" OR ("production" OR "NOT" OR "unsafe")
-      // Document has "production" and "NOT" which satisfies the OR condition
-      const results = await store.findByContent(
-        "security-test",
-        "1.0.0",
-        '"production" NOT unsafe',
-        10,
-      );
-
-      // Document has "production" and "NOT" which matches via OR
-      expect(results.length).toBeGreaterThan(0);
-      expect(results[0].content).toContain("production");
-      expect(results[0].content).toContain("NOT");
+      // With OR semantics each term is optional, so '"queries" OR malicious'
+      // becomes: the exact phrase OR ("queries" OR "OR" OR "malicious"). The
+      // document holds "queries" and "OR", so it matches; likewise for NOT.
+      const cases: [query: string, url: string][] = [
+        ['"queries" OR malicious', "https://example.com/or-test"],
+        ['"production" NOT unsafe', "https://example.com/not-test"],
+      ];
+      for (const [query, url] of cases) {
+        const results = await store.findByContent("security-test", "1.0.0", query, 10);
+        expect.soft(results[0]?.url, query).toBe(url);
+      }
     });
   });
 
@@ -1902,60 +1651,48 @@ describe("DocumentStore - Common Functionality", () => {
       const versionId = await store.resolveVersionId("refresh-queue-test", "1.0.0");
       const pages = await store.getPagesByVersionId(versionId);
 
-      expect(pages.length).toBe(3);
+      expect(
+        pages
+          .map(({ url, etag, last_modified, depth }) => ({
+            url,
+            etag,
+            last_modified,
+            depth,
+          }))
+          .sort((a, b) => a.url.localeCompare(b.url)),
+      ).toEqual([
+        {
+          url: "https://example.com/page1",
+          etag: '"etag1"',
+          last_modified: "2023-01-01T00:00:00Z",
+          depth: 1,
+        },
+        {
+          url: "https://example.com/page2",
+          etag: '"etag2"',
+          last_modified: "2023-01-02T00:00:00Z",
+          depth: 1,
+        },
+        { url: "https://example.com/page3", etag: null, last_modified: null, depth: 1 },
+      ]);
+      expect(pages.every((page) => page.id > 0)).toBe(true);
 
-      // Verify page1 metadata
-      const page1 = pages.find((p) => p.url === "https://example.com/page1");
-      expect(page1).toBeDefined();
-      expect(page1!.id).toBeDefined();
-      expect(page1!.etag).toBe('"etag1"');
-      expect(page1!.depth).toBe(1);
-
-      // Verify page2 metadata
-      const page2 = pages.find((p) => p.url === "https://example.com/page2");
-      expect(page2).toBeDefined();
-      expect(page2!.etag).toBe('"etag2"');
-
-      // Verify page3 (no etag)
-      const page3 = pages.find((p) => p.url === "https://example.com/page3");
-      expect(page3).toBeDefined();
-      expect(page3!.etag).toBeNull();
-    });
-
-    it("should return empty array for version with no pages", async () => {
+      // A version without pages has none
       const emptyVersionId = await store.resolveVersionId("empty-lib", "1.0.0");
-      const pages = await store.getPagesByVersionId(emptyVersionId);
-
-      expect(pages).toEqual([]);
-    });
-
-    it("should include all metadata fields needed for refresh", async () => {
-      const versionId = await store.resolveVersionId("refresh-queue-test", "1.0.0");
-      const pages = await store.getPagesByVersionId(versionId);
-
-      // All pages should have the necessary fields for refresh operations
-      for (const page of pages) {
-        expect(page.id).toBeDefined();
-        expect(page.url).toBeDefined();
-        expect(page.depth).toBeDefined();
-        // etag can be null, but the field should exist
-        expect(page).toHaveProperty("etag");
-      }
+      expect(await store.getPagesByVersionId(emptyVersionId)).toEqual([]);
     });
   });
 
   describe("Chunk Explorer - listVersionChunks and getVersionStats", () => {
     const library = "chunk-explorer-test";
     const version = "1.0.0";
-    let originalApiKey: string | undefined;
 
     beforeEach(async () => {
       // The outer beforeEach creates a store without credentials available,
       // so vector search stays disabled (see areCredentialsAvailable). Recreate
       // the store with a credential present so these tests can assert on real
       // embedding presence.
-      originalApiKey = process.env.OPENAI_API_KEY;
-      process.env.OPENAI_API_KEY = "test-key-for-chunk-explorer";
+      vi.stubEnv("OPENAI_API_KEY", "test-key-for-chunk-explorer");
       await store.shutdown();
       store = new DocumentStore(":memory:", appConfig);
       await store.initialize();
@@ -2094,11 +1831,6 @@ describe("DocumentStore - Common Functionality", () => {
       expect(result.chunks).toEqual([]);
     });
 
-    it("returns an empty result for a version that doesn't exist", async () => {
-      const result = await store.listVersionChunks(library, "9.9.9", { limit: 10 });
-      expect(result).toEqual({ chunks: [], total: 0 });
-    });
-
     it("computes aggregate stats for the version", async () => {
       const stats = await store.getVersionStats(library, version);
 
@@ -2109,7 +1841,12 @@ describe("DocumentStore - Common Functionality", () => {
       expect(stats.embeddedChunkCount).toBe(4);
     });
 
-    it("returns zeroed/null stats for a version that doesn't exist", async () => {
+    it("returns no chunks and zeroed stats for a version that doesn't exist", async () => {
+      expect(await store.listVersionChunks(library, "9.9.9", { limit: 10 })).toEqual({
+        chunks: [],
+        total: 0,
+      });
+
       const stats = await store.getVersionStats(library, "9.9.9");
 
       expect(stats).toEqual({
@@ -2119,14 +1856,6 @@ describe("DocumentStore - Common Functionality", () => {
         avgTokensPerChunk: null,
         embeddedChunkCount: 0,
       });
-    });
-
-    afterEach(() => {
-      if (originalApiKey === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = originalApiKey;
-      }
     });
   });
 });
@@ -2161,6 +1890,8 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
     } else {
       process.env.OPENAI_API_KEY = originalApiKey;
     }
+    // Forget the dimensions tests cached or probed for their models
+    EmbeddingConfig.resetInstance();
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -2189,72 +1920,58 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
     return s;
   }
 
-  // 9.2 Test getEmbeddingMetadata returns null when no keys exist (first-run)
-  describe("getEmbeddingMetadata", () => {
-    it("should return null for both fields on first run before any embedding init", async () => {
-      // Create store in FTS-only mode so initializeEmbeddings skips metadata write
-      store = await createStore("");
-      const metadata = store.getEmbeddingMetadata();
-      expect(metadata.model).toBeNull();
-      expect(metadata.dimension).toBeNull();
+  it("reads no embedding metadata before any is written, then the latest written", async () => {
+    // FTS-only mode, so initializeEmbeddings writes no metadata
+    store = await createStore("");
+    expect(store.getEmbeddingMetadata()).toEqual({ model: null, dimension: null });
+
+    store.setEmbeddingMetadata("openai:text-embedding-3-small", 1536);
+    expect(store.getEmbeddingMetadata()).toEqual({
+      model: "openai:text-embedding-3-small",
+      dimension: "1536",
+    });
+
+    store.setEmbeddingMetadata("openai:text-embedding-ada-002", 768);
+    expect(store.getEmbeddingMetadata()).toEqual({
+      model: "openai:text-embedding-ada-002",
+      dimension: "768",
     });
   });
 
-  // 9.3 Test setEmbeddingMetadata writes and reads correctly
-  describe("setEmbeddingMetadata", () => {
-    it("should write and read model and dimension correctly", async () => {
-      store = await createStore("");
-      store.setEmbeddingMetadata("openai:text-embedding-3-small", 1536);
-
-      const metadata = store.getEmbeddingMetadata();
-      expect(metadata.model).toBe("openai:text-embedding-3-small");
-      expect(metadata.dimension).toBe("1536");
-    });
-
-    it("should overwrite existing metadata on subsequent calls", async () => {
-      store = await createStore("");
-      store.setEmbeddingMetadata("openai:text-embedding-3-small", 1536);
-      store.setEmbeddingMetadata("openai:text-embedding-ada-002", 768);
-
-      const metadata = store.getEmbeddingMetadata();
-      expect(metadata.model).toBe("openai:text-embedding-ada-002");
-      expect(metadata.dimension).toBe("768");
-    });
-  });
-
-  // 9.4 Test checkEmbeddingModelChange throws when model differs
   describe("checkEmbeddingModelChange", () => {
-    it("should throw EmbeddingModelChangedError when model differs", async () => {
-      // First init with model A
+    it("throws EmbeddingModelChangedError when the stored model or dimension differs", async () => {
       store = await createStore("openai:text-embedding-3-small");
+      const cases: [label: string, model: string, dimension: number][] = [
+        ["another model", "openai:text-embedding-ada-002", 1536],
+        ["another dimension", "openai:text-embedding-3-small", 768],
+      ];
+
+      for (const [label, model, dimension] of cases) {
+        store.setEmbeddingMetadata(model, dimension);
+        expect
+          .soft(() => store.checkEmbeddingModelChange(), label)
+          .toThrow(EmbeddingModelChangedError);
+      }
+    });
+
+    it("reports no change for a match, a first run without metadata, or FTS-only mode", async () => {
+      // The model and dimension match the metadata initialize() persisted
+      store = await createStore("openai:text-embedding-3-small");
+      expect(() => store.checkEmbeddingModelChange()).not.toThrow();
       await store.shutdown();
 
-      // Get the DB reference before shutdown wipes it — we need a fresh store on the same DB
-      // Since we use :memory:, we must simulate by manually setting metadata
-      store = await createStore("openai:text-embedding-3-small");
+      // A database without metadata, as an FTS-only run leaves it, opens with a model
+      const dbPath = join(tempDir, "first-run.sqlite");
+      store = await createStore("", undefined, dbPath);
+      expect(store.getEmbeddingMetadata().model).toBeNull();
+      await store.shutdown();
+      store = await createStore("openai:text-embedding-3-small", undefined, dbPath);
+      expect(store.getEmbeddingMetadata().model).toBe("openai:text-embedding-3-small");
+      await store.shutdown();
 
-      // Manually set stored metadata to a different model
-      store.setEmbeddingMetadata("openai:text-embedding-ada-002", 1536);
-
-      // Now checkEmbeddingModelChange should detect the mismatch
-      expect(() => store.checkEmbeddingModelChange()).toThrow(EmbeddingModelChangedError);
-    });
-
-    // 9.5 Test checkEmbeddingModelChange throws when dimension differs
-    it("should throw EmbeddingModelChangedError when dimension differs", async () => {
-      store = await createStore("openai:text-embedding-3-small");
-
-      // Set stored metadata with same model but different dimension
-      store.setEmbeddingMetadata("openai:text-embedding-3-small", 768);
-
-      expect(() => store.checkEmbeddingModelChange()).toThrow(EmbeddingModelChangedError);
-    });
-
-    // 9.6 Test checkEmbeddingModelChange does not throw when model and dimension match
-    it("should not throw when model and dimension match", async () => {
-      store = await createStore("openai:text-embedding-3-small");
-
-      // Metadata was persisted by initializeEmbeddings — check should pass
+      // FTS-only mode skips the check even when metadata exists from a prior run
+      store = await createStore("");
+      store.setEmbeddingMetadata("openai:text-embedding-3-small", 1536);
       expect(() => store.checkEmbeddingModelChange()).not.toThrow();
     });
 
@@ -2267,115 +1984,54 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
       expect(() => store.checkEmbeddingModelChange()).not.toThrow();
     });
 
-    // 9.7 Test checkEmbeddingModelChange does not throw on first run (no stored metadata)
-    it("should not throw on first run when no metadata exists", async () => {
-      // Create store but clear metadata to simulate first run
-      store = await createStore("openai:text-embedding-3-small");
+    it("reports no current dimension for a changed model whose dimension is not known yet", async () => {
+      const dbPath = join(tempDir, "changed-to-unknown.sqlite");
+      store = await createStore("openai:text-embedding-3-small", undefined, dbPath);
+      await store.shutdown();
 
-      // @ts-expect-error Accessing private property for testing
-      store.db.exec("DELETE FROM metadata");
+      const cfg = loadConfig();
+      cfg.app.embeddingModel = "openai:custom-unprobed-model";
+      store = new DocumentStore(dbPath, cfg);
+      const error = await store.initialize().catch((e: unknown) => e);
 
-      expect(() => store.checkEmbeddingModelChange()).not.toThrow();
-    });
-
-    // 9.8 Test checkEmbeddingModelChange does not throw in FTS-only mode
-    it("should not throw when in FTS-only mode (no embedding model)", async () => {
-      store = await createStore("");
-
-      // Even if metadata exists from a prior run, FTS-only skips the check
-      store.setEmbeddingMetadata("openai:text-embedding-3-small", 1536);
-
-      expect(() => store.checkEmbeddingModelChange()).not.toThrow();
+      expect(error).toBeInstanceOf(EmbeddingModelChangedError);
+      expect(error).toMatchObject({ previousDimension: "1536", currentDimension: null });
     });
   });
 
-  // 9.9, 9.10, 9.11 Test invalidateAllVectors
-  describe("invalidateAllVectors", () => {
-    it("should set all embeddings to NULL", async () => {
-      store = await createStore("openai:text-embedding-3-small");
+  it("invalidateAllVectors drops every embedding and records the new model and dimension", async () => {
+    store = await createStore("openai:text-embedding-3-small");
+    await store.addDocuments(
+      "testlib",
+      "1.0.0",
+      1,
+      createScrapeResult(
+        "Test Doc",
+        "https://example.com/test",
+        "Some test content for embedding invalidation",
+      ),
+    );
+    expect((await store.getVersionStats("testlib", "1.0.0")).embeddedChunkCount).toBe(1);
 
-      // Add a document so we have an embedding to invalidate
-      await store.addDocuments(
-        "testlib",
-        "1.0.0",
-        1,
-        createScrapeResult(
-          "Test Doc",
-          "https://example.com/test",
-          "Some test content for embedding invalidation",
-        ),
-      );
+    store.invalidateAllVectors("openai:text-embedding-ada-002", 768);
 
-      // Verify embedding exists
-      // @ts-expect-error Accessing private property for testing
-      const before = store.db
-        .prepare("SELECT COUNT(*) as cnt FROM documents WHERE embedding IS NOT NULL")
-        .get() as { cnt: number };
-      expect(before.cnt).toBeGreaterThan(0);
-
-      store.invalidateAllVectors("openai:text-embedding-ada-002", 1536);
-
-      // @ts-expect-error Accessing private property for testing
-      const after = store.db
-        .prepare("SELECT COUNT(*) as cnt FROM documents WHERE embedding IS NOT NULL")
-        .get() as { cnt: number };
-      expect(after.cnt).toBe(0);
+    expect((await store.getVersionStats("testlib", "1.0.0")).embeddedChunkCount).toBe(0);
+    expect(store.getEmbeddingMetadata()).toEqual({
+      model: "openai:text-embedding-ada-002",
+      dimension: "768",
     });
-
-    it("should recreate documents_vec as empty", async () => {
-      store = await createStore("openai:text-embedding-3-small");
-
-      // Add a document to populate documents_vec
-      await store.addDocuments(
-        "testlib",
-        "1.0.0",
-        1,
-        createScrapeResult(
-          "Test Doc",
-          "https://example.com/test",
-          "Content for vec table test",
-        ),
-      );
-
-      // @ts-expect-error Accessing private property for testing
-      const vecBefore = store.db
-        .prepare("SELECT COUNT(*) as cnt FROM documents_vec")
-        .get() as { cnt: number };
-      expect(vecBefore.cnt).toBeGreaterThan(0);
-
-      store.invalidateAllVectors("openai:text-embedding-ada-002", 768);
-
-      // Vec table should exist but be empty
-      // @ts-expect-error Accessing private property for testing
-      const vecAfter = store.db
-        .prepare("SELECT COUNT(*) as cnt FROM documents_vec")
-        .get() as { cnt: number };
-      expect(vecAfter.cnt).toBe(0);
-
-      // And the new dimension should be reflected in the DDL
-      // @ts-expect-error Accessing private property for testing
-      const ddl = store.db
-        .prepare(
-          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
-        )
-        .get() as { sql: string };
-      expect(ddl.sql).toContain("768");
-      expect(ddl.sql).toContain("library_id INTEGER partition key");
-      expect(ddl.sql).toContain("version_id INTEGER partition key");
-    });
-
-    it("should update metadata with new model and dimension", async () => {
-      store = await createStore("openai:text-embedding-3-small");
-
-      store.invalidateAllVectors("openai:text-embedding-ada-002", 768);
-
-      const metadata = store.getEmbeddingMetadata();
-      expect(metadata.model).toBe("openai:text-embedding-ada-002");
-      expect(metadata.dimension).toBe("768");
-    });
+    // The vector table is recreated with the new dimension and its partition keys
+    // @ts-expect-error Accessing private property for testing
+    const ddl = store.db
+      .prepare(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
+      )
+      .get() as { sql: string };
+    expect(ddl.sql).toContain("FLOAT[768]");
+    expect(ddl.sql).toContain("library_id INTEGER partition key");
+    expect(ddl.sql).toContain("version_id INTEGER partition key");
   });
 
-  // 9.12, 9.13 Test ensureVectorTable
   describe("ensureVectorTable", () => {
     it("should create table with configured dimension and no backfill", async () => {
       store = await createStore("openai:text-embedding-3-small");
@@ -2400,98 +2056,76 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
       expect(count.cnt).toBe(0);
     });
 
-    it("should create table with auto-detected dimensions for unknown OpenAI-compatible models", async () => {
-      mockEmbeddingDimension.value = 1024;
-      store = await createStore("openai:custom-1024-model");
+    it("creates the table with the probed dimension for models without a known one", async () => {
+      const cases: [label: string, model: string, dimension: number][] = [
+        ["an unknown OpenAI-compatible model", "openai:custom-1024-model", 1024],
+        ["a variable-dimension known model", "openai:NovaSearch/stella_en_400M_v5", 6144],
+      ];
 
-      // @ts-expect-error Accessing private property for testing
-      const ddl = store.db
-        .prepare(
-          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
-        )
-        .get() as { sql: string };
-      expect(ddl.sql).toContain("1024");
-
-      const metadata = store.getEmbeddingMetadata();
-      expect(metadata.model).toBe("openai:custom-1024-model");
-      expect(metadata.dimension).toBe("1024");
+      for (const [label, model, dimension] of cases) {
+        mockEmbeddingDimension.value = dimension;
+        const probed = await createStore(model);
+        try {
+          // @ts-expect-error Accessing private property for testing
+          const ddl = probed.db
+            .prepare(
+              "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
+            )
+            .get() as { sql: string };
+          expect.soft(ddl.sql, label).toContain(`FLOAT[${dimension}]`);
+          expect.soft(probed.getEmbeddingMetadata(), label).toEqual({
+            model,
+            dimension: String(dimension),
+          });
+        } finally {
+          await probed.shutdown();
+        }
+      }
     });
 
-    it("should reuse stored dimensions for unknown models without another startup probe", async () => {
-      const dbPath = join(tempDir, "unknown-locked.sqlite");
-      mockEmbeddingDimension.value = 1024;
-      const firstStore = await createStore(
-        "openai:custom-locked-model",
-        undefined,
-        dbPath,
-      );
-      expect(mockEmbeddingCalls.query).toBe(1);
-      expect(firstStore.getEmbeddingMetadata().dimension).toBe("1024");
-      await firstStore.shutdown();
+    it("reuses the stored dimension for models without a known one, without probing again", async () => {
+      const cases: [label: string, model: string, stored: number, probed: number][] = [
+        ["an unknown model", "openai:custom-locked-model", 1024, 2048],
+        [
+          "a variable-dimension known model",
+          "openai:NovaSearch/stella_en_400M_v5",
+          6144,
+          8192,
+        ],
+      ];
 
-      mockEmbeddingCalls.query = 0;
-      mockEmbeddingDimension.value = 2048;
-      store = await createStore("openai:custom-locked-model", undefined, dbPath);
+      for (const [index, [label, model, stored, probed]] of cases.entries()) {
+        const dbPath = join(tempDir, `locked-${index}.sqlite`);
+        mockEmbeddingCalls.query = 0;
+        mockEmbeddingDimension.value = stored;
+        const firstStore = await createStore(model, undefined, dbPath);
+        expect.soft(mockEmbeddingCalls.query, label).toBe(1);
+        expect
+          .soft(firstStore.getEmbeddingMetadata().dimension, label)
+          .toBe(String(stored));
+        await firstStore.shutdown();
 
-      expect(mockEmbeddingCalls.query).toBe(0);
-      const metadata = store.getEmbeddingMetadata();
-      expect(metadata.model).toBe("openai:custom-locked-model");
-      expect(metadata.dimension).toBe("1024");
-
-      // @ts-expect-error Accessing private property for testing
-      const ddl = store.db
-        .prepare(
-          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
-        )
-        .get() as { sql: string };
-      expect(ddl.sql).toContain("1024");
-    });
-
-    it("should auto-detect dimensions for variable-dimension known models", async () => {
-      mockEmbeddingDimension.value = 6144;
-      store = await createStore("openai:NovaSearch/stella_en_400M_v5");
-
-      // @ts-expect-error Accessing private property for testing
-      const ddl = store.db
-        .prepare(
-          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
-        )
-        .get() as { sql: string };
-      expect(ddl.sql).toContain("6144");
-
-      const metadata = store.getEmbeddingMetadata();
-      expect(metadata.model).toBe("openai:NovaSearch/stella_en_400M_v5");
-      expect(metadata.dimension).toBe("6144");
-    });
-
-    it("should reuse stored dimensions for variable-dimension known models without another startup probe", async () => {
-      const dbPath = join(tempDir, "variable-locked.sqlite");
-      mockEmbeddingDimension.value = 6144;
-      const firstStore = await createStore(
-        "openai:NovaSearch/stella_en_400M_v5",
-        undefined,
-        dbPath,
-      );
-      expect(mockEmbeddingCalls.query).toBe(1);
-      expect(firstStore.getEmbeddingMetadata().dimension).toBe("6144");
-      await firstStore.shutdown();
-
-      mockEmbeddingCalls.query = 0;
-      mockEmbeddingDimension.value = 8192;
-      store = await createStore("openai:NovaSearch/stella_en_400M_v5", undefined, dbPath);
-
-      expect(mockEmbeddingCalls.query).toBe(0);
-      const metadata = store.getEmbeddingMetadata();
-      expect(metadata.model).toBe("openai:NovaSearch/stella_en_400M_v5");
-      expect(metadata.dimension).toBe("6144");
-
-      // @ts-expect-error Accessing private property for testing
-      const ddl = store.db
-        .prepare(
-          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
-        )
-        .get() as { sql: string };
-      expect(ddl.sql).toContain("6144");
+        // The provider now reports another dimension, but the store does not ask
+        mockEmbeddingCalls.query = 0;
+        mockEmbeddingDimension.value = probed;
+        const reopened = await createStore(model, undefined, dbPath);
+        try {
+          expect.soft(mockEmbeddingCalls.query, label).toBe(0);
+          expect.soft(reopened.getEmbeddingMetadata(), label).toEqual({
+            model,
+            dimension: String(stored),
+          });
+          // @ts-expect-error Accessing private property for testing
+          const ddl = reopened.db
+            .prepare(
+              "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
+            )
+            .get() as { sql: string };
+          expect.soft(ddl.sql, label).toContain(`FLOAT[${stored}]`);
+        } finally {
+          await reopened.shutdown();
+        }
+      }
     });
 
     it("should respect explicit vector dimension overrides for unknown models", async () => {
@@ -2519,29 +2153,30 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
       store = await createStore("");
     });
 
-    it("should reject invalid dimensions from provider probing", async () => {
-      mockEmbeddingDimension.value = 0;
-
-      await expect(createStore("openai:empty-vector-model")).rejects.toThrow(
-        "Invalid detected embedding dimension from embedding provider probe: 0. Must be a positive integer.",
-      );
-      store = await createStore("");
-    });
-
-    it("should reject invalid dimensions from known model lookup", async () => {
+    it("rejects a dimension that is not a positive integer, whether probed or looked up", async () => {
       EmbeddingConfig.setKnownModelDimensions("invalid-known-dimension-model", 0);
+      mockEmbeddingDimension.value = 0;
+      const cases: [model: string, message: string][] = [
+        [
+          "openai:empty-vector-model",
+          "Invalid detected embedding dimension from embedding provider probe: 0. Must be a positive integer.",
+        ],
+        [
+          "openai:invalid-known-dimension-model",
+          "Invalid detected embedding dimension from known model dimension lookup: 0. Must be a positive integer.",
+        ],
+      ];
 
-      await expect(createStore("openai:invalid-known-dimension-model")).rejects.toThrow(
-        "Invalid detected embedding dimension from known model dimension lookup: 0. Must be a positive integer.",
-      );
+      for (const [model, message] of cases) {
+        await expect.soft(createStore(model), model).rejects.toThrow(message);
+      }
       store = await createStore("");
     });
 
-    it("should be a no-op when dimension matches existing table", async () => {
-      store = await createStore("openai:text-embedding-3-small");
-
-      // Add a document to populate vec table
-      await store.addDocuments(
+    it("keeps the vector table and its vectors when reopened with the same model", async () => {
+      const dbPath = join(tempDir, "reopen.sqlite");
+      const first = await createStore("openai:text-embedding-3-small", undefined, dbPath);
+      await first.addDocuments(
         "testlib",
         "1.0.0",
         1,
@@ -2551,22 +2186,20 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
           "Content for no-op test",
         ),
       );
+      await first.shutdown();
+      vi.mocked(logger.info).mockClear();
 
-      // @ts-expect-error Accessing private property for testing
-      const vecBefore = store.db
-        .prepare("SELECT COUNT(*) as cnt FROM documents_vec")
-        .get() as { cnt: number };
-      expect(vecBefore.cnt).toBeGreaterThan(0);
+      store = await createStore("openai:text-embedding-3-small", undefined, dbPath);
 
-      // Calling ensureVectorTable again should be a no-op (dimension matches)
-      // @ts-expect-error Accessing private method for testing
-      store.ensureVectorTable();
-
-      // @ts-expect-error Accessing private property for testing
-      const vecAfter = store.db
-        .prepare("SELECT COUNT(*) as cnt FROM documents_vec")
-        .get() as { cnt: number };
-      expect(vecAfter.cnt).toBe(vecBefore.cnt);
+      // The table already has the dimension and partition keys, so it is not rebuilt
+      expect(logger.info).not.toHaveBeenCalledWith(
+        expect.stringContaining("vector index with partition-key schema"),
+      );
+      expect((await store.getVersionStats("testlib", "1.0.0")).embeddedChunkCount).toBe(
+        1,
+      );
+      const [hit] = await store.findByContent("testlib", "1.0.0", "no-op test", 5);
+      expect(hit.vec_rank).toBe(1);
     });
 
     it("should recognize partition-key columns with harmless constraint variations", async () => {
@@ -2610,7 +2243,10 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
 
       // @ts-expect-error Accessing private property for testing
       const db = store.db;
-      db.prepare("INSERT INTO libraries (name) VALUES (?)").run("legacyvec");
+      db.prepare("INSERT INTO libraries (name, display_name) VALUES (?, ?)").run(
+        "legacyvec",
+        "legacyvec",
+      );
       const { id: libraryId } = db
         .prepare("SELECT id FROM libraries WHERE name = ?")
         .get("legacyvec") as { id: number };
@@ -2760,6 +2396,30 @@ describe("DocumentStore - compaction", () => {
     expect(second.vacuumed).toBe(false);
   });
 
+  it("returns the store to its empty size after all pages are deleted", async () => {
+    const cfg = loadConfig();
+    cfg.app.embeddingModel = "";
+    store = new DocumentStore(join(tempDir, "documents.db"), cfg);
+    await store.initialize();
+    const emptyBytes = (await store.compact({ force: true })).afterBytes;
+
+    // Varied vocabulary gives the full-text index real weight; every page is
+    // its own transaction and so its own index segment, as during a scrape.
+    for (let i = 0; i < 20; i++) {
+      const words = Array.from({ length: 3000 }, (_, j) => `term${i}w${j}`).join(" ");
+      await store.addDocuments(
+        "compactlib",
+        "1.0.0",
+        1,
+        createScrapeResult(`Page ${i}`, `https://example.com/page-${i}`, words),
+      );
+    }
+    await store.deletePages("compactlib", "1.0.0");
+
+    const result = await store.compact({ force: false });
+    expect(result.afterBytes - emptyBytes).toBeLessThan(64 * 1024);
+  });
+
   it("does not vacuum when vacuum is false", async () => {
     const cfg = loadConfig();
     cfg.app.embeddingModel = "";
@@ -2818,7 +2478,6 @@ describe("DocumentStore - compaction", () => {
  */
 describe("DocumentStore - Markdown representation precedence", () => {
   let store: DocumentStore;
-  let originalEnv: NodeJS.ProcessEnv;
 
   const resultWith = (sourceContentType: string, content: string): ScrapeResult => ({
     url: "https://example.com/guide",
@@ -2853,59 +2512,49 @@ describe("DocumentStore - Markdown representation precedence", () => {
   };
 
   beforeEach(async () => {
-    originalEnv = { ...process.env };
-    delete process.env.OPENAI_API_KEY;
-    store = new DocumentStore(":memory:", appConfig);
+    store = new DocumentStore(":memory:", configWith(""));
     await store.initialize();
   });
 
   afterEach(async () => {
-    process.env = originalEnv;
     if (store) await store.shutdown();
   });
 
-  it("keeps the markdown representation when html arrives afterwards", async () => {
-    await store.addDocuments(
-      "lib",
-      "1.0",
-      0,
-      resultWith("text/markdown", "from markdown"),
-    );
-    await store.addDocuments("lib", "1.0", 0, competingWith("text/html", "from html"));
+  it("keeps markdown whichever representation was stored first", async () => {
+    const orders: [label: string, first: ScrapeResult, second: ScrapeResult][] = [
+      [
+        "markdown first",
+        resultWith("text/markdown", "md"),
+        competingWith("text/html", "html"),
+      ],
+      [
+        "html first",
+        resultWith("text/html", "html"),
+        competingWith("text/markdown", "md"),
+      ],
+    ];
 
-    expect(await storedContent()).toEqual(["from markdown"]);
-  });
-
-  it("replaces an html representation when markdown arrives afterwards", async () => {
-    await store.addDocuments("lib", "1.0", 0, resultWith("text/html", "from html"));
-    await store.addDocuments(
-      "lib",
-      "1.0",
-      0,
-      competingWith("text/markdown", "from markdown"),
-    );
-
-    expect(await storedContent()).toEqual(["from markdown"]);
-  });
-
-  it("does not depend on which representation was stored first", async () => {
-    // The pair above, stated as the property they exist to hold.
-    const markdownFirst = new DocumentStore(":memory:", appConfig);
-    await markdownFirst.initialize();
-    await markdownFirst.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "md"));
-    await markdownFirst.addDocuments("lib", "1.0", 0, competingWith("text/html", "html"));
-    const a = await markdownFirst.findChunksByUrl(
-      "lib",
-      "1.0",
-      "https://example.com/guide",
-    );
-    await markdownFirst.shutdown();
-
-    await store.addDocuments("lib", "1.0", 0, resultWith("text/html", "html"));
-    await store.addDocuments("lib", "1.0", 0, competingWith("text/markdown", "md"));
-    const b = await store.findChunksByUrl("lib", "1.0", "https://example.com/guide");
-
-    expect(a.map((r) => r.content)).toEqual(b.map((r) => r.content));
+    for (const [label, first, second] of orders) {
+      const orderStore = new DocumentStore(":memory:", configWith(""));
+      await orderStore.initialize();
+      try {
+        await orderStore.addDocuments("lib", "1.0", 0, first);
+        await orderStore.addDocuments("lib", "1.0", 0, second);
+        const chunks = await orderStore.findChunksByUrl(
+          "lib",
+          "1.0",
+          "https://example.com/guide",
+        );
+        expect
+          .soft(
+            chunks.map((chunk) => chunk.content),
+            label,
+          )
+          .toEqual(["md"]);
+      } finally {
+        await orderStore.shutdown();
+      }
+    }
   });
 
   it("decides on the recorded type, leaving the markdown judgement upstream", async () => {
@@ -2980,19 +2629,14 @@ describe("DocumentStore - Markdown representation precedence", () => {
     expect(await storedContent()).toEqual(["kept"]);
   });
 
-  it("still replaces markdown with newer markdown", async () => {
+  it("still replaces a representation with a newer one of the same type", async () => {
     // The rule is about representation, not about freezing the page.
-    await store.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "first"));
-    await store.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "second"));
+    for (const type of ["text/markdown", "text/html"]) {
+      await store.addDocuments("lib", "1.0", 0, resultWith(type, `first ${type}`));
+      await store.addDocuments("lib", "1.0", 0, resultWith(type, `second ${type}`));
 
-    expect(await storedContent()).toEqual(["second"]);
-  });
-
-  it("still replaces html with newer html", async () => {
-    await store.addDocuments("lib", "1.0", 0, resultWith("text/html", "first"));
-    await store.addDocuments("lib", "1.0", 0, resultWith("text/html", "second"));
-
-    expect(await storedContent()).toEqual(["second"]);
+      expect.soft(await storedContent(), type).toEqual([`second ${type}`]);
+    }
   });
 });
 
@@ -3026,79 +2670,189 @@ describe("DocumentStore - concurrent writes to one identity", () => {
     // Vector search on, so embedding introduces a real await between reading
     // the page row and writing it — which is the window the race lives in.
     mockEmbeddingDimension.value = 1536;
-    appConfig.app.embeddingModel = EmbeddingConfig.parseEmbeddingConfig(
-      "openai:text-embedding-3-small",
-    ).modelSpec;
-    store = new DocumentStore(":memory:", appConfig);
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    store = new DocumentStore(":memory:", configWith("openai:text-embedding-3-small"));
     await store.initialize();
   });
 
   afterEach(async () => {
     if (store) await store.shutdown();
+    vi.unstubAllEnvs();
   });
 
   /**
-   * Holds every embedding call open until both writers have reached it, so the
-   * two are provably in flight together. `Promise.all` alone does not guarantee
+   * Holds every embedding call open until `count` writers have reached it, so
+   * they are provably in flight together. `Promise.all` alone does not guarantee
    * that: whichever chain needs fewer microtask turns can finish outright
    * before the other reads the page row, and then there is no race to observe.
    */
-  function blockEmbeddingsUntilBothArrive(count: number): void {
-    const s = store as unknown as {
-      embedDocumentsWithRetry: (...args: unknown[]) => Promise<unknown>;
-    };
-    const original = s.embedDocumentsWithRetry.bind(s);
+  function blockEmbeddingsUntilAllArrive(count: number): void {
+    const embedDocuments = vi.mocked(embeddingsOf(store).embedDocuments);
+    const original = embedDocuments.getMockImplementation();
+    if (!original) {
+      throw new Error("The embedding model mock has no implementation");
+    }
     let arrived = 0;
-    let release!: () => void;
+    let release: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    s.embedDocumentsWithRetry = async (...args: unknown[]) => {
+    embedDocuments.mockImplementation(async (texts) => {
       arrived++;
       if (arrived >= count) release();
       await gate;
-      return original(...args);
-    };
+      return original(texts);
+    });
   }
 
-  it("stores one chunk set when both representations are written at once", async () => {
+  it("keeps one chunk set, the markdown one, when both representations are written at once", async () => {
     // Pins the observable property: two concurrent writes to one identity leave
-    // one chunk set, and it is the Markdown one.
+    // one chunk set, and it is the Markdown one, whichever write is scheduled
+    // first. The crawl flags whichever representation it reached second.
     //
     // It does not discriminate the in-transaction re-read that guards the
     // read-then-write window — reverting that still passes here, because
     // better-sqlite3 transactions are synchronous and a writer that enters one
     // completes before the other starts. The re-read is justified by reasoning
     // rather than by this test.
-    blockEmbeddingsUntilBothArrive(2);
+    blockEmbeddingsUntilAllArrive(4);
 
     await Promise.all([
-      store.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "from markdown")),
-      store.addDocuments("lib", "1.0", 0, competingWith("text/html", "from html")),
-    ]);
-
-    const chunks = await store.findChunksByUrl("lib", "1.0", "https://example.com/guide");
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0].content).toBe("from markdown");
-  });
-
-  it("keeps markdown whichever write is scheduled first", async () => {
-    blockEmbeddingsUntilBothArrive(2);
-
-    // The crawl flags whichever representation it reached second, so here it is
-    // the Markdown one — and Markdown still wins, which is the property.
-    await Promise.all([
-      store.addDocuments("lib", "1.0", 0, resultWith("text/html", "from html")),
       store.addDocuments(
-        "lib",
+        "markdown-first",
+        "1.0",
+        0,
+        resultWith("text/markdown", "from markdown"),
+      ),
+      store.addDocuments(
+        "markdown-first",
+        "1.0",
+        0,
+        competingWith("text/html", "from html"),
+      ),
+      store.addDocuments("html-first", "1.0", 0, resultWith("text/html", "from html")),
+      store.addDocuments(
+        "html-first",
         "1.0",
         0,
         competingWith("text/markdown", "from markdown"),
       ),
     ]);
 
-    const chunks = await store.findChunksByUrl("lib", "1.0", "https://example.com/guide");
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0].content).toBe("from markdown");
+    for (const library of ["markdown-first", "html-first"]) {
+      const chunks = await store.findChunksByUrl(
+        library,
+        "1.0",
+        "https://example.com/guide",
+      );
+      expect
+        .soft(
+          chunks.map((chunk) => chunk.content),
+          library,
+        )
+        .toEqual(["from markdown"]);
+    }
+  });
+});
+
+describe("DocumentStore - Page Lookup", () => {
+  let store: DocumentStore;
+
+  const addPage = (url: string, depth = 1, extra: Partial<ScrapeResult> = {}) =>
+    store.addDocuments("lib", "1.0", depth, {
+      ...createScrapeResult(`Title of ${url}`, url, `content of ${url}`),
+      ...extra,
+    });
+
+  beforeEach(async () => {
+    store = new DocumentStore(":memory:", configWith(""));
+    await store.initialize();
+  });
+
+  afterEach(async () => {
+    await store.shutdown();
+  });
+
+  describe("findPageUrls", () => {
+    it("finds a page by the content URL it was fetched from, only in its own version", async () => {
+      await addPage("https://x.dev/guide", 1, { contentUrl: "https://x.dev/guide.md" });
+
+      expect(await store.findPageUrls("lib", "1.0", ["https://x.dev/guide.md"])).toEqual([
+        "https://x.dev/guide",
+      ]);
+      // A library version that does not exist has no pages
+      expect(await store.findPageUrls("lib", "2.0", ["https://x.dev/guide"])).toEqual([]);
+    });
+  });
+
+  describe("findPageUrlsBySuffix", () => {
+    it("returns every page whose URL ends with the suffix", async () => {
+      await addPage("https://x.dev/v1/api");
+      await addPage("https://x.dev/v2/api");
+      await addPage("https://x.dev/v2/myapi");
+
+      const urls = await store.findPageUrlsBySuffix("lib", "1.0", ["/api"], 10);
+
+      expect(urls.sort()).toEqual(["https://x.dev/v1/api", "https://x.dev/v2/api"]);
+    });
+
+    it("ignores a trailing slash on the stored URL", async () => {
+      await addPage("https://x.dev/docs/guide/");
+
+      const urls = await store.findPageUrlsBySuffix("lib", "1.0", ["/docs/guide"], 10);
+
+      expect(urls).toEqual(["https://x.dev/docs/guide/"]);
+    });
+
+    it("treats LIKE wildcards in the suffix as literal characters", async () => {
+      await addPage("https://x.dev/docs/a_b");
+      await addPage("https://x.dev/docs/axb");
+
+      const urls = await store.findPageUrlsBySuffix("lib", "1.0", ["/docs/a_b"], 10);
+
+      expect(urls).toEqual(["https://x.dev/docs/a_b"]);
+    });
+  });
+
+  describe("listPages", () => {
+    it("lists pages ordered by depth, then URL, with the total count", async () => {
+      await addPage("https://x.dev/docs/b", 2);
+      await addPage("https://x.dev/docs/a", 2);
+      await addPage("https://x.dev/", 0);
+
+      const result = await store.listPages("lib", "1.0", {});
+
+      expect(result.total).toBe(3);
+      expect(result.pages.map((p) => p.url)).toEqual([
+        "https://x.dev/",
+        "https://x.dev/docs/a",
+        "https://x.dev/docs/b",
+      ]);
+    });
+
+    it("returns the requested page of results", async () => {
+      await addPage("https://x.dev/a");
+      await addPage("https://x.dev/b");
+      await addPage("https://x.dev/c");
+
+      const result = await store.listPages("lib", "1.0", { limit: 1, offset: 1 });
+
+      expect(result.total).toBe(3);
+      expect(result.pages.map((p) => p.url)).toEqual(["https://x.dev/b"]);
+    });
+
+    it("keeps only pages whose URL contains the filter anywhere", async () => {
+      await addPage("https://x.dev/docs/components/button");
+      await addPage("https://x.dev/blog/components");
+      await addPage("https://x.dev/docs/hooks");
+
+      const result = await store.listPages("lib", "1.0", { contains: "components" });
+
+      expect(result.total).toBe(2);
+      expect(result.pages.map((p) => p.url).sort()).toEqual([
+        "https://x.dev/blog/components",
+        "https://x.dev/docs/components/button",
+      ]);
+    });
   });
 });

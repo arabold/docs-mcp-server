@@ -5,7 +5,7 @@ import yaml from "yaml";
 import { z } from "zod";
 import { normalizeEnvValue } from "./env";
 import { logger } from "./logger";
-import { normalizePublicOrigin } from "./serverOrigin";
+import { normalizePublicOrigin, normalizePublicUrl } from "./serverOrigin";
 
 const managedConfigVectorDimensionOmissionMarker =
   "docs-mcp-server-managed-vector-dimension-omitted";
@@ -53,25 +53,78 @@ const envBoolean = z
   })
   .pipe(z.boolean());
 
-const publicOriginSchema = z
-  .preprocess((value) => {
-    if (typeof value !== "string") {
-      return value;
-    }
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
-  }, z.string().optional())
-  .transform((value, ctx) => {
+/**
+ * Parses a boolean environment variable the way configuration settings are
+ * parsed: "false", "0", "no", "off" and blank are false, anything else true.
+ * @param value - The variable's value.
+ * @returns The boolean, or undefined when the variable is unset.
+ */
+export function parseEnvBoolean(value: string | undefined): boolean | undefined {
+  return value === undefined ? undefined : envBoolean.parse(value);
+}
+
+/**
+ * Treats blank strings (empty env vars, `--flag ""`) as an absent value so that
+ * defaults and fallbacks apply instead of an empty string.
+ */
+const blankToUndefined = (value: unknown): unknown => {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+};
+
+/** Report a normalizer's error as the validation issue of the setting. */
+function addNormalizationIssue(ctx: z.RefinementCtx, error: unknown): void {
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: error instanceof Error ? error.message : String(error),
+  });
+}
+
+/**
+ * An optional string setting that `normalize` validates and canonicalizes.
+ * The normalizer treats empty values as absent and throws a message naming
+ * the setting for invalid ones.
+ */
+function normalizedStringSchema<T>(normalize: (value: string | undefined) => T) {
+  return z
+    .string()
+    .optional()
+    .transform((value, ctx) => {
+      try {
+        return normalize(value);
+      } catch (error) {
+        addNormalizationIssue(ctx, error);
+        return z.NEVER;
+      }
+    });
+}
+
+const publicOriginSchema = normalizedStringSchema(normalizePublicOrigin);
+const publicUrlSchema = normalizedStringSchema(normalizePublicUrl);
+
+/**
+ * Browser origins allowed to call the MCP endpoint in addition to loopback and
+ * the public URL's origin. Each entry must be an exact origin
+ * (`scheme://host[:port]`); a trailing slash is ignored.
+ */
+const allowedOriginsSchema = envStringArray.transform((values, ctx) => {
+  const origins: string[] = [];
+  for (const value of values) {
     try {
-      return normalizePublicOrigin(value);
+      const origin = normalizePublicOrigin(value, "server.allowedOrigins");
+      if (origin) {
+        origins.push(origin);
+      }
     } catch (error) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: error instanceof Error ? error.message : String(error),
-      });
+      addNormalizationIssue(ctx, error);
       return z.NEVER;
     }
-  });
+  }
+  return origins;
+});
 
 // --- Default Global Configuration ---
 
@@ -83,9 +136,15 @@ export const DEFAULT_CONFIG = {
     embeddingModel: "text-embedding-3-small",
   },
   server: {
+    name: "docs-mcp-server",
+    title: undefined as string | undefined,
+    instructions: undefined as string | undefined,
+    instructionsFile: undefined as string | undefined,
     protocol: "auto",
     host: "127.0.0.1",
+    publicUrl: undefined as string | undefined,
     publicOrigin: undefined as string | undefined,
+    allowedOrigins: [] as string[],
     ports: {
       default: 6280,
       worker: 8080,
@@ -103,6 +162,10 @@ export const DEFAULT_CONFIG = {
     maxPages: 1000,
     maxDepth: 3,
     maxConcurrency: 3,
+    // How often a pipeline marks its unfinished jobs alive in the store. A
+    // server starting on the same store treats a job as interrupted only after
+    // four intervals without a mark.
+    jobHeartbeatMs: 15_000,
     abortOnFailureRate: 0.5,
     preserveHashes: false,
     skipKnownTrackers: true,
@@ -166,9 +229,6 @@ export const DEFAULT_CONFIG = {
     weightFts: 1,
     vectorMultiplier: 10,
   },
-  sandbox: {
-    defaultTimeoutMs: 5000,
-  },
   assembly: {
     maxParentChainDepth: 10,
     childLimit: 3,
@@ -191,9 +251,18 @@ export const AppConfigSchema = z.object({
     .default(DEFAULT_CONFIG.app),
   server: z
     .object({
+      name: z.preprocess(
+        blankToUndefined,
+        z.string().default(DEFAULT_CONFIG.server.name),
+      ),
+      title: z.preprocess(blankToUndefined, z.string().optional()),
+      instructions: z.preprocess(blankToUndefined, z.string().optional()),
+      instructionsFile: z.preprocess(blankToUndefined, z.string().optional()),
       protocol: z.string().default(DEFAULT_CONFIG.server.protocol),
       host: z.string().default(DEFAULT_CONFIG.server.host),
+      publicUrl: publicUrlSchema.optional(),
       publicOrigin: publicOriginSchema.optional(),
+      allowedOrigins: allowedOriginsSchema.default(DEFAULT_CONFIG.server.allowedOrigins),
       ports: z
         .object({
           default: z.coerce.number().int().default(DEFAULT_CONFIG.server.ports.default),
@@ -205,8 +274,10 @@ export const AppConfigSchema = z.object({
       heartbeatMs: z.coerce.number().int().default(DEFAULT_CONFIG.server.heartbeatMs),
     })
     .default({
+      name: DEFAULT_CONFIG.server.name,
       protocol: DEFAULT_CONFIG.server.protocol,
       host: DEFAULT_CONFIG.server.host,
+      allowedOrigins: DEFAULT_CONFIG.server.allowedOrigins,
       ports: DEFAULT_CONFIG.server.ports,
       heartbeatMs: DEFAULT_CONFIG.server.heartbeatMs,
     }),
@@ -225,6 +296,11 @@ export const AppConfigSchema = z.object({
         .number()
         .int()
         .default(DEFAULT_CONFIG.scraper.maxConcurrency),
+      jobHeartbeatMs: z.coerce
+        .number()
+        .int()
+        .positive()
+        .default(DEFAULT_CONFIG.scraper.jobHeartbeatMs),
       abortOnFailureRate: z.coerce
         .number()
         .min(0)
@@ -384,14 +460,6 @@ export const AppConfigSchema = z.object({
         .default(DEFAULT_CONFIG.search.vectorMultiplier),
     })
     .default(DEFAULT_CONFIG.search),
-  sandbox: z
-    .object({
-      defaultTimeoutMs: z.coerce
-        .number()
-        .int()
-        .default(DEFAULT_CONFIG.sandbox.defaultTimeoutMs),
-    })
-    .default(DEFAULT_CONFIG.sandbox),
   assembly: z
     .object({
       maxParentChainDepth: z.coerce
@@ -466,9 +534,26 @@ const configMappings: ConfigMapping[] = [
   },
   { path: ["server", "host"], env: ["DOCS_MCP_HOST", "HOST"], cli: "host" },
   {
+    path: ["server", "publicUrl"],
+    env: ["DOCS_MCP_SERVER_PUBLIC_URL"],
+    cli: "publicUrl",
+  },
+  {
     path: ["server", "publicOrigin"],
     env: ["DOCS_MCP_SERVER_PUBLIC_ORIGIN"],
     cli: "publicOrigin",
+  },
+  { path: ["server", "name"], env: ["DOCS_MCP_SERVER_NAME"], cli: "serverName" },
+  { path: ["server", "title"], env: ["DOCS_MCP_SERVER_TITLE"], cli: "serverTitle" },
+  {
+    path: ["server", "instructions"],
+    env: ["DOCS_MCP_SERVER_INSTRUCTIONS"],
+    cli: "serverInstructions",
+  },
+  {
+    path: ["server", "instructionsFile"],
+    env: ["DOCS_MCP_SERVER_INSTRUCTIONS_FILE"],
+    cli: "serverInstructionsFile",
   },
   {
     path: ["app", "embeddingModel"],
@@ -488,6 +573,19 @@ const configMappings: ConfigMapping[] = [
   },
   // Add other mappings as needed for CLI/Env overrides
 ];
+
+/**
+ * CLI option keys (camelCase) that map onto a configuration setting.
+ *
+ * An option with one of these keys must not declare a yargs `default`: yargs
+ * would put that value into argv even when the flag is omitted, and it would
+ * then override the environment and the config file.
+ *
+ * @returns The mapped keys, e.g. `authEnabled`, `readOnly`, `protocol`.
+ */
+export function getConfigMappedCliKeys(): ReadonlySet<string> {
+  return new Set(configMappings.flatMap((mapping) => (mapping.cli ? [mapping.cli] : [])));
+}
 
 // --- Loader Logic ---
 
@@ -579,10 +677,14 @@ export function loadConfig(
     );
   }
 
-  if (hasParseIssueAtPath(parseResult.error, ["server", "publicOrigin"])) {
-    throw new Error(
-      `Invalid configuration for server.publicOrigin: ${parseResult.error.message}`,
-    );
+  // Invalid public-location settings are operator errors, not a corrupted
+  // file: fail loudly instead of quietly resetting to defaults below.
+  for (const setting of ["publicUrl", "publicOrigin", "allowedOrigins"]) {
+    if (hasParseIssueAtPath(parseResult.error, ["server", setting])) {
+      throw new Error(
+        `Invalid configuration for server.${setting}: ${parseResult.error.message}`,
+      );
+    }
   }
 
   // The file on disk is structurally wrong (e.g., array fields saved as
@@ -815,7 +917,7 @@ type ConfigObject = Record<string, unknown>;
  * Convert camelCase to UPPER_SNAKE_CASE
  * Example: "maxSize" → "MAX_SIZE", "maxNestingDepth" → "MAX_NESTING_DEPTH"
  */
-export function camelToUpperSnake(str: string): string {
+function camelToUpperSnake(str: string): string {
   return str.replace(/([a-z])([A-Z])/g, "$1_$2").toUpperCase();
 }
 
@@ -823,14 +925,14 @@ export function camelToUpperSnake(str: string): string {
  * Convert config path to environment variable name
  * Example: ["scraper", "document", "maxSize"] → "DOCS_MCP_SCRAPER_DOCUMENT_MAX_SIZE"
  */
-export function pathToEnvVar(pathArr: string[]): string {
+function pathToEnvVar(pathArr: string[]): string {
   return `DOCS_MCP_${pathArr.map(camelToUpperSnake).join("_")}`;
 }
 
 /**
  * Recursively collect all leaf paths from a config object
  */
-export function collectLeafPaths(obj: object, prefix: string[] = []): string[][] {
+function collectLeafPaths(obj: object, prefix: string[] = []): string[][] {
   const paths: string[][] = [];
   for (const [key, value] of Object.entries(obj)) {
     const currentPath = [...prefix, key];

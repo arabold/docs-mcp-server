@@ -4,16 +4,16 @@
 
 import type { Argv } from "yargs";
 import { startAppServer } from "../../app";
-import { PipelineFactory, type PipelineOptions } from "../../pipeline";
-import { createDocumentManagement, type DocumentManagementService } from "../../store";
-import type { IDocumentManagement } from "../../store/trpc/interfaces";
+import { openBackend } from "../../services/backend";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { loadConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
+import { withPublicUrlOptions } from "../options";
 import { registerGlobalServices } from "../services";
 import {
   type CliContext,
   createAppServerConfig,
+  ensurePlaywrightBrowsersInstalled,
   getEventBus,
   validateHost,
   validatePort,
@@ -24,21 +24,17 @@ export function createWebCommand(cli: Argv) {
     "web",
     "Start the web dashboard (Standalone Mode)",
     (yargs) => {
-      return yargs
-        .option("port", {
-          type: "string",
-          description: "Port for the web interface",
-        })
-        .option("host", {
-          type: "string",
-          description: "Host to bind the web interface to",
-        })
-        .option("public-origin", {
-          type: "string",
-          description:
-            "Public origin advertised to clients (e.g., https://docs.example.com)",
-          alias: "publicOrigin",
-        })
+      return withPublicUrlOptions(
+        yargs
+          .option("port", {
+            type: "string",
+            description: "Port for the web interface",
+          })
+          .option("host", {
+            type: "string",
+            description: "Host to bind the web interface to",
+          }),
+      )
         .option("embedding-model", {
           type: "string",
           description:
@@ -71,56 +67,38 @@ export function createWebCommand(cli: Argv) {
         searchDir: argv.storePath as string,
       });
 
+      // With a server URL, the server runs the jobs and their browser
+      if (!serverUrl) {
+        ensurePlaywrightBrowsersInstalled();
+      }
+
       try {
         const eventBus = getEventBus(argv as CliContext);
 
-        const docService: IDocumentManagement = await createDocumentManagement({
-          serverUrl,
+        const backend = await openBackend({
+          appConfig,
           eventBus,
-          appConfig: appConfig,
-        });
-        const pipelineOptions: PipelineOptions = {
-          recoverJobs: false, // Web command doesn't support job recovery
           serverUrl,
-          appConfig: appConfig,
-        };
-        const pipeline = serverUrl
-          ? await PipelineFactory.createPipeline(undefined, eventBus, {
-              serverUrl,
-              ...pipelineOptions,
-            })
-          : await PipelineFactory.createPipeline(
-              docService as DocumentManagementService,
-              eventBus,
-              pipelineOptions,
-            );
+          jobs: { interruptedJobs: "fail" }, // Web command doesn't support job recovery
+        });
+        // Registered first, so shutdown closes it even when a server fails to start
+        registerGlobalServices({ backend });
 
         // Configure web-only server
         const config = createAppServerConfig({
           enableWebInterface: true,
           enableMcpServer: false,
           enableApiServer: true,
-          enableWorker: !serverUrl,
           port: appConfig.server.ports.web,
-          externalWorkerUrl: serverUrl,
           showLogo: argv.logo as boolean,
           startupContext: {
             cliCommand: "web",
           },
         });
 
-        const appServer = await startAppServer(
-          docService,
-          pipeline,
-          eventBus,
-          config,
-          appConfig,
-        );
+        const appServer = await startAppServer(backend, config, appConfig);
 
-        registerGlobalServices({
-          appServer,
-          docService,
-        });
+        registerGlobalServices({ appServer });
 
         await new Promise(() => {}); // Keep running forever
       } catch (error) {

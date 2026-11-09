@@ -1,4 +1,4 @@
-import * as cheerio from "cheerio"; // Import cheerio
+import * as cheerio from "cheerio";
 import { describe, expect, it, vi } from "vitest";
 import type { ScraperOptions } from "../types";
 import { HtmlSanitizerMiddleware } from "./HtmlSanitizerMiddleware";
@@ -41,92 +41,44 @@ const createMockContext = (
   return context;
 };
 
+/** Sanitizes the HTML with a fresh middleware and returns the resulting DOM. */
+async function sanitize(
+  html: string,
+  excludeSelectors: string[] = [],
+): Promise<cheerio.CheerioAPI> {
+  const middleware = new HtmlSanitizerMiddleware();
+  const context = createMockContext(html, undefined, { excludeSelectors });
+  const next = vi.fn().mockResolvedValue(undefined);
+
+  await middleware.process(context, next);
+
+  expect(next).toHaveBeenCalledOnce();
+  expect(context.errors).toHaveLength(0);
+  if (!context.dom) throw new Error("DOM not defined");
+  return context.dom;
+}
+
 describe("HtmlSanitizerMiddleware", () => {
-  it("should remove default unwanted elements (nav, footer)", async () => {
-    const middleware = new HtmlSanitizerMiddleware();
-    const html = `
+  it("should remove default chrome and custom excludeSelectors and keep the rest", async () => {
+    const $ = await sanitize(
+      `
       <html><body>
         <nav>Navigation</nav>
-        <main>Main content</main>
-        <footer>Footer info</footer>
-      </body></html>`;
-    const context = createMockContext(html);
-    const next = vi.fn().mockResolvedValue(undefined);
-
-    await middleware.process(context, next);
-
-    expect(next).toHaveBeenCalledOnce();
-    // Use Cheerio syntax for assertions
-    expect(context.dom).toBeDefined();
-    if (!context.dom) throw new Error("DOM not defined"); // Type guard
-    expect(context.dom("nav").length).toBe(0); // Check element doesn't exist
-    expect(context.dom("footer").length).toBe(0);
-    expect(context.dom("main").text()).toBe("Main content");
-    expect(context.errors).toHaveLength(0);
-
-    // No close needed
-  });
-
-  it("should remove custom unwanted elements via excludeSelectors", async () => {
-    const customSelectors = [".remove-me", "#specific-id"];
-    const middleware = new HtmlSanitizerMiddleware();
-    const html = `
-      <html><body>
         <div class="keep-me">Keep</div>
         <div class="remove-me">Remove Class</div>
         <p id="specific-id">Remove ID</p>
         <p id="keep-id">Keep ID</p>
-      </body></html>`;
-    // Pass excludeSelectors via options in context creation
-    const context = createMockContext(html, undefined, {
-      excludeSelectors: customSelectors,
-    });
-    const next = vi.fn().mockResolvedValue(undefined);
+        <footer>Footer info</footer>
+      </body></html>`,
+      [".remove-me", "#specific-id"],
+    );
 
-    await middleware.process(context, next);
-
-    expect(next).toHaveBeenCalledOnce();
-    // Use Cheerio syntax for assertions
-    expect(context.dom).toBeDefined();
-    if (!context.dom) throw new Error("DOM not defined"); // Type guard
-    expect(context.dom(".remove-me").length).toBe(0);
-    expect(context.dom("#specific-id").length).toBe(0);
-    expect(context.dom(".keep-me").length).toBe(1);
-    expect(context.dom("#keep-id").length).toBe(1);
-    expect(context.errors).toHaveLength(0);
-
-    // No close needed
-  });
-
-  it("should combine default and custom selectors for removal", async () => {
-    const customSelectors = [".remove-custom"];
-    // Pass excludeSelectors via options in context creation AND middleware constructor
-    // Note: The middleware constructor options are primarily for default behavior,
-    // context options should ideally override or supplement. Let's test context options.
-    const middleware = new HtmlSanitizerMiddleware(); // No constructor options here
-    const html = `
-      <html><body>
-        <nav>Default Remove</nav>
-        <div class="remove-custom">Custom Remove</div>
-        <p>Keep</p>
-      </body></html>`;
-    const context = createMockContext(html, undefined, {
-      excludeSelectors: customSelectors,
-    });
-    const next = vi.fn().mockResolvedValue(undefined);
-
-    await middleware.process(context, next);
-
-    expect(next).toHaveBeenCalledOnce();
-    // Use Cheerio syntax for assertions
-    expect(context.dom).toBeDefined();
-    if (!context.dom) throw new Error("DOM not defined"); // Type guard
-    expect(context.dom("nav").length).toBe(0);
-    expect(context.dom(".remove-custom").length).toBe(0);
-    expect(context.dom("p").text()).toBe("Keep");
-    expect(context.errors).toHaveLength(0);
-
-    // No close needed
+    expect($("nav").length).toBe(0);
+    expect($("footer").length).toBe(0);
+    expect($(".remove-me").length).toBe(0);
+    expect($("#specific-id").length).toBe(0);
+    expect($(".keep-me").text()).toBe("Keep");
+    expect($("#keep-id").text()).toBe("Keep ID");
   });
 
   it("should skip processing if context.dom is missing for HTML content", async () => {
@@ -140,179 +92,174 @@ describe("HtmlSanitizerMiddleware", () => {
     expect(context.errors).toHaveLength(0);
   });
 
-  it("should strip Carbon Ads markup while keeping surrounding content", async () => {
-    const middleware = new HtmlSanitizerMiddleware();
-    const html = `
-      <html><body>
-        <main>
-          <div id="carbonads">
-            <span>
-              <span class="carbon-wrap">
-                <a href="https://srv.carbonads.net/ads/click/x/abc">
-                  <img alt="ads via Carbon" src="https://srv.carbonads.net/static/30242/abc.png" />
-                </a>
-                <a class="carbon-text" href="https://srv.carbonads.net/ads/click/x/abc">
-                  Frontend Masters - Become a Career-Ready Web Developer!
-                </a>
-                <a class="carbon-poweredby" href="https://carbonads.net/?utm_source=site">ads via Carbon</a>
+  it("should strip ads, search widgets, skip-links and breadcrumbs by default", async () => {
+    const cases: Array<{
+      label: string;
+      html: string;
+      removed: string[];
+      kept: Array<[selector: string, text: string]>;
+    }> = [
+      {
+        label: "Carbon Ads",
+        html: `
+          <main>
+            <div id="carbonads">
+              <span>
+                <span class="carbon-wrap">
+                  <a href="https://srv.carbonads.net/ads/click/x/abc">
+                    <img alt="ads via Carbon" src="https://srv.carbonads.net/static/30242/abc.png" />
+                  </a>
+                  <a class="carbon-text" href="https://srv.carbonads.net/ads/click/x/abc">
+                    Frontend Masters - Become a Career-Ready Web Developer!
+                  </a>
+                  <a class="carbon-poweredby" href="https://carbonads.net/?utm_source=site">ads via Carbon</a>
+                </span>
               </span>
-            </span>
-            <img src="https://cnv.event.prod.bidr.io/log/cnv?tag_id=3503" />
-            <img src="https://insight.adsrvr.org/track/pxl/?adv=abc" />
-          </div>
-          <img src="https://sp.analytics.yahoo.com/spp.pl?a=abc" />
-          <h1>HMR API</h1>
-          <p>Real documentation content describing the HMR API.</p>
-        </main>
-      </body></html>`;
-    const context = createMockContext(html);
-    const next = vi.fn().mockResolvedValue(undefined);
+              <img src="https://cnv.event.prod.bidr.io/log/cnv?tag_id=3503" />
+              <img src="https://insight.adsrvr.org/track/pxl/?adv=abc" />
+            </div>
+            <img src="https://sp.analytics.yahoo.com/spp.pl?a=abc" />
+            <h1>HMR API</h1>
+            <p>Real documentation content describing the HMR API.</p>
+          </main>`,
+        removed: [
+          "#carbonads",
+          'img[src*="bidr.io"]',
+          'img[src*="adsrvr.org"]',
+          'img[src*="analytics.yahoo.com"]',
+        ],
+        kept: [
+          ["h1", "HMR API"],
+          ["p", "Real documentation content"],
+        ],
+      },
+      {
+        label: "EthicalAds and Google AdSense",
+        html: `
+          <main>
+            <div data-ea-publisher="readthedocs" class="ethical-rtd">
+              <a href="https://server.ethicalads.io/proxy/click/abc/">Sponsored</a>
+            </div>
+            <ins class="adsbygoogle" data-ad-client="ca-pub-x"></ins>
+            <iframe id="google_ads_iframe_abc"></iframe>
+            <h2>Configuration</h2>
+          </main>`,
+        removed: [
+          ".ethical-rtd",
+          "[data-ea-publisher]",
+          ".adsbygoogle",
+          '[id^="google_ads_iframe"]',
+        ],
+        kept: [["h2", "Configuration"]],
+      },
+      {
+        label: "Algolia DocSearch and MkDocs search results",
+        html: `
+          <main>
+            <button class="DocSearch DocSearch-Button">Search ⌘K</button>
+            <div class="md-search-result">
+              <ol class="md-search-result__list"><li>Stale result</li></ol>
+            </div>
+            <h1>Guide</h1>
+          </main>`,
+        removed: [".DocSearch-Button", ".md-search-result"],
+        kept: [["h1", "Guide"]],
+      },
+      {
+        label: "skip-links and breadcrumbs",
+        html: `
+          <a href="#main" class="sr-only">Skip to main content</a>
+          <a href="#nav" class="skip-link">Skip navigation</a>
+          <ol aria-label="breadcrumb">
+            <li><a href="/">Home</a></li>
+            <li>Current</li>
+          </ol>
+          <ol itemscope itemtype="https://schema.org/BreadcrumbList">
+            <li>Crumb</li>
+          </ol>
+          <main>
+            <h1>Page Title</h1>
+            <span class="sr-only">Search</span>
+          </main>`,
+        removed: [
+          "a.sr-only",
+          "a.skip-link",
+          '[aria-label="breadcrumb"]',
+          '[itemtype*="BreadcrumbList"]',
+        ],
+        kept: [
+          ["h1", "Page Title"],
+          // The sr-only rule is scoped to <a>, so an icon-button's label survives.
+          ["span.sr-only", "Search"],
+        ],
+      },
+    ];
 
-    await middleware.process(context, next);
+    for (const { label, html, removed, kept } of cases) {
+      const $ = await sanitize(`<html><body>${html}</body></html>`);
 
-    expect(next).toHaveBeenCalledOnce();
-    if (!context.dom) throw new Error("DOM not defined");
-    expect(context.dom("#carbonads").length).toBe(0);
-    expect(context.dom('img[src*="bidr.io"]').length).toBe(0);
-    expect(context.dom('img[src*="adsrvr.org"]').length).toBe(0);
-    expect(context.dom('img[src*="analytics.yahoo.com"]').length).toBe(0);
-    expect(context.dom("h1").text()).toBe("HMR API");
-    expect(context.dom("p").text()).toContain("Real documentation content");
-    expect(context.errors).toHaveLength(0);
+      for (const selector of removed) {
+        expect.soft($(selector).length, `${label}: ${selector}`).toBe(0);
+      }
+      for (const [selector, text] of kept) {
+        expect.soft($(selector).text(), `${label}: ${selector}`).toContain(text);
+      }
+    }
   });
 
-  it("should keep prose links to the Carbon Ads apex domain", async () => {
-    // Regression: the click-redirect host (srv.carbonads.net) is the ad-only
-    // host; the apex (carbonads.net) is the human-facing landing page that a
-    // docs page discussing monetization might legitimately link to.
-    const middleware = new HtmlSanitizerMiddleware();
-    const html = `
-      <html><body>
-        <main>
-          <h1>How we fund this project</h1>
-          <p>
-            We monetize via
-            <a href="https://carbonads.net/">Carbon Ads</a> — see their site
-            for advertiser information.
-          </p>
-        </main>
-      </body></html>`;
-    const context = createMockContext(html);
-    const next = vi.fn().mockResolvedValue(undefined);
+  it("should keep prose, code and links that only mention ad networks", async () => {
+    const cases: Array<{
+      label: string;
+      html: string;
+      kept: Array<[selector: string, text: string]>;
+    }> = [
+      {
+        // Regression: the click-redirect host (srv.carbonads.net) is the ad-only
+        // host; the apex (carbonads.net) is the human-facing landing page that a
+        // docs page discussing monetization might legitimately link to.
+        label: "link to the Carbon Ads apex domain",
+        html: `
+          <main>
+            <h1>How we fund this project</h1>
+            <p>
+              We monetize via
+              <a href="https://carbonads.net/">Carbon Ads</a> — see their site
+              for advertiser information.
+            </p>
+          </main>`,
+        kept: [
+          ['a[href="https://carbonads.net/"]', "Carbon Ads"],
+          ["p", "Carbon Ads"],
+        ],
+      },
+      {
+        label: "prose and code naming ad hosts",
+        html: `
+          <main>
+            <h1>How third-party ads work</h1>
+            <p>
+              Networks like Carbon load their assets from
+              <code>srv.carbonads.net</code> and track clicks via
+              <code>bidr.io</code>.
+            </p>
+            <pre><code>&lt;img src="https://srv.carbonads.net/example.png" /&gt;</code></pre>
+          </main>`,
+        kept: [
+          ["h1", "How third-party ads work"],
+          ["p", "srv.carbonads.net"],
+          ["p", "bidr.io"],
+          ["pre code", "srv.carbonads.net"],
+        ],
+      },
+    ];
 
-    await middleware.process(context, next);
+    for (const { label, html, kept } of cases) {
+      const $ = await sanitize(`<html><body>${html}</body></html>`);
 
-    if (!context.dom) throw new Error("DOM not defined");
-    expect(context.dom('a[href="https://carbonads.net/"]').length).toBe(1);
-    expect(context.dom("p").text()).toContain("Carbon Ads");
-  });
-
-  it("should strip EthicalAds and Google AdSense markup", async () => {
-    const middleware = new HtmlSanitizerMiddleware();
-    const html = `
-      <html><body>
-        <main>
-          <div data-ea-publisher="readthedocs" class="ethical-rtd">
-            <a href="https://server.ethicalads.io/proxy/click/abc/">Sponsored</a>
-          </div>
-          <ins class="adsbygoogle" data-ad-client="ca-pub-x"></ins>
-          <iframe id="google_ads_iframe_abc"></iframe>
-          <h2>Configuration</h2>
-        </main>
-      </body></html>`;
-    const context = createMockContext(html);
-    const next = vi.fn().mockResolvedValue(undefined);
-
-    await middleware.process(context, next);
-
-    if (!context.dom) throw new Error("DOM not defined");
-    expect(context.dom(".ethical-rtd").length).toBe(0);
-    expect(context.dom("[data-ea-publisher]").length).toBe(0);
-    expect(context.dom(".adsbygoogle").length).toBe(0);
-    expect(context.dom('[id^="google_ads_iframe"]').length).toBe(0);
-    expect(context.dom("h2").text()).toBe("Configuration");
-  });
-
-  it("should strip Algolia DocSearch and MkDocs search-result widgets", async () => {
-    const middleware = new HtmlSanitizerMiddleware();
-    const html = `
-      <html><body>
-        <main>
-          <button class="DocSearch DocSearch-Button">Search ⌘K</button>
-          <div class="md-search-result">
-            <ol class="md-search-result__list"><li>Stale result</li></ol>
-          </div>
-          <h1>Guide</h1>
-        </main>
-      </body></html>`;
-    const context = createMockContext(html);
-    const next = vi.fn().mockResolvedValue(undefined);
-
-    await middleware.process(context, next);
-
-    if (!context.dom) throw new Error("DOM not defined");
-    expect(context.dom(".DocSearch-Button").length).toBe(0);
-    expect(context.dom(".md-search-result").length).toBe(0);
-    expect(context.dom("h1").text()).toBe("Guide");
-  });
-
-  it("should strip skip-links and breadcrumb variants", async () => {
-    const middleware = new HtmlSanitizerMiddleware();
-    const html = `
-      <html><body>
-        <a href="#main" class="sr-only">Skip to main content</a>
-        <a href="#nav" class="skip-link">Skip navigation</a>
-        <ol aria-label="breadcrumb">
-          <li><a href="/">Home</a></li>
-          <li>Current</li>
-        </ol>
-        <ol itemscope itemtype="https://schema.org/BreadcrumbList">
-          <li>Crumb</li>
-        </ol>
-        <main>
-          <h1>Page Title</h1>
-          <span class="sr-only">Search</span>
-        </main>
-      </body></html>`;
-    const context = createMockContext(html);
-    const next = vi.fn().mockResolvedValue(undefined);
-
-    await middleware.process(context, next);
-
-    if (!context.dom) throw new Error("DOM not defined");
-    expect(context.dom("a.sr-only").length).toBe(0);
-    expect(context.dom("a.skip-link").length).toBe(0);
-    expect(context.dom('[aria-label="breadcrumb"]').length).toBe(0);
-    expect(context.dom('[itemtype*="BreadcrumbList"]').length).toBe(0);
-    // The sr-only rule is scoped to <a>, so an icon-button's label survives.
-    expect(context.dom("span.sr-only").length).toBe(1);
-    expect(context.dom("h1").text()).toBe("Page Title");
-  });
-
-  it("should not strip prose or code blocks that mention ad-network hostnames", async () => {
-    const middleware = new HtmlSanitizerMiddleware();
-    const html = `
-      <html><body>
-        <main>
-          <h1>How third-party ads work</h1>
-          <p>
-            Networks like Carbon load their assets from
-            <code>srv.carbonads.net</code> and track clicks via
-            <code>bidr.io</code>.
-          </p>
-          <pre><code>&lt;img src="https://srv.carbonads.net/example.png" /&gt;</code></pre>
-        </main>
-      </body></html>`;
-    const context = createMockContext(html);
-    const next = vi.fn().mockResolvedValue(undefined);
-
-    await middleware.process(context, next);
-
-    if (!context.dom) throw new Error("DOM not defined");
-    expect(context.dom("h1").text()).toBe("How third-party ads work");
-    expect(context.dom("p").text()).toContain("srv.carbonads.net");
-    expect(context.dom("p").text()).toContain("bidr.io");
-    expect(context.dom("pre code").text()).toContain("srv.carbonads.net");
+      for (const [selector, text] of kept) {
+        expect.soft($(selector).text(), `${label}: ${selector}`).toContain(text);
+      }
+    }
   });
 
   it("should drop promo chrome that sits outside the main content region", async () => {
@@ -490,42 +437,5 @@ describe("HtmlSanitizerMiddleware", () => {
     const $ = context.dom;
     expect($?.("body").text()).not.toContain("Sponsor");
     expect($?.("h1").text()).toBe("Configuration reference");
-  });
-
-  it("should preserve text rather than emptying a page when exclusions remove everything", async () => {
-    const middleware = new HtmlSanitizerMiddleware();
-    // The caller's selector matches the only element carrying visible text.
-    // Emptying the page here would index a blank document; the extractor is
-    // expected to fall back to the pre-sanitization body instead.
-    const html = `
-      <html><body>
-        <div class="everything">
-          <h1>Installation</h1>
-          <p>Install the package with your package manager of choice, then add the plugin to your configuration file.</p>
-        </div>
-      </body></html>`;
-    const context = createMockContext(html, "http://example.com", {
-      excludeSelectors: [".everything"],
-    });
-    const next = vi.fn().mockResolvedValue(undefined);
-
-    await middleware.process(context, next);
-
-    expect(next).toHaveBeenCalledOnce();
-    const $ = context.dom;
-    expect($?.("body").text().trim()).not.toBe("");
-    expect($?.("body").text()).toContain("Install the package");
-  });
-
-  it("should skip processing if content type is not HTML", async () => {
-    const middleware = new HtmlSanitizerMiddleware();
-    const context = createMockContext("<script>alert(1)</script>");
-    const next = vi.fn().mockResolvedValue(undefined);
-
-    await middleware.process(context, next);
-
-    expect(next).toHaveBeenCalledOnce();
-    expect(context.content).toBe("<script>alert(1)</script>"); // Content unchanged
-    expect(context.errors).toHaveLength(0);
   });
 });

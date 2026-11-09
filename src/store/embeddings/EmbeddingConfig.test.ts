@@ -3,7 +3,11 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { EmbeddingConfig, SUPPORTED_PROVIDERS } from "./EmbeddingConfig";
+import {
+  EmbeddingConfig,
+  type EmbeddingModelConfig,
+  SUPPORTED_PROVIDERS,
+} from "./EmbeddingConfig";
 
 describe("EmbeddingConfig", () => {
   // Reset singleton instance before and after each test to ensure isolation
@@ -15,404 +19,298 @@ describe("EmbeddingConfig", () => {
     EmbeddingConfig.resetInstance();
   });
 
-  describe("parse", () => {
-    it("should use default model when no modelSpec is provided", () => {
-      const config = new EmbeddingConfig();
-      const result = config.parse();
-
-      expect(result.provider).toBe("openai");
-      expect(result.model).toBe("text-embedding-3-small");
-      expect(result.dimensions).toBe(1536);
-      expect(result.modelSpec).toBe("text-embedding-3-small");
-    });
-
-    it("should parse model without provider prefix (defaults to openai)", () => {
-      const config = new EmbeddingConfig();
-      const result = config.parse("text-embedding-ada-002");
-
-      expect(result.provider).toBe("openai");
-      expect(result.model).toBe("text-embedding-ada-002");
-      expect(result.dimensions).toBe(1536);
-      expect(result.modelSpec).toBe("text-embedding-ada-002");
-    });
-
-    it("should parse model with provider prefix", () => {
-      const config = new EmbeddingConfig();
-      const result = config.parse("gemini:embedding-001");
-
-      expect(result.provider).toBe("gemini");
-      expect(result.model).toBe("embedding-001");
-      expect(result.dimensions).toBe(768);
-      expect(result.modelSpec).toBe("gemini:embedding-001");
-    });
-
-    it("should handle AWS models with colons in model names", () => {
-      const config = new EmbeddingConfig();
-      const result = config.parse("aws:amazon.titan-embed-text-v2:0");
-
-      expect(result.provider).toBe("aws");
-      expect(result.model).toBe("amazon.titan-embed-text-v2:0");
-      expect(result.dimensions).toBe(1024);
-      expect(result.modelSpec).toBe("aws:amazon.titan-embed-text-v2:0");
-    });
-
-    it("should return null dimensions for unknown models", () => {
-      const config = new EmbeddingConfig();
-      const result = config.parse("openai:unknown-model");
-
-      expect(result.provider).toBe("openai");
-      expect(result.model).toBe("unknown-model");
-      expect(result.dimensions).toBeNull();
-      expect(result.modelSpec).toBe("openai:unknown-model");
-    });
-
-    it("should handle case-insensitive model lookups", () => {
-      const config = new EmbeddingConfig();
-      const result = config.parse("openai:TEXT-EMBEDDING-3-SMALL");
-
-      expect(result.provider).toBe("openai");
-      expect(result.model).toBe("TEXT-EMBEDDING-3-SMALL");
-      expect(result.dimensions).toBe(1536); // Should find the lowercase version
-      expect(result.modelSpec).toBe("openai:TEXT-EMBEDDING-3-SMALL");
-    });
-  });
-
-  describe("getKnownDimensions", () => {
-    it("should return known dimensions for existing models", () => {
-      const config = new EmbeddingConfig();
-
-      expect(config.getKnownDimensions("text-embedding-3-small")).toBe(1536);
-      expect(config.getKnownDimensions("embedding-001")).toBe(768);
-      expect(config.getKnownDimensions("amazon.titan-embed-text-v1")).toBe(1536);
-    });
-
-    it("should return null for unknown models", () => {
-      const config = new EmbeddingConfig();
-
-      expect(config.getKnownDimensions("unknown-model")).toBeNull();
-    });
-
-    it("should handle case-insensitive lookups", () => {
-      const config = new EmbeddingConfig();
-
-      expect(config.getKnownDimensions("TEXT-EMBEDDING-3-SMALL")).toBe(1536);
-      expect(config.getKnownDimensions("Text-Embedding-3-Small")).toBe(1536);
-    });
-
-    it("should resolve common OpenAI-compatible hosted model aliases", () => {
-      const config = new EmbeddingConfig();
-
-      expect(config.getKnownDimensions("text-embedding-multilingual-e5-large")).toBe(
-        1024,
-      );
-      expect(
-        config.getKnownDimensions("keisuke-miyako/text-embedding-nomic-embed-text-v1.5"),
-      ).toBe(768);
-      expect(config.getKnownDimensions("nomic-embed-text-v1.5")).toBe(768);
-    });
-
-    it("should require runtime detection for variable-dimension MRL entries", () => {
-      const config = new EmbeddingConfig();
-
-      expect(config.getKnownDimensions("NovaSearch/stella_en_1.5B_v5")).toBeNull();
-      expect(config.getKnownDimensions("NovaSearch/stella_en_400M_v5")).toBeNull();
-      expect(config.getKnownDimensions("dunzhang/stella_en_400M_v5")).toBeNull();
-      expect(config.getKnownDimensions("NovaSearch/jasper_en_vision_language_v1")).toBe(
-        null,
-      );
-    });
-
-    it("should include current provider embedding models from upstream", () => {
-      const config = new EmbeddingConfig();
-
-      expect(config.getKnownDimensions("text-embedding-005")).toBe(768);
-      expect(config.getKnownDimensions("Cohere/Cohere-embed-v4.0")).toBe(1536);
-      expect(config.getKnownDimensions("voyage-4-large")).toBe(1024);
-      expect(config.getKnownDimensions("voyage-3.5")).toBe(1024);
-      expect(config.getKnownDimensions("nomic-ai/nomic-embed-text-v2-moe")).toBe(768);
-      expect(config.getKnownDimensions("nomic-ai/nomic-embed-code")).toBe(3584);
-    });
-
-    it("should resolve dimensions for tagged and quantized variants", () => {
-      const config = new EmbeddingConfig();
-
-      // A tag or quantization suffix does not change the vector width, so the
-      // base model's dimensions apply.
-      expect(config.getKnownDimensions("nomic-ai/nomic-embed-text-v2-moe:latest")).toBe(
-        768,
-      );
-      expect(config.getKnownDimensions("text-embedding-3-small:Q8_0")).toBe(1536);
-    });
-
-    it("should prefer an exact match over stripping a colon suffix", () => {
-      const config = new EmbeddingConfig();
-
-      // The colon belongs to this model's own identifier, not to a tag.
-      expect(config.getKnownDimensions("amazon.titan-embed-text-v2:0")).toBe(1024);
-    });
-  });
-
-  describe("model specification parsing", () => {
-    it.each([
-      "second-state/jina-embeddings-v3-GGUF:Q4_K_M",
-      "huoxu/bge-large-en-v1.5-Q8_0-GGUF",
-      "nomic-embed-text:latest",
-      "bge-m3:567m",
-      "mxbai-embed-large:335m-v1-fp16",
-      "jina-embeddings-v3-GGUF:Q4_K_M",
-    ])("should treat %s as an OpenAI-compatible model name", (spec) => {
-      expect(EmbeddingConfig.parseEmbeddingConfig(spec)).toMatchObject({
-        provider: "openai",
-        model: spec,
-      });
-    });
-
-    it.each([
-      ["openai:text-embedding-3-small", "openai", "text-embedding-3-small"],
-      ["vertex:text-embedding-004", "vertex", "text-embedding-004"],
-      ["gemini:embedding-001", "gemini", "embedding-001"],
-      ["aws:amazon.titan-embed-text-v2:0", "aws", "amazon.titan-embed-text-v2:0"],
-      ["microsoft:my-deployment", "microsoft", "my-deployment"],
+  it("parses provider, model, dimensions and modelSpec", () => {
+    const cases: [
+      label: string,
+      spec: string | undefined,
+      expected: Partial<EmbeddingModelConfig>,
+    ][] = [
       [
+        "no spec uses the default model",
+        undefined,
+        {
+          provider: "openai",
+          model: "text-embedding-3-small",
+          dimensions: 1536,
+          modelSpec: "text-embedding-3-small",
+        },
+      ],
+      [
+        "an empty spec falls back to the default model and spec",
+        "",
+        {
+          provider: "openai",
+          model: "text-embedding-3-small",
+          dimensions: 1536,
+          modelSpec: "text-embedding-3-small",
+        },
+      ],
+      [
+        "an unprefixed model defaults to openai",
+        "text-embedding-ada-002",
+        {
+          provider: "openai",
+          model: "text-embedding-ada-002",
+          dimensions: 1536,
+          modelSpec: "text-embedding-ada-002",
+        },
+      ],
+      [
+        "a provider prefix",
+        "gemini:embedding-001",
+        {
+          provider: "gemini",
+          model: "embedding-001",
+          dimensions: 768,
+          modelSpec: "gemini:embedding-001",
+        },
+      ],
+      [
+        "an AWS model with a colon in its name",
+        "aws:amazon.titan-embed-text-v2:0",
+        {
+          provider: "aws",
+          model: "amazon.titan-embed-text-v2:0",
+          dimensions: 1024,
+          modelSpec: "aws:amazon.titan-embed-text-v2:0",
+        },
+      ],
+      [
+        "an unknown model has null dimensions",
+        "openai:unknown-model",
+        {
+          provider: "openai",
+          model: "unknown-model",
+          dimensions: null,
+          modelSpec: "openai:unknown-model",
+        },
+      ],
+      [
+        "a model name in another case finds the known dimensions",
+        "openai:TEXT-EMBEDDING-3-SMALL",
+        {
+          provider: "openai",
+          model: "TEXT-EMBEDDING-3-SMALL",
+          dimensions: 1536,
+          modelSpec: "openai:TEXT-EMBEDDING-3-SMALL",
+        },
+      ],
+      [
+        "vertex",
+        "vertex:text-embedding-004",
+        { provider: "vertex", model: "text-embedding-004", dimensions: 768 },
+      ],
+      [
+        "microsoft",
+        "microsoft:my-deployment",
+        { provider: "microsoft", model: "my-deployment" },
+      ],
+      [
+        "openai prefix",
+        "openai:text-embedding-3-small",
+        { provider: "openai", model: "text-embedding-3-small" },
+      ],
+      [
+        "openai prefix before a GGUF model with a tag",
         "openai:second-state/model-GGUF:Q4_K_M",
-        "openai",
-        "second-state/model-GGUF:Q4_K_M",
+        { provider: "openai", model: "second-state/model-GGUF:Q4_K_M" },
       ],
       // Prefixes match case-insensitively and resolve to their canonical form.
-      ["OpenAI:text-embedding-3-small", "openai", "text-embedding-3-small"],
-      ["AWS:amazon.titan-embed-text-v2:0", "aws", "amazon.titan-embed-text-v2:0"],
-    ])("should keep the explicit provider prefix of %s", (spec, provider, model) => {
-      expect(EmbeddingConfig.parseEmbeddingConfig(spec)).toMatchObject({
-        provider,
-        model,
-      });
-    });
-  });
-
-  describe("setKnownDimensions", () => {
-    it("should cache new model dimensions", () => {
-      const config = new EmbeddingConfig();
-
-      // Initially unknown
-      expect(config.getKnownDimensions("custom-model")).toBeNull();
-
-      // Cache dimensions
-      config.setKnownDimensions("custom-model", 2048);
-
-      // Should now return cached value
-      expect(config.getKnownDimensions("custom-model")).toBe(2048);
-    });
-
-    it("should update existing model dimensions", () => {
-      const config = new EmbeddingConfig();
-
-      // Set initial value
-      config.setKnownDimensions("test-model", 1024);
-      expect(config.getKnownDimensions("test-model")).toBe(1024);
-
-      // Update to new value
-      config.setKnownDimensions("test-model", 2048);
-      expect(config.getKnownDimensions("test-model")).toBe(2048);
-    });
-
-    it("should handle case-insensitive caching and retrieval", () => {
-      const config = new EmbeddingConfig();
-
-      // Cache with mixed case
-      config.setKnownDimensions("Custom-Model", 1536);
-
-      // Should retrieve with different case
-      expect(config.getKnownDimensions("custom-model")).toBe(1536);
-      expect(config.getKnownDimensions("CUSTOM-MODEL")).toBe(1536);
-    });
-  });
-
-  describe("static methods", () => {
-    it("should provide static access to parsing", () => {
-      const result = EmbeddingConfig.parseEmbeddingConfig("vertex:text-embedding-004");
-
-      expect(result.provider).toBe("vertex");
-      expect(result.model).toBe("text-embedding-004");
-      expect(result.dimensions).toBe(768);
-    });
-
-    it("should provide static access to dimension lookup", () => {
-      expect(EmbeddingConfig.getKnownModelDimensions("text-embedding-3-large")).toBe(
-        3072,
-      );
-      expect(EmbeddingConfig.getKnownModelDimensions("unknown-model")).toBeNull();
-    });
-
-    it("should provide static access to dimension caching", () => {
-      // Initially unknown
-      expect(EmbeddingConfig.getKnownModelDimensions("static-test-model")).toBeNull();
-
-      // Cache via static method
-      EmbeddingConfig.setKnownModelDimensions("static-test-model", 768);
-
-      // Should be available via static method
-      expect(EmbeddingConfig.getKnownModelDimensions("static-test-model")).toBe(768);
-    });
-
-    it("should use singleton instance across static calls", () => {
-      // Set dimensions via static method
-      EmbeddingConfig.setKnownModelDimensions("singleton-test", 1024);
-
-      // Should be available via instance method
-      const config = EmbeddingConfig.getInstance();
-      expect(config.getKnownDimensions("singleton-test")).toBe(1024);
-
-      // And vice versa
-      config.setKnownDimensions("instance-test", 2048);
-      expect(EmbeddingConfig.getKnownModelDimensions("instance-test")).toBe(2048);
-    });
-  });
-
-  describe("singleton behavior", () => {
-    it("should return the same instance", () => {
-      const instance1 = EmbeddingConfig.getInstance();
-      const instance2 = EmbeddingConfig.getInstance();
-
-      expect(instance1).toBe(instance2);
-    });
-
-    it("should persist state across getInstance calls", () => {
-      const instance1 = EmbeddingConfig.getInstance();
-      instance1.setKnownDimensions("persistent-model", 512);
-
-      const instance2 = EmbeddingConfig.getInstance();
-      expect(instance2.getKnownDimensions("persistent-model")).toBe(512);
-    });
-
-    it("should reset properly", () => {
-      const instance1 = EmbeddingConfig.getInstance();
-      instance1.setKnownDimensions("reset-test", 256);
-
-      EmbeddingConfig.resetInstance();
-
-      const instance2 = EmbeddingConfig.getInstance();
-      expect(instance2.getKnownDimensions("reset-test")).toBeNull(); // Should be gone
-      expect(instance1).not.toBe(instance2); // Should be different instances
-    });
-  });
-
-  describe("provider validation", () => {
-    it("should accept all valid providers", () => {
-      const config = new EmbeddingConfig();
-
-      for (const provider of SUPPORTED_PROVIDERS) {
-        const result = config.parse(`${provider}:test-model`);
-        expect(result.provider).toBe(provider);
-        expect(result.model).toBe("test-model");
-      }
-    });
-
-    it("should treat an unknown provider prefix as part of the model name", () => {
-      const config = new EmbeddingConfig();
-      const result = config.parse("unknown:test-model");
-
-      // Only the prefixes above claim the provider slot; anything else is a model
+      [
+        "a mixed-case prefix",
+        "OpenAI:text-embedding-3-small",
+        { provider: "openai", model: "text-embedding-3-small" },
+      ],
+      [
+        "an upper-case prefix",
+        "AWS:amazon.titan-embed-text-v2:0",
+        { provider: "aws", model: "amazon.titan-embed-text-v2:0" },
+      ],
+      // GGUF and ollama tags are OpenAI-compatible model names, not provider prefixes
+      ...[
+        "second-state/jina-embeddings-v3-GGUF:Q4_K_M",
+        "huoxu/bge-large-en-v1.5-Q8_0-GGUF",
+        "nomic-embed-text:latest",
+        "bge-m3:567m",
+        "mxbai-embed-large:335m-v1-fp16",
+        "jina-embeddings-v3-GGUF:Q4_K_M",
+      ].map((spec): [string, string, Partial<EmbeddingModelConfig>] => [
+        `model name ${spec}`,
+        spec,
+        { provider: "openai", model: spec },
+      ]),
+      ...SUPPORTED_PROVIDERS.map(
+        (provider): [string, string, Partial<EmbeddingModelConfig>] => [
+          `supported provider ${provider}`,
+          `${provider}:test-model`,
+          { provider, model: "test-model" },
+        ],
+      ),
+      // Only the supported prefixes claim the provider slot; anything else is a model
       // name served by an OpenAI-compatible endpoint.
-      expect(result.provider).toBe("openai");
-      expect(result.model).toBe("unknown:test-model");
-    });
+      [
+        "an unknown prefix stays in the model name",
+        "unknown:test-model",
+        { provider: "openai", model: "unknown:test-model" },
+      ],
+      [
+        "only a colon",
+        ":",
+        { provider: "openai", model: ":", dimensions: null, modelSpec: ":" },
+      ],
+      [
+        "a leading colon",
+        ":model-name",
+        {
+          provider: "openai",
+          model: ":model-name",
+          dimensions: null,
+          modelSpec: ":model-name",
+        },
+      ],
+      [
+        "a trailing colon after an unknown prefix",
+        "provider:",
+        {
+          provider: "openai",
+          model: "provider:",
+          dimensions: null,
+          modelSpec: "provider:",
+        },
+      ],
+      [
+        "a trailing colon after a supported prefix",
+        "openai:",
+        { provider: "openai", model: "", dimensions: null, modelSpec: "openai:" },
+      ],
+    ];
+
+    for (const [label, spec, expected] of cases) {
+      expect.soft(new EmbeddingConfig().parse(spec), label).toMatchObject(expected);
+      expect
+        .soft(EmbeddingConfig.parseEmbeddingConfig(spec), `${label} (static)`)
+        .toMatchObject(expected);
+    }
   });
 
-  describe("edge cases", () => {
-    it("should handle empty string input", () => {
-      const config = new EmbeddingConfig();
-      const result = config.parse("");
+  it("strips the quotes Docker Compose leaves around a model spec (GH-353)", () => {
+    const cases: [
+      label: string,
+      spec: string,
+      expected: Partial<EmbeddingModelConfig>,
+    ][] = [
+      [
+        "double quotes",
+        '"openai:nomic-embed-text"',
+        {
+          provider: "openai",
+          model: "nomic-embed-text",
+          modelSpec: "openai:nomic-embed-text",
+        },
+      ],
+      [
+        "single quotes",
+        "'openai:nomic-embed-text'",
+        {
+          provider: "openai",
+          model: "nomic-embed-text",
+          modelSpec: "openai:nomic-embed-text",
+        },
+      ],
+      [
+        "a model-only spec without a provider prefix",
+        '"nomic-embed-text"',
+        { provider: "openai", model: "nomic-embed-text", modelSpec: "nomic-embed-text" },
+      ],
+      [
+        "whitespace around the quotes",
+        '  "openai:nomic-embed-text"  ',
+        { provider: "openai", model: "nomic-embed-text" },
+      ],
+      [
+        "a quoted known model keeps its dimensions",
+        '"openai:text-embedding-3-small"',
+        { provider: "openai", model: "text-embedding-3-small", dimensions: 1536 },
+      ],
+    ];
 
-      expect(result.provider).toBe("openai");
-      expect(result.model).toBe("text-embedding-3-small"); // Falls back to default
-      expect(result.dimensions).toBe(1536);
-      expect(result.modelSpec).toBe("text-embedding-3-small"); // Uses default spec when empty string provided
-    });
-
-    it("should handle input with only colon", () => {
-      const config = new EmbeddingConfig();
-      const result = config.parse(":");
-
-      expect(result.provider).toBe("openai");
-      expect(result.model).toBe(":");
-      expect(result.dimensions).toBeNull();
-      expect(result.modelSpec).toBe(":");
-    });
-
-    it("should handle input starting with colon", () => {
-      const config = new EmbeddingConfig();
-      const result = config.parse(":model-name");
-
-      expect(result.provider).toBe("openai");
-      expect(result.model).toBe(":model-name");
-      expect(result.dimensions).toBeNull();
-      expect(result.modelSpec).toBe(":model-name");
-    });
-
-    it("should handle input ending with colon", () => {
-      const config = new EmbeddingConfig();
-      const result = config.parse("provider:");
-
-      expect(result.provider).toBe("openai");
-      expect(result.model).toBe("provider:");
-      expect(result.dimensions).toBeNull();
-      expect(result.modelSpec).toBe("provider:");
-    });
-
-    it("should handle a supported provider prefix ending with colon", () => {
-      const config = new EmbeddingConfig();
-      const result = config.parse("openai:");
-
-      expect(result.provider).toBe("openai");
-      expect(result.model).toBe("");
-      expect(result.dimensions).toBeNull();
-      expect(result.modelSpec).toBe("openai:");
-    });
+    for (const [label, spec, expected] of cases) {
+      expect.soft(new EmbeddingConfig().parse(spec), label).toMatchObject(expected);
+    }
   });
 
-  describe("Docker Compose quoted values (GH-353)", () => {
-    it("should strip surrounding double quotes from model spec", () => {
-      const config = new EmbeddingConfig();
-      const result = config.parse('"openai:nomic-embed-text"');
+  it("looks up the known dimensions of a model", () => {
+    const cases: [label: string, model: string, expected: number | null][] = [
+      ["an OpenAI model", "text-embedding-3-small", 1536],
+      ["a large OpenAI model", "text-embedding-3-large", 3072],
+      ["a Gemini model", "embedding-001", 768],
+      ["an AWS model", "amazon.titan-embed-text-v1", 1536],
+      ["an unknown model", "unknown-model", null],
+      ["an upper-case name", "TEXT-EMBEDDING-3-SMALL", 1536],
+      ["a mixed-case name", "Text-Embedding-3-Small", 1536],
+      // Common OpenAI-compatible hosted model aliases
+      ["a hosted e5 alias", "text-embedding-multilingual-e5-large", 1024],
+      [
+        "a hosted nomic alias with an owner",
+        "keisuke-miyako/text-embedding-nomic-embed-text-v1.5",
+        768,
+      ],
+      ["a hosted nomic alias", "nomic-embed-text-v1.5", 768],
+      // Variable-dimension MRL entries need runtime detection
+      ["MRL stella 1.5B", "NovaSearch/stella_en_1.5B_v5", null],
+      ["MRL stella 400M", "NovaSearch/stella_en_400M_v5", null],
+      ["MRL stella 400M by dunzhang", "dunzhang/stella_en_400M_v5", null],
+      ["MRL jasper", "NovaSearch/jasper_en_vision_language_v1", null],
+      // Current provider models from upstream
+      ["Vertex text-embedding-005", "text-embedding-005", 768],
+      ["Cohere embed v4", "Cohere/Cohere-embed-v4.0", 1536],
+      ["voyage-4-large", "voyage-4-large", 1024],
+      ["voyage-3.5", "voyage-3.5", 1024],
+      ["nomic embed text v2 moe", "nomic-ai/nomic-embed-text-v2-moe", 768],
+      ["nomic embed code", "nomic-ai/nomic-embed-code", 3584],
+      // A tag or quantization suffix does not change the vector width, so the
+      // base model's dimensions apply.
+      ["a tagged variant", "nomic-ai/nomic-embed-text-v2-moe:latest", 768],
+      ["a quantized variant", "text-embedding-3-small:Q8_0", 1536],
+      // The colon belongs to this model's own identifier, not to a tag.
+      [
+        "an exact match over stripping a colon suffix",
+        "amazon.titan-embed-text-v2:0",
+        1024,
+      ],
+    ];
 
-      expect(result.provider).toBe("openai");
-      expect(result.model).toBe("nomic-embed-text");
-      expect(result.modelSpec).toBe("openai:nomic-embed-text");
-    });
+    const config = new EmbeddingConfig();
+    for (const [label, model, expected] of cases) {
+      expect.soft(config.getKnownDimensions(model), label).toBe(expected);
+      expect
+        .soft(EmbeddingConfig.getKnownModelDimensions(model), `${label} (static)`)
+        .toBe(expected);
+    }
+  });
 
-    it("should strip surrounding single quotes from model spec", () => {
-      const config = new EmbeddingConfig();
-      const result = config.parse("'openai:nomic-embed-text'");
+  it("caches a detected dimension case-insensitively, shared by instance and static access", () => {
+    const instance = EmbeddingConfig.getInstance();
+    expect(instance.getKnownDimensions("custom-model")).toBeNull();
 
-      expect(result.provider).toBe("openai");
-      expect(result.model).toBe("nomic-embed-text");
-      expect(result.modelSpec).toBe("openai:nomic-embed-text");
-    });
+    instance.setKnownDimensions("Custom-Model", 1024);
+    expect(instance.getKnownDimensions("custom-model")).toBe(1024);
+    expect(EmbeddingConfig.getInstance().getKnownDimensions("CUSTOM-MODEL")).toBe(1024);
+    expect(EmbeddingConfig.getKnownModelDimensions("custom-model")).toBe(1024);
 
-    it("should strip quotes from model-only spec (no provider prefix)", () => {
-      const config = new EmbeddingConfig();
-      const result = config.parse('"nomic-embed-text"');
+    // A later detection overwrites the cached value
+    EmbeddingConfig.setKnownModelDimensions("custom-model", 2048);
+    expect(instance.getKnownDimensions("Custom-Model")).toBe(2048);
+  });
 
-      expect(result.provider).toBe("openai");
-      expect(result.model).toBe("nomic-embed-text");
-      expect(result.modelSpec).toBe("nomic-embed-text");
-    });
+  it("resetInstance forgets cached dimensions", () => {
+    const instance1 = EmbeddingConfig.getInstance();
+    instance1.setKnownDimensions("reset-test", 256);
 
-    it("should trim whitespace around quoted values", () => {
-      const config = new EmbeddingConfig();
-      const result = config.parse('  "openai:nomic-embed-text"  ');
+    EmbeddingConfig.resetInstance();
 
-      expect(result.provider).toBe("openai");
-      expect(result.model).toBe("nomic-embed-text");
-    });
-
-    it("should handle quoted known model and return correct dimensions", () => {
-      const config = new EmbeddingConfig();
-      const result = config.parse('"openai:text-embedding-3-small"');
-
-      expect(result.provider).toBe("openai");
-      expect(result.model).toBe("text-embedding-3-small");
-      expect(result.dimensions).toBe(1536);
-    });
+    const instance2 = EmbeddingConfig.getInstance();
+    expect(instance2.getKnownDimensions("reset-test")).toBeNull(); // Should be gone
+    expect(instance1).not.toBe(instance2); // Should be different instances
   });
 });

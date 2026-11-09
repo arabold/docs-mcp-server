@@ -1,322 +1,204 @@
 import { describe, expect, it } from "vitest";
-import { extractPrimaryDomain, normalizeUrl, stripMarkdownExtension } from "./url";
+import {
+  extractPrimaryDomain,
+  normalizeUrl,
+  stripMarkdownExtension,
+  type UrlNormalizerOptions,
+} from "./url";
 
-describe("URL normalization", () => {
-  describe("default behavior", () => {
-    it("should preserve query parameters", () => {
-      expect(normalizeUrl("https://example.com/api?version=1.0")).toBe(
-        "https://example.com/api?version=1.0",
-      );
-    });
-
-    it("should remove hash fragments", () => {
-      expect(normalizeUrl("https://example.com/page#section")).toBe(
-        "https://example.com/page",
-      );
-    });
-
-    it("should remove trailing slashes", () => {
-      expect(normalizeUrl("https://example.com/page/")).toBe("https://example.com/page");
-    });
-
-    it("does not convert to lowercase", () => {
-      expect(normalizeUrl("https://example.com/PAGE")).toBe("https://example.com/PAGE");
-    });
-  });
-
-  describe("individual options", () => {
-    it("should keep hash fragments when removeHash is false", () => {
-      expect(
-        normalizeUrl("https://example.com/page#section", { removeHash: false }),
-      ).toBe("https://example.com/page#section");
-    });
-
-    it("should keep trailing slashes when removeTrailingSlash is false", () => {
-      expect(
-        normalizeUrl("https://example.com/page/", {
-          removeTrailingSlash: false,
-        }),
-      ).toBe("https://example.com/page/");
-    });
-
-    it("preserves case, which is not configurable", () => {
-      expect(normalizeUrl("https://example.com/PATH/TO/PAGE")).toBe(
-        "https://example.com/PATH/TO/PAGE",
-      );
-    });
-
-    it("keeps paths differing only in case distinct", () => {
-      // The reason case folding was removed: this value is the crawl's dedup
-      // key, so folding these together means the second page is never fetched
-      // and nothing reports that it was dropped.
-      expect(normalizeUrl("https://example.com/Guide")).not.toBe(
-        normalizeUrl("https://example.com/guide"),
-      );
-    });
-
-    it("still folds a trailing slash on a URL with no fragment", () => {
-      // `removeHash: false` is how a hash-routed crawl keeps its route
-      // fragments. Exempting the whole crawl from path normalization instead
-      // left `/docs` and `/docs/` as two pages on exactly those sites.
-      expect(normalizeUrl("https://example.com/docs/", { removeHash: false })).toBe(
-        "https://example.com/docs",
-      );
-      expect(
-        normalizeUrl("https://example.com/docs/index.html", { removeHash: false }),
-      ).toBe("https://example.com/docs");
-    });
-
-    it("leaves the path alone in front of a preserved fragment", () => {
-      // There the fragment names the route, so the path is part of its
-      // spelling and trimming the slash invents a URL the site does not serve.
-      expect(
-        normalizeUrl("https://example.com/docs/#/guide", { removeHash: false }),
-      ).toBe("https://example.com/docs/#/guide");
-      expect(normalizeUrl("https://example.com/docs#/guide", { removeHash: false })).toBe(
-        "https://example.com/docs#/guide",
-      );
-    });
-
-    it("should remove query parameters when removeQuery is true", () => {
-      expect(
-        normalizeUrl("https://example.com/api?version=1.0", {
-          removeQuery: true,
-        }),
-      ).toBe("https://example.com/api");
-    });
-  });
-
-  describe("file URLs", () => {
-    it("should normalize file URLs", () => {
-      // Note: On some platforms/Node versions, file:// host is empty, on others it might be parsed differently.
-      // But standard file:// URL has empty host.
+describe("normalizeUrl", () => {
+  it("drops the hash, trailing slash and index file and keeps the query and case by default", () => {
+    const cases: Array<[url: string, expected: string]> = [
+      ["https://example.com/api?version=1.0", "https://example.com/api?version=1.0"],
+      [
+        "https://example.com/api?v=1&format=json",
+        "https://example.com/api?v=1&format=json",
+      ],
+      ["https://example.com/page#section", "https://example.com/page"],
+      ["https://example.com/path?query=1#section", "https://example.com/path?query=1"],
+      ["https://example.com/path#hash?query=1", "https://example.com/path"],
+      ["https://example.com/page/", "https://example.com/page"],
+      ["https://example.com/PAGE", "https://example.com/PAGE"],
+      ["https://example.com/PATH/TO/PAGE", "https://example.com/PATH/TO/PAGE"],
+      ["https://example.com/path/index.html", "https://example.com/path"],
+      ["https://example.com/path/index.htm", "https://example.com/path"],
+      ["https://example.com/path/index.asp", "https://example.com/path"],
+      ["https://example.com/path/index.php", "https://example.com/path"],
+      ["https://example.com/path/index.jsp", "https://example.com/path"],
+      ["https://example.com/path/index.html?param=1", "https://example.com/path?param=1"],
+      // "index" inside another word is not an index file
+      ["https://example.com/reindex/page", "https://example.com/reindex/page"],
       // Index file and trailing slash are normalized; case is not. On a
       // case-sensitive filesystem `/Users/.../Docs` and `/users/.../docs` are
       // different directories, and folding them would merge two of them.
-      const url = "file:///Users/username/Docs/Index.html";
-      expect(normalizeUrl(url)).toBe("file:///Users/username/Docs");
-    });
+      ["file:///Users/username/Docs/Index.html", "file:///Users/username/Docs"],
+      ["file:///Users/User%20Name/My%20Docs/", "file:///Users/User%20Name/My%20Docs"],
+      // An invalid URL passes through unchanged
+      ["not-a-url", "not-a-url"],
+    ];
 
-    it("should handle file URLs with spaces", () => {
-      const url = "file:///Users/User%20Name/My%20Docs/";
-      expect(normalizeUrl(url)).toBe("file:///Users/User%20Name/My%20Docs");
-    });
+    for (const [url, expected] of cases) {
+      expect.soft(normalizeUrl(url), url).toBe(expected);
+    }
+  });
 
-    it("should handle file URLs with query strings (rare but valid)", () => {
-      const url = "file:///path/to/file?query=1";
-      expect(normalizeUrl(url, { removeQuery: false })).toBe(
+  it("turns each normalization step on or off through its option", () => {
+    const cases: Array<[url: string, options: UrlNormalizerOptions, expected: string]> = [
+      [
+        "https://example.com/page#section",
+        { removeHash: false },
+        "https://example.com/page#section",
+      ],
+      [
+        "https://example.com/page/",
+        { removeTrailingSlash: false },
+        "https://example.com/page/",
+      ],
+      [
+        "https://example.com/api?version=1.0",
+        { removeQuery: true },
+        "https://example.com/api",
+      ],
+      // A query on a file URL is rare but valid
+      [
         "file:///path/to/file?query=1",
-      );
-      expect(normalizeUrl(url, { removeQuery: true })).toBe("file:///path/to/file");
-    });
-  });
-
-  describe("edge cases", () => {
-    it("should handle invalid URLs gracefully", () => {
-      const invalidUrl = "not-a-url";
-      expect(normalizeUrl(invalidUrl)).toBe(invalidUrl);
-    });
-
-    it("should handle URLs with multiple query parameters", () => {
-      expect(normalizeUrl("https://example.com/api?v=1&format=json")).toBe(
-        "https://example.com/api?v=1&format=json",
-      );
-    });
-
-    it("should handle URLs with both hash and query", () => {
-      expect(normalizeUrl("https://example.com/path?query=1#section")).toBe(
-        "https://example.com/path?query=1",
-      );
-    });
-
-    it("should handle malformed hash and query combinations", () => {
-      expect(normalizeUrl("https://example.com/path#hash?query=1")).toBe(
-        "https://example.com/path",
-      );
-    });
-  });
-
-  describe("index file removal", () => {
-    it("should remove index files by default", () => {
-      expect(normalizeUrl("https://example.com/path/index.html")).toBe(
-        "https://example.com/path",
-      );
-      expect(normalizeUrl("https://example.com/path/index.htm")).toBe(
-        "https://example.com/path",
-      );
-      expect(normalizeUrl("https://example.com/path/index.asp")).toBe(
-        "https://example.com/path",
-      );
-      expect(normalizeUrl("https://example.com/path/index.php")).toBe(
-        "https://example.com/path",
-      );
-      expect(normalizeUrl("https://example.com/path/index.jsp")).toBe(
-        "https://example.com/path",
-      );
-    });
-
-    it("should preserve index files when removeIndex is false", () => {
-      const opts = { removeIndex: false };
-      expect(normalizeUrl("https://example.com/path/index.html", opts)).toBe(
+        { removeQuery: false },
+        "file:///path/to/file?query=1",
+      ],
+      ["file:///path/to/file?query=1", { removeQuery: true }, "file:///path/to/file"],
+      [
         "https://example.com/path/index.html",
-      );
-    });
+        { removeIndex: false },
+        "https://example.com/path/index.html",
+      ],
+    ];
 
-    it("should preserve paths containing 'index' as part of another word", () => {
-      expect(normalizeUrl("https://example.com/reindex/page")).toBe(
-        "https://example.com/reindex/page",
-      );
-    });
+    for (const [url, options, expected] of cases) {
+      expect
+        .soft(normalizeUrl(url, options), `${url} ${JSON.stringify(options)}`)
+        .toBe(expected);
+    }
+  });
 
-    it("should preserve query parameters when removing index files", () => {
-      expect(normalizeUrl("https://example.com/path/index.html?param=1")).toBe(
-        "https://example.com/path?param=1",
-      );
-    });
+  it("keeps paths differing only in case distinct", () => {
+    // The reason case folding was removed: this value is the crawl's dedup
+    // key, so folding these together means the second page is never fetched
+    // and nothing reports that it was dropped.
+    expect(normalizeUrl("https://example.com/Guide")).not.toBe(
+      normalizeUrl("https://example.com/guide"),
+    );
+  });
+
+  it("still folds a trailing slash on a URL with no fragment", () => {
+    // `removeHash: false` is how a hash-routed crawl keeps its route
+    // fragments. Exempting the whole crawl from path normalization instead
+    // left `/docs` and `/docs/` as two pages on exactly those sites.
+    expect(normalizeUrl("https://example.com/docs/", { removeHash: false })).toBe(
+      "https://example.com/docs",
+    );
+    expect(
+      normalizeUrl("https://example.com/docs/index.html", { removeHash: false }),
+    ).toBe("https://example.com/docs");
+  });
+
+  it("leaves the path alone in front of a preserved fragment", () => {
+    // There the fragment names the route, so the path is part of its
+    // spelling and trimming the slash invents a URL the site does not serve.
+    expect(normalizeUrl("https://example.com/docs/#/guide", { removeHash: false })).toBe(
+      "https://example.com/docs/#/guide",
+    );
+    expect(normalizeUrl("https://example.com/docs#/guide", { removeHash: false })).toBe(
+      "https://example.com/docs#/guide",
+    );
   });
 });
 
 describe("extractPrimaryDomain", () => {
-  describe("standard domains", () => {
-    it("should extract primary domain from subdomains", () => {
-      expect(extractPrimaryDomain("docs.python.org")).toBe("python.org");
-      expect(extractPrimaryDomain("api.github.com")).toBe("github.com");
-      expect(extractPrimaryDomain("www.example.com")).toBe("example.com");
-      expect(extractPrimaryDomain("subdomain.example.org")).toBe("example.org");
-    });
+  it("reduces a hostname to its registrable domain", () => {
+    const cases: Array<[hostname: string, expected: string]> = [
+      ["docs.python.org", "python.org"],
+      ["api.github.com", "github.com"],
+      ["www.example.com", "example.com"],
+      ["subdomain.example.org", "example.org"],
+      ["cdn.example.com", "example.com"],
+      ["assets.cloudflare.com", "cloudflare.com"],
+      ["python.org", "python.org"],
+      ["github.com", "github.com"],
+      ["example.net", "example.net"],
+      // Multi-part public suffixes
+      ["example.co.uk", "example.co.uk"],
+      ["subdomain.example.co.uk", "example.co.uk"],
+      ["test.com.au", "test.com.au"],
+      ["subdomain.test.com.au", "test.com.au"],
+      // For .gov.uk domains, the registrable domain is at the third level
+      ["api.service.gov.uk", "api.service.gov.uk"],
+      ["subdomain.api.service.gov.uk", "api.service.gov.uk"],
+      ["example.de", "example.de"],
+      ["www.example.fr", "example.fr"],
+      ["subdomain.example.jp", "example.jp"],
+      // GitHub Pages sites are separate registrable domains
+      ["username.github.io", "username.github.io"],
+      ["org.github.io", "org.github.io"],
+      // Single-part hostnames and IP addresses stay as they are
+      ["localhost", "localhost"],
+      ["myserver", "myserver"],
+      ["internal", "internal"],
+      ["192.168.1.1", "192.168.1.1"],
+      ["10.0.0.1", "10.0.0.1"],
+      ["127.0.0.1", "127.0.0.1"],
+      ["2001:db8::1", "2001:db8::1"],
+      ["::1", "::1"],
+      ["fe80::1", "fe80::1"],
+      // Case is folded
+      ["DOCS.PYTHON.ORG", "python.org"],
+      ["API.GitHub.COM", "github.com"],
+      // Empty and invalid input passes through
+      ["", ""],
+      [".", "."],
+      ["..", ".."],
+    ];
 
-    it("should return domain as-is when already primary", () => {
-      expect(extractPrimaryDomain("python.org")).toBe("python.org");
-      expect(extractPrimaryDomain("github.com")).toBe("github.com");
-      expect(extractPrimaryDomain("example.net")).toBe("example.net");
-    });
-  });
-
-  describe("complex TLDs", () => {
-    it("should handle multi-part TLDs correctly", () => {
-      expect(extractPrimaryDomain("example.co.uk")).toBe("example.co.uk");
-      expect(extractPrimaryDomain("subdomain.example.co.uk")).toBe("example.co.uk");
-      expect(extractPrimaryDomain("test.com.au")).toBe("test.com.au");
-      expect(extractPrimaryDomain("subdomain.test.com.au")).toBe("test.com.au");
-      // Note: For .gov.uk domains, the registrable domain is at the third level
-      expect(extractPrimaryDomain("api.service.gov.uk")).toBe("api.service.gov.uk");
-      expect(extractPrimaryDomain("subdomain.api.service.gov.uk")).toBe(
-        "api.service.gov.uk",
-      );
-    });
-
-    it("should handle country code domains", () => {
-      expect(extractPrimaryDomain("example.de")).toBe("example.de");
-      expect(extractPrimaryDomain("www.example.fr")).toBe("example.fr");
-      expect(extractPrimaryDomain("subdomain.example.jp")).toBe("example.jp");
-    });
-  });
-
-  describe("special cases", () => {
-    it("should handle GitHub Pages correctly", () => {
-      expect(extractPrimaryDomain("username.github.io")).toBe("username.github.io");
-      expect(extractPrimaryDomain("org.github.io")).toBe("org.github.io");
-    });
-
-    it("should handle localhost and single-part hostnames", () => {
-      expect(extractPrimaryDomain("localhost")).toBe("localhost");
-      expect(extractPrimaryDomain("myserver")).toBe("myserver");
-      expect(extractPrimaryDomain("internal")).toBe("internal");
-    });
-
-    it("should handle IP addresses", () => {
-      expect(extractPrimaryDomain("192.168.1.1")).toBe("192.168.1.1");
-      expect(extractPrimaryDomain("10.0.0.1")).toBe("10.0.0.1");
-      expect(extractPrimaryDomain("127.0.0.1")).toBe("127.0.0.1");
-    });
-
-    it("should handle IPv6 addresses", () => {
-      expect(extractPrimaryDomain("2001:db8::1")).toBe("2001:db8::1");
-      expect(extractPrimaryDomain("::1")).toBe("::1");
-      expect(extractPrimaryDomain("fe80::1")).toBe("fe80::1");
-    });
-  });
-
-  describe("edge cases", () => {
-    it("should handle CDN domains", () => {
-      expect(extractPrimaryDomain("cdn.example.com")).toBe("example.com");
-      expect(extractPrimaryDomain("assets.cloudflare.com")).toBe("cloudflare.com");
-    });
-
-    it("should handle empty and invalid inputs gracefully", () => {
-      expect(extractPrimaryDomain("")).toBe("");
-      expect(extractPrimaryDomain(".")).toBe(".");
-      expect(extractPrimaryDomain("..")).toBe("..");
-    });
-
-    it("should preserve case handling consistently", () => {
-      expect(extractPrimaryDomain("DOCS.PYTHON.ORG")).toBe("python.org");
-      expect(extractPrimaryDomain("API.GitHub.COM")).toBe("github.com");
-    });
+    for (const [hostname, expected] of cases) {
+      expect.soft(extractPrimaryDomain(hostname), hostname).toBe(expected);
+    }
   });
 });
 
 describe("stripMarkdownExtension", () => {
   it("strips a markdown extension to yield the canonical page URL", () => {
-    expect(stripMarkdownExtension("https://react.dev/learn.md")).toBe(
-      "https://react.dev/learn",
-    );
-    expect(stripMarkdownExtension("https://vite.dev/guide/ssr.md")).toBe(
-      "https://vite.dev/guide/ssr",
-    );
+    const cases: Array<[url: string, expected: string]> = [
+      ["https://react.dev/learn.md", "https://react.dev/learn"],
+      ["https://vite.dev/guide/ssr.md", "https://vite.dev/guide/ssr"],
+      // Any markdown extension the shared detector knows
+      ["https://example.com/a/guide.markdown", "https://example.com/a/guide"],
+      // Query and fragment are kept
+      ["https://example.com/guide.md?v=2#intro", "https://example.com/guide?v=2#intro"],
+    ];
+
+    for (const [url, expected] of cases) {
+      expect.soft(stripMarkdownExtension(url), url).toBe(expected);
+    }
   });
 
-  it("recognises the markdown extensions the shared detector knows", () => {
-    expect(stripMarkdownExtension("https://example.com/a/guide.markdown")).toBe(
-      "https://example.com/a/guide",
-    );
-  });
-
-  it("leaves a non-markdown extension alone", () => {
-    // The name is load-bearing: stripping any extension would rewrite
-    // `report.pdf` to `report`, an identity nothing serves.
-    expect(stripMarkdownExtension("https://example.com/report.pdf")).toBe(
+  it("leaves every other URL unchanged", () => {
+    const cases: string[] = [
+      // The name is load-bearing: stripping any extension would rewrite
+      // `report.pdf` to `report`, an identity nothing serves.
       "https://example.com/report.pdf",
-    );
-    expect(stripMarkdownExtension("https://example.com/page.tar.gz")).toBe(
       "https://example.com/page.tar.gz",
-    );
-  });
-
-  it("does not read a markdown TLD as a markdown file", () => {
-    // `.md` is Moldova's ccTLD; detection must see the path, not the host.
-    expect(stripMarkdownExtension("https://example.md/guide")).toBe(
+      // `.md` is Moldova's ccTLD; detection must see the path, not the host.
       "https://example.md/guide",
-    );
-  });
-
-  it("preserves query and fragment", () => {
-    expect(stripMarkdownExtension("https://example.com/guide.md?v=2#intro")).toBe(
-      "https://example.com/guide?v=2#intro",
-    );
-  });
-
-  it("leaves a URL without an extension unchanged", () => {
-    expect(stripMarkdownExtension("https://example.com/guide")).toBe(
       "https://example.com/guide",
-    );
-    expect(stripMarkdownExtension("https://example.com/")).toBe("https://example.com/");
-  });
-
-  it("refuses to produce an empty final segment", () => {
-    // `/.md` has no canonical page to fold onto.
-    expect(stripMarkdownExtension("https://example.com/.md")).toBe(
+      "https://example.com/",
+      // `/.md` has no canonical page to fold onto.
       "https://example.com/.md",
-    );
-  });
-
-  it("does not treat a dot in a directory segment as an extension", () => {
-    expect(stripMarkdownExtension("https://example.com/v1.0/guide")).toBe(
+      // A dot in a directory segment is not an extension.
       "https://example.com/v1.0/guide",
-    );
-  });
+      "not a url",
+    ];
 
-  it("returns an unparseable URL unchanged", () => {
-    expect(stripMarkdownExtension("not a url")).toBe("not a url");
+    for (const url of cases) {
+      expect.soft(stripMarkdownExtension(url), url).toBe(url);
+    }
   });
 });

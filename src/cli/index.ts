@@ -5,12 +5,7 @@
 import yargs, { type Argv } from "yargs";
 import { hideBin } from "yargs/helpers";
 import { EventBusService } from "../events";
-import {
-  initTelemetry,
-  shouldEnableTelemetry,
-  TelemetryService,
-  telemetry,
-} from "../telemetry";
+import { initTelemetry, shouldEnableTelemetry, telemetry } from "../telemetry";
 import { loadConfig } from "../utils/config";
 import { resolveStorePath } from "../utils/paths";
 // Commands
@@ -28,27 +23,44 @@ import { createSearchCommand } from "./commands/search";
 import { createWebCommand } from "./commands/web";
 import { createWorkerCommand } from "./commands/worker";
 import { applyGlobalCliOutputMode, registerGlobalOutputOptions } from "./output";
-import { registerGlobalServices } from "./services";
 
 /**
- * Creates and configures the main CLI program with all commands.
+ * A command line that does not parse, such as an unknown option or a missing
+ * argument. The CLI has already printed the help and the reason when it throws
+ * this.
  */
+export class CliUsageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CliUsageError";
+  }
+}
+
+/** Every command the CLI registers. */
+export const COMMAND_FACTORIES: ReadonlyArray<(cli: Argv) => void> = [
+  createCompactCommand,
+  createConfigCommand,
+  createDefaultAction,
+  createFetchUrlCommand,
+  createFindVersionCommand,
+  createListCommand,
+  createMcpCommand,
+  createRefreshCommand,
+  createRemoveCommand,
+  createScrapeCommand,
+  createSearchCommand,
+  createWebCommand,
+  createWorkerCommand,
+];
 
 /**
- * Creates and configures the main CLI program with all commands.
+ * Declares the options that every command accepts.
+ *
+ * @param cli - The root yargs instance.
+ * @returns The same instance, for chaining.
  */
-export function createCli(argv: string[]): Argv {
-  // Global service instances
-  let globalEventBus: EventBusService | null = null;
-  let globalTelemetryService: TelemetryService | null = null;
-  const commandStartTimes = new Map<string, number>();
-
-  const cli = registerGlobalOutputOptions(yargs(hideBin(argv)))
-    .scriptName("docs-mcp-server")
-    .strict()
-    .usage("Usage: $0 <command> [options]")
-    .version(__APP_VERSION__)
-    // Global Options
+export function registerGlobalOptions<T>(cli: Argv<T>) {
+  return registerGlobalOutputOptions(cli)
     .option("verbose", {
       type: "boolean",
       description: "Enable verbose (debug) logging",
@@ -82,7 +94,22 @@ export function createCli(argv: string[]): Argv {
       type: "boolean",
       description: "Show ASCII art logo on startup",
       default: true,
-    })
+    });
+}
+
+/**
+ * Creates and configures the main CLI program with all commands.
+ */
+export function createCli(argv: string[]): Argv {
+  // Global service instances
+  let globalEventBus: EventBusService | null = null;
+  const commandStartTimes = new Map<string, number>();
+
+  const cli = registerGlobalOptions(yargs(hideBin(argv)))
+    .scriptName("docs-mcp-server")
+    .strict()
+    .usage("Usage: $0 <command> [options]")
+    .version(__APP_VERSION__)
     // Middleware for Global Setup (similar to preAction)
     .middleware(async (argv) => {
       // 0. Validate Options
@@ -90,7 +117,13 @@ export function createCli(argv: string[]): Argv {
         throw new Error("Arguments verbose and quiet are mutually exclusive");
       }
 
-      // 1. Load Config & Resolve Paths
+      // 1. Setup Logging, first, so --verbose also covers a failure below
+      applyGlobalCliOutputMode({
+        verbose: argv.verbose as boolean,
+        quiet: argv.quiet as boolean,
+      });
+
+      // 2. Load Config & Resolve Paths
       const rawStorePath = (argv.storePath as string) || process.env.DOCS_MCP_STORE_PATH;
       const resolvedStorePath = resolveStorePath(rawStorePath);
 
@@ -107,12 +140,6 @@ export function createCli(argv: string[]): Argv {
         argv.telemetry = appConfig.app.telemetryEnabled;
       }
 
-      // 2. Setup Logging
-      applyGlobalCliOutputMode({
-        verbose: argv.verbose as boolean,
-        quiet: argv.quiet as boolean,
-      });
-
       // 3. Init Telemetry
       initTelemetry({
         enabled: !!argv.telemetry,
@@ -122,10 +149,6 @@ export function createCli(argv: string[]): Argv {
       // 4. Init Services
       if (!globalEventBus) {
         globalEventBus = new EventBusService();
-      }
-      if (!globalTelemetryService) {
-        globalTelemetryService = new TelemetryService(globalEventBus);
-        registerGlobalServices({ telemetryService: globalTelemetryService });
       }
 
       // 5. Attach to argv context
@@ -162,22 +185,19 @@ export function createCli(argv: string[]): Argv {
     // We might need to move the `CLI_COMMAND` tracking into `main.ts` or inside `createDefaultAction`.
 
     .alias("help", "h")
-    .showHelpOnFail(true);
+    // yargs reports both a command line it cannot parse and an error a command
+    // throws here. Only the first earns the help text; the second goes on to
+    // runCli, which reports it once and shuts down.
+    .fail((message, error, instance) => {
+      if (error) throw error;
+      instance.showHelp("error");
+      console.error(`\n${message}`);
+      throw new CliUsageError(message);
+    });
 
-  // Register Commands
-  createCompactCommand(cli);
-  createConfigCommand(cli);
-  createDefaultAction(cli);
-  createFetchUrlCommand(cli);
-  createFindVersionCommand(cli);
-  createListCommand(cli);
-  createMcpCommand(cli);
-  createRefreshCommand(cli);
-  createRemoveCommand(cli);
-  createScrapeCommand(cli);
-  createSearchCommand(cli);
-  createWebCommand(cli);
-  createWorkerCommand(cli);
+  for (const registerCommand of COMMAND_FACTORIES) {
+    registerCommand(cli);
+  }
 
   return cli;
 }

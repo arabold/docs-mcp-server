@@ -29,3 +29,17 @@ export function formatBytes(bytes: number): string {
   }
   return `${value.toFixed(1)} ${units[unitIndex]}`;
 }
+
+/**
+ * Escapes text for use in HTML element content or a double-quoted attribute.
+ *
+ * @param value Text to escape
+ * @returns The text with `&`, `<`, `>` and `"` replaced by entities
+ */
+export function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}

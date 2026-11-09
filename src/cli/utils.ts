@@ -2,20 +2,23 @@
  * Shared CLI utilities and helper functions.
  */
 
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import path from "node:path";
 import { createInterface } from "node:readline";
-import { chromium } from "playwright";
 import type { AppServerConfig } from "../app";
 import type { AuthConfig } from "../auth/types";
-import { EventBusService } from "../events";
+import type { EventBusService } from "../events";
+import { ManagedBrowser } from "../scraper/fetcher/ManagedBrowser";
+import type { DocumentManagementService } from "../store/DocumentManagementService";
 import {
   EmbeddingConfig,
   type EmbeddingModelConfig,
 } from "../store/embeddings/EmbeddingConfig";
-import { TelemetryService } from "../telemetry";
+import { describeEmbeddingModel, type EmbeddingModelChangedError } from "../store/errors";
+import { parseEnvBoolean } from "../utils/config";
 import { logger } from "../utils/logger";
-import { getProjectRoot } from "../utils/paths";
 import type { GlobalOptions } from "./types";
 
 /**
@@ -59,7 +62,14 @@ export interface EmbeddingContext {
 }
 
 /**
- * Ensures that the Playwright browsers are installed, unless a system Chromium path is set.
+ * Ensures a Chromium for scraping is installed, unless a system Chromium path
+ * is set.
+ *
+ * Any Chromium `ManagedBrowser` launches without an explicit path counts: the
+ * headless shell or the full build. When neither is there, the headless shell
+ * is installed with the CLI of the Playwright this package depends on, so it
+ * matches that version. The install leaves other browsers alone, since another
+ * process may be running them.
  */
 export function ensurePlaywrightBrowsersInstalled(): void {
   if (process.env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD === "1") {
@@ -77,30 +87,29 @@ export function ensurePlaywrightBrowsersInstalled(): void {
     );
     return;
   }
+
+  if (ManagedBrowser.isPlaywrightChromiumInstalled()) {
+    return;
+  }
+
+  // `playwright/cli.js` is not an exported path, but its package.json is.
+  const playwrightCli = path.join(
+    path.dirname(createRequire(import.meta.url).resolve("playwright/package.json")),
+    "cli.js",
+  );
   try {
-    // Dynamically require Playwright and check for Chromium browser
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const chromiumPath = chromium.executablePath();
-    if (!chromiumPath || !existsSync(chromiumPath)) {
-      throw new Error("Playwright Chromium browser not found");
-    }
+    logger.info("🌐 Installing Playwright Chromium browser... (this may take a moment)");
+    execFileSync(
+      process.execPath,
+      [playwrightCli, "install", "chromium-headless-shell", "--no-remove"],
+      { stdio: "ignore" },
+    );
   } catch (error) {
-    // Not installed or not found, attempt to install
     logger.debug(String(error));
-    try {
-      logger.info(
-        "🌐 Installing Playwright Chromium browser... (this may take a moment)",
-      );
-      execSync("npm exec -y playwright install --no-shell --with-deps chromium", {
-        stdio: "ignore", // Suppress output
-        cwd: getProjectRoot(),
-      });
-    } catch (_installErr) {
-      logger.error(
-        "❌ Failed to install Playwright browsers automatically. Please run:\n  npx playwright install --no-shell --with-deps chromium\nand try again.",
-      );
-      process.exit(1);
-    }
+    logger.error(
+      `❌ Failed to install Playwright browsers automatically. Please run:\n  node "${playwrightCli}" install --with-deps chromium-headless-shell\nand try again.`,
+    );
+    process.exit(1);
   }
 }
 
@@ -123,18 +132,6 @@ export function resolveProtocol(protocol: string): "stdio" | "http" {
   }
 
   throw new Error(`Invalid protocol: ${protocol}. Must be 'auto', 'stdio', or 'http'`);
-}
-
-/**
- * Validates that --resume flag is only used with in-process workers.
- */
-export function validateResumeFlag(resume: boolean, serverUrl?: string): void {
-  if (resume && serverUrl) {
-    throw new Error(
-      "--resume flag is incompatible with --server-url. " +
-        "External workers handle their own job recovery.",
-    );
-  }
 }
 
 /**
@@ -171,14 +168,16 @@ export function validateHost(hostString: string): string {
  *
  * AppConfig is the source of truth for host/auth/telemetry/read-only settings.
  * AppServerConfig only selects which services to run and which port to bind to.
+ * Whether the server runs jobs itself or uses a worker follows from the backend.
+ *
+ * @param options Which services to run, the port, and startup details.
+ * @returns The server configuration.
  */
 export function createAppServerConfig(options: {
   enableWebInterface?: boolean;
   enableMcpServer?: boolean;
   enableApiServer?: boolean;
-  enableWorker?: boolean;
   port: number;
-  externalWorkerUrl?: string;
   showLogo?: boolean;
   startupContext?: {
     cliCommand?: string;
@@ -190,9 +189,7 @@ export function createAppServerConfig(options: {
     enableWebInterface: options.enableWebInterface ?? false,
     enableMcpServer: options.enableMcpServer ?? true,
     enableApiServer: options.enableApiServer ?? false,
-    enableWorker: options.enableWorker ?? true,
     port: options.port,
-    externalWorkerUrl: options.externalWorkerUrl,
     showLogo: options.showLogo ?? true,
     startupContext: options.startupContext,
   };
@@ -219,42 +216,42 @@ export function parseHeaders(headerOptions: string[]): Record<string, string> {
 }
 
 /**
- * Parses auth configuration from CLI options.
- * Environment variables are handled by createOptionWithEnv in command definitions.
- * Precedence: CLI flags > env vars (handled by commander) > defaults
+ * Check the auth settings for the transport a command serves. Authentication
+ * applies to MCP over HTTP only. Over stdio the host launching the process is
+ * the trust boundary, so auth settings are ignored with a warning on stderr,
+ * which never carries protocol data.
+ * @param auth - The loaded auth settings.
+ * @param protocol - The resolved transport.
+ * @param port - The HTTP port, for the plain-HTTP warning.
+ * @throws Error when an auth setting over HTTP is malformed.
  */
-export function parseAuthConfig(options: {
-  authEnabled?: boolean;
-  authIssuerUrl?: string;
-  authAudience?: string;
-}): AuthConfig | undefined {
-  // Check if auth is enabled via CLI flag (environment variables handled by commander/yargs)
-  if (!options.authEnabled) {
-    return undefined;
+export function checkAuthForProtocol(
+  auth: AuthConfig,
+  protocol: "stdio" | "http",
+  port: number,
+): void {
+  if (!auth.enabled) {
+    return;
   }
-
-  return {
-    enabled: true,
-    issuerUrl: options.authIssuerUrl,
-    audience: options.authAudience,
-    scopes: ["openid", "profile"], // Default scopes for OAuth2/OIDC
-  };
+  if (protocol === "stdio") {
+    console.error(
+      "⚠️  Authentication does not apply to MCP over stdio; auth settings are ignored.",
+    );
+    return;
+  }
+  validateAuthConfig(auth);
+  warnHttpUsage(port);
 }
 
 /**
- * Validates auth configuration when auth is enabled.
+ * Validates the format of auth settings that are present. Whether a setting
+ * is required depends on what the process serves, so the server checks that
+ * at startup.
  */
-export function validateAuthConfig(authConfig: AuthConfig): void {
-  if (!authConfig.enabled) {
-    return;
-  }
-
+function validateAuthConfig(authConfig: AuthConfig): void {
   const errors: string[] = [];
 
-  // Issuer URL is required when auth is enabled
-  if (!authConfig.issuerUrl) {
-    errors.push("--auth-issuer-url is required when auth is enabled");
-  } else {
+  if (authConfig.issuerUrl) {
     try {
       const url = new URL(authConfig.issuerUrl);
       if (url.protocol !== "https:") {
@@ -265,10 +262,8 @@ export function validateAuthConfig(authConfig: AuthConfig): void {
     }
   }
 
-  // Audience is required when auth is enabled
-  if (!authConfig.audience) {
-    errors.push("--auth-audience is required when auth is enabled");
-  } else {
+  // Audience is optional: it defaults to the MCP endpoint's public URL.
+  if (authConfig.audience) {
     // Audience can be any valid URI (URL or URN)
     // Examples: https://api.example.com, urn:docs-mcp-server:api, urn:company:service
     try {
@@ -299,9 +294,6 @@ export function validateAuthConfig(authConfig: AuthConfig): void {
     }
   }
 
-  // Scopes are not validated in binary authentication mode
-  // They're handled internally by the OAuth proxy
-
   if (errors.length > 0) {
     throw new Error(`Auth configuration validation failed:\n${errors.join("\n")}`);
   }
@@ -310,11 +302,7 @@ export function validateAuthConfig(authConfig: AuthConfig): void {
 /**
  * Warns about HTTP usage in production when auth is enabled.
  */
-export function warnHttpUsage(authConfig: AuthConfig | undefined, port: number): void {
-  if (!authConfig?.enabled) {
-    return;
-  }
-
+function warnHttpUsage(port: number): void {
   // Check if we're likely running in production (not localhost)
   const isLocalhost =
     process.env.NODE_ENV !== "production" ||
@@ -327,20 +315,6 @@ export function warnHttpUsage(authConfig: AuthConfig | undefined, port: number):
         "Consider using HTTPS for security.",
     );
   }
-}
-
-/**
- * Creates EventBusService and TelemetryService together.
- * The TelemetryService automatically subscribes to events from the EventBusService.
- * @returns Object containing both services
- */
-export function createEventServices(): {
-  eventBus: EventBusService;
-  telemetryService: TelemetryService;
-} {
-  const eventBus = new EventBusService();
-  const telemetryService = new TelemetryService(eventBus);
-  return { eventBus, telemetryService };
 }
 
 /**
@@ -374,16 +348,13 @@ export function resolveEmbeddingContext(
  * Returns true if the user confirms (y/Y), false otherwise.
  */
 function promptModelChangeConfirmation(
-  previousModel: string,
-  previousDimension: string,
-  currentModel: string,
-  currentDimension: string,
+  change: EmbeddingModelChangedError,
 ): Promise<boolean> {
   return new Promise((resolve) => {
     console.error(
       `\n⚠️  Embedding model change detected:\n` +
-        `   Previous: ${previousModel} (${previousDimension} dimensions)\n` +
-        `   Current:  ${currentModel} (${currentDimension} dimensions)\n\n` +
+        `   Previous: ${describeEmbeddingModel(change.previousModel, change.previousDimension)}\n` +
+        `   Current:  ${describeEmbeddingModel(change.currentModel, change.currentDimension)}\n\n` +
         `   All existing embedding vectors will be invalidated.\n` +
         `   Libraries must be re-scraped to restore vector search.\n` +
         `   Full-text search will continue working for all existing documents.\n`,
@@ -405,30 +376,42 @@ function promptModelChangeConfirmation(
 /**
  * Handles EmbeddingModelChangedError during service initialization.
  *
+ * - When accepted (`--accept-model-change` or `DOCS_MCP_ACCEPT_MODEL_CHANGE`):
+ *   resolves the model change (invalidates vectors) without asking.
  * - In non-interactive mode (no TTY): re-throws the error to fail startup.
  * - In interactive mode (TTY): prompts the user for confirmation, then either
- *   resolves the model change (invalidates vectors) or exits.
+ *   resolves the model change or exits.
  *
  * @param error The EmbeddingModelChangedError thrown by DocumentStore.initialize()
  * @param service The DocumentManagementService instance (already partially initialized)
+ * @param acceptFlag The value of `--accept-model-change`; when omitted,
+ *   `DOCS_MCP_ACCEPT_MODEL_CHANGE` decides
  * @throws Re-throws the error in non-interactive mode or if the user rejects the change
  */
 export async function handleEmbeddingModelChange(
-  error: import("../store/errors").EmbeddingModelChangedError,
-  service: import("../store/DocumentManagementService").DocumentManagementService,
+  error: EmbeddingModelChangedError,
+  service: Pick<DocumentManagementService, "resolveModelChange">,
+  acceptFlag?: boolean,
 ): Promise<void> {
+  const accepted =
+    acceptFlag ?? parseEnvBoolean(process.env.DOCS_MCP_ACCEPT_MODEL_CHANGE) ?? false;
+  if (accepted) {
+    logger.warn(
+      `⚠️  Accepting embedding model change without a prompt: ` +
+        `${describeEmbeddingModel(error.previousModel, error.previousDimension)} → ` +
+        `${describeEmbeddingModel(error.currentModel, error.currentDimension)}`,
+    );
+    await service.resolveModelChange();
+    return;
+  }
+
   // Non-interactive: fail startup entirely
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw error;
   }
 
   // Interactive: prompt user for confirmation
-  const confirmed = await promptModelChangeConfirmation(
-    error.previousModel,
-    error.previousDimension,
-    error.currentModel,
-    error.currentDimension,
-  );
+  const confirmed = await promptModelChangeConfirmation(error);
 
   if (!confirmed) {
     throw new Error(

@@ -1,76 +1,73 @@
-/** Unit test for fetchUrlAction */
+/** Tests for the fetch-url command */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type MockInstance,
+  vi,
+} from "vitest";
 import yargs from "yargs";
+import { HTML_FIXTURE_URL, writeTestConfig } from "../../../test/test-helpers";
+import { telemetry } from "../../telemetry";
 import { FetchUrlTool } from "../../tools";
 import { createFetchUrlCommand } from "./fetchUrl";
 
-const stdoutWriteMock = vi.fn();
-
-vi.mock("../../scraper/fetcher", () => ({
-  HttpFetcher: vi.fn().mockImplementation(function () {
-    return {};
-  }),
-  FileFetcher: vi.fn().mockImplementation(function () {
-    return {};
-  }),
-  AutoDetectFetcher: vi.fn().mockImplementation(function () {
-    return {
-      canFetch: vi.fn().mockReturnValue(true),
-      fetch: vi.fn().mockResolvedValue({
-        content: "<h1>Test</h1>",
-        mimeType: "text/html",
-        source: "https://example.com",
-      }),
-      close: vi.fn().mockResolvedValue(undefined),
-    };
-  }),
+vi.mock("../../telemetry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../telemetry")>()),
+  telemetry: { track: vi.fn() },
 }));
-vi.mock("../../tools", () => ({
-  FetchUrlTool: vi.fn().mockImplementation(function () {
-    return { execute: vi.fn(async () => "# md") };
-  }),
-}));
-vi.mock("../utils", () => ({ setupLogging: vi.fn(), parseHeaders: () => ({}) }));
-vi.mock("../../utils/config", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../utils/config")>();
-  return {
-    ...actual,
-    loadConfig: vi.fn(() => ({
-      scraper: { fetcher: {} },
-    })),
-  };
-});
 
 describe("fetch-url command", () => {
-  let stdoutWriteSpy: { mockRestore: () => void };
+  let stdoutWriteSpy: MockInstance<typeof process.stdout.write>;
+  let configDir = "";
 
   beforeEach(() => {
     vi.clearAllMocks();
-    stdoutWriteMock.mockReset();
-    stdoutWriteSpy = vi
-      .spyOn(process.stdout, "write")
-      .mockImplementation(stdoutWriteMock as any);
+    // These pages are fetched without a browser, so none needs installing
+    vi.stubEnv("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1");
+    stdoutWriteSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    configDir = mkdtempSync(path.join(tmpdir(), "fetch-url-command-"));
   });
 
   afterEach(() => {
-    stdoutWriteSpy.mockRestore();
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    rmSync(configDir, { recursive: true, force: true });
   });
 
-  it("executes FetchUrlTool", async () => {
+  /** Runs the command with a config that lets it read local files. */
+  async function run(args: string[]): Promise<void> {
     const parser = yargs().scriptName("test");
     createFetchUrlCommand(parser);
+    await parser.parse([...args, "--config", writeTestConfig(configDir)]);
+  }
 
-    await parser.parse("fetch-url https://example.com --scrape-mode auto");
+  it("prints the page at a file URL as Markdown", async () => {
+    await run(["fetch-url", HTML_FIXTURE_URL, "--scrape-mode", "fetch"]);
 
-    expect(FetchUrlTool).toHaveBeenCalledTimes(1);
-    const mockInstance = (FetchUrlTool as any).mock.results[0].value;
-    expect(mockInstance.execute).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://example.com",
-        scrapeMode: "auto",
-      }),
-    );
-    expect(stdoutWriteMock).toHaveBeenCalledWith("# md\n");
+    const printed = stdoutWriteSpy.mock.calls.map(([chunk]) => String(chunk)).join("");
+    expect(printed).toContain("# Herman Melville - Moby-Dick");
+    expect(printed).toContain("the blacksmith");
+    expect(printed).not.toContain("<h1>");
+  });
+
+  it("sends only the host of the URL to telemetry", async () => {
+    // Nothing is fetched; only what reaches telemetry matters here
+    vi.spyOn(FetchUrlTool.prototype, "execute").mockResolvedValue("");
+
+    await run(["fetch-url", "https://intranet.example.com/team/secret?q=1"]);
+
+    const [, properties] = vi.mocked(telemetry.track).mock.calls[0];
+    expect(properties).toMatchObject({
+      url: "intranet.example.com",
+      urlProtocol: "https",
+    });
+    expect(JSON.stringify(properties)).not.toContain("secret");
   });
 });

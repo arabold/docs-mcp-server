@@ -2,54 +2,26 @@ import { describe, expect, it } from "vitest";
 import { normalizeEnvValue, sanitizeEnvironment } from "./env";
 
 describe("normalizeEnvValue", () => {
-  it("strips surrounding double quotes", () => {
-    expect(normalizeEnvValue('"http://localhost:11434/v1"')).toBe(
-      "http://localhost:11434/v1",
-    );
-  });
+  it("trims the value and strips one pair of matching outer quotes", () => {
+    const cases: Array<[value: string, expected: string]> = [
+      ['"http://localhost:11434/v1"', "http://localhost:11434/v1"],
+      ["'http://localhost:11434/v1'", "http://localhost:11434/v1"],
+      ["http://localhost:11434/v1", "http://localhost:11434/v1"],
+      // Whitespace is trimmed before the quotes are checked
+      ['  "http://localhost:11434/v1"  ', "http://localhost:11434/v1"],
+      // Mismatched or one-sided quotes stay
+      ["\"http://localhost:11434/v1'", "\"http://localhost:11434/v1'"],
+      ['"only-start', '"only-start'],
+      ['only-end"', 'only-end"'],
+      ["", ""],
+      ['""', ""],
+      ["''", ""],
+      ['value with "internal" quotes', 'value with "internal" quotes'],
+    ];
 
-  it("strips surrounding single quotes", () => {
-    expect(normalizeEnvValue("'http://localhost:11434/v1'")).toBe(
-      "http://localhost:11434/v1",
-    );
-  });
-
-  it("leaves unquoted strings unchanged", () => {
-    expect(normalizeEnvValue("http://localhost:11434/v1")).toBe(
-      "http://localhost:11434/v1",
-    );
-  });
-
-  it("trims whitespace before checking quotes", () => {
-    expect(normalizeEnvValue('  "http://localhost:11434/v1"  ')).toBe(
-      "http://localhost:11434/v1",
-    );
-  });
-
-  it("does not strip mismatched quotes", () => {
-    expect(normalizeEnvValue("\"http://localhost:11434/v1'")).toBe(
-      "\"http://localhost:11434/v1'",
-    );
-  });
-
-  it("does not strip quotes that only appear on one side", () => {
-    expect(normalizeEnvValue('"only-start')).toBe('"only-start');
-    expect(normalizeEnvValue('only-end"')).toBe('only-end"');
-  });
-
-  it("handles empty string", () => {
-    expect(normalizeEnvValue("")).toBe("");
-  });
-
-  it("handles string that is just quotes", () => {
-    expect(normalizeEnvValue('""')).toBe("");
-    expect(normalizeEnvValue("''")).toBe("");
-  });
-
-  it("preserves internal quotes", () => {
-    expect(normalizeEnvValue('value with "internal" quotes')).toBe(
-      'value with "internal" quotes',
-    );
+    for (const [value, expected] of cases) {
+      expect.soft(normalizeEnvValue(value), value).toBe(expected);
+    }
   });
 });
 

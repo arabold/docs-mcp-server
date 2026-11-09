@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { TextDocumentSplitter } from "./TextDocumentSplitter";
-import type { SplitterConfig } from "./types";
+import type { Chunk, SplitterConfig } from "./types";
 
 const mockConfig: SplitterConfig = {
   minChunkSize: 100,
@@ -12,144 +12,93 @@ const mockConfig: SplitterConfig = {
   maxChunkSize: 1000,
 };
 
+/** A chunk as this splitter emits it: plain text at the document root. */
+const textChunk = (content: string): Chunk => ({
+  types: ["text"],
+  content,
+  section: { level: 0, path: [] },
+});
+
 describe("TextDocumentSplitter", () => {
-  describe("basic functionality", () => {
-    it("should return empty array for empty content", async () => {
-      const splitter = new TextDocumentSplitter(mockConfig);
-      const result = await splitter.splitText("");
-      expect(result).toEqual([]);
-    });
+  it("returns no chunks for empty or whitespace-only content", async () => {
+    const splitter = new TextDocumentSplitter(mockConfig);
+    const cases: Array<[label: string, content: string]> = [
+      ["empty", ""],
+      ["whitespace only", "   \n\t  \n  "],
+    ];
 
-    it("should return empty array for whitespace-only content", async () => {
-      const splitter = new TextDocumentSplitter(mockConfig);
-      const result = await splitter.splitText("   \n\t  \n  ");
-      expect(result).toEqual([]);
-    });
+    for (const [label, content] of cases) {
+      expect.soft(await splitter.splitText(content), label).toEqual([]);
+    }
+  });
 
-    it("should split simple text into chunks", async () => {
-      const splitter = new TextDocumentSplitter({ ...mockConfig, maxChunkSize: 50 });
-      const content =
-        "This is a simple text.\nIt has multiple lines.\nAnd should be split properly.";
+  it("splits text into root-level text chunks no larger than maxChunkSize", async () => {
+    const cases: Array<
+      [label: string, maxChunkSize: number, content: string, expected: Chunk[]]
+    > = [
+      [
+        "two chunks",
+        50,
+        "This is a simple text.\nIt has multiple lines.\nAnd should be split properly.",
+        [
+          textChunk("This is a simple text.\nIt has multiple lines.\n"),
+          textChunk("And should be split properly."),
+        ],
+      ],
+      [
+        "fits in one chunk",
+        100,
+        "Short text that fits in one chunk.",
+        [textChunk("Short text that fits in one chunk.")],
+      ],
+    ];
 
-      const result = await splitter.splitText(content);
+    for (const [label, maxChunkSize, content, expected] of cases) {
+      const splitter = new TextDocumentSplitter({ ...mockConfig, maxChunkSize });
+      expect.soft(await splitter.splitText(content), label).toEqual(expected);
+    }
+  });
 
-      expect(result).toHaveLength(2);
-      expect(result[0]).toEqual({
-        types: ["text"],
-        content: "This is a simple text.\nIt has multiple lines.\n",
-        section: {
-          level: 0,
-          path: [],
-        },
+  it("should handle MinimumChunkSizeError gracefully by forcefully splitting", async () => {
+    // Create a splitter with very small chunk size
+    const splitter = new TextDocumentSplitter({ ...mockConfig, maxChunkSize: 5 });
+    const content = "ThisIsAVeryLongWordThatCannotBeSplit";
+
+    const result = await splitter.splitText(content);
+
+    // Should split the content into multiple chunks when normal splitting fails
+    // Content is 36 chars, chunk size is 5, so we expect 8 chunks (7*5 + 1)
+    expect(result.length).toBeGreaterThan(1);
+
+    // Verify each chunk respects the max size
+    for (const chunk of result) {
+      expect(chunk.content.length).toBeLessThanOrEqual(5);
+      expect(chunk.types).toEqual(["text"]);
+      expect(chunk.section).toEqual({
+        level: 0,
+        path: [],
       });
-      expect(result[1]).toEqual({
-        types: ["text"],
-        content: "And should be split properly.",
-        section: {
-          level: 0,
-          path: [],
-        },
-      });
-    });
+    }
 
-    it("should handle content that fits in single chunk", async () => {
-      const splitter = new TextDocumentSplitter({ ...mockConfig, maxChunkSize: 100 });
-      const content = "Short text that fits in one chunk.";
-
-      const result = await splitter.splitText(content);
-
-      expect(result).toHaveLength(1);
-      expect(result[0]).toEqual({
-        types: ["text"],
-        content: "Short text that fits in one chunk.",
-        section: {
-          level: 0,
-          path: [],
-        },
-      });
-    });
+    // Verify content is preserved when concatenated
+    const reconstructed = result.map((c) => c.content).join("");
+    expect(reconstructed).toBe(content);
   });
 
-  describe("error handling", () => {
-    it("should handle MinimumChunkSizeError gracefully by forcefully splitting", async () => {
-      // Create a splitter with very small chunk size
-      const splitter = new TextDocumentSplitter({ ...mockConfig, maxChunkSize: 5 });
-      const content = "ThisIsAVeryLongWordThatCannotBeSplit";
+  it("keeps lines, blank lines and indentation, so the chunks join back to the input", async () => {
+    const cases: Array<[label: string, maxChunkSize: number, content: string]> = [
+      ["lines and paragraphs", 30, "Line 1\nLine 2\n\nParagraph 2\nLast line"],
+      [
+        "indentation and tabs",
+        50,
+        "  Indented text\n\n  Another indented line  \n\tTab indented\n",
+      ],
+    ];
 
-      const result = await splitter.splitText(content);
-
-      // Should split the content into multiple chunks when normal splitting fails
-      // Content is 36 chars, chunk size is 5, so we expect 8 chunks (7*5 + 1)
-      expect(result.length).toBeGreaterThan(1);
-
-      // Verify each chunk respects the max size
-      for (const chunk of result) {
-        expect(chunk.content.length).toBeLessThanOrEqual(5);
-        expect(chunk.types).toEqual(["text"]);
-        expect(chunk.section).toEqual({
-          level: 0,
-          path: [],
-        });
-      }
-
-      // Verify content is preserved when concatenated
-      const reconstructed = result.map((c) => c.content).join("");
-      expect(reconstructed).toBe(content);
-    });
-  });
-
-  describe("configuration", () => {
-    it("should use custom maxChunkSize when provided", async () => {
-      const splitter = new TextDocumentSplitter({ ...mockConfig, maxChunkSize: 20 });
-      const content =
-        "This is a longer text that should be split into multiple smaller chunks.";
-
-      const result = await splitter.splitText(content);
-
-      // Should split into multiple chunks due to small size limit
-      expect(result.length).toBeGreaterThan(1);
-
-      // Each chunk should be under the size limit (allowing for some overhead)
-      for (const chunk of result) {
-        expect(chunk.content.length).toBeLessThanOrEqual(25); // Small buffer for edge cases
-      }
-    });
-  });
-
-  describe("content reconstruction", () => {
-    it("should allow perfect content reconstruction", async () => {
-      const splitter = new TextDocumentSplitter({ ...mockConfig, maxChunkSize: 30 });
-      const originalContent = "Line 1\nLine 2\n\nParagraph 2\nLast line";
-
-      const result = await splitter.splitText(originalContent);
-      const reconstructed = result.map((chunk) => chunk.content).join("");
-
-      expect(reconstructed).toBe(originalContent);
-    });
-
-    it("should preserve formatting and whitespace", async () => {
-      const splitter = new TextDocumentSplitter({ ...mockConfig, maxChunkSize: 50 });
-      const content = "  Indented text\n\n  Another indented line  \n\tTab indented\n";
-
-      const result = await splitter.splitText(content);
-      const reconstructed = result.map((chunk) => chunk.content).join("");
-
-      expect(reconstructed).toBe(content);
-    });
-  });
-
-  describe("metadata", () => {
-    it("should set correct metadata for each chunk", async () => {
-      const splitter = new TextDocumentSplitter({ ...mockConfig, maxChunkSize: 20 });
-      const content = "First chunk. Second chunk. Third chunk.";
-
-      const result = await splitter.splitText(content);
-
-      for (let i = 0; i < result.length; i++) {
-        expect(result[i].types).toEqual(["text"]);
-        expect(result[i].section.level).toBe(0);
-        expect(result[i].section.path).toEqual([]);
-      }
-    });
+    for (const [label, maxChunkSize, content] of cases) {
+      const splitter = new TextDocumentSplitter({ ...mockConfig, maxChunkSize });
+      const chunks = await splitter.splitText(content);
+      expect.soft(chunks.map((chunk) => chunk.content).join(""), label).toBe(content);
+    }
   });
 });

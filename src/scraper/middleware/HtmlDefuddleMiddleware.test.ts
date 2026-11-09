@@ -69,7 +69,7 @@ const articleHtml = (extra = "") => `
   </html>`;
 
 describe("HtmlDefuddleMiddleware", () => {
-  it("removes nav/footer/sidebar boilerplate but keeps article body", async () => {
+  it("removes nav/footer/sidebar boilerplate, keeps article body and sets the title", async () => {
     const middleware = new HtmlDefuddleMiddleware();
     const context = createMockContext(articleHtml());
     const next = vi.fn().mockResolvedValue(undefined);
@@ -87,6 +87,7 @@ describe("HtmlDefuddleMiddleware", () => {
     expect($(".sidebar").length).toBe(0);
     expect($(".site-footer").length).toBe(0);
     expect($("body").text()).toContain("Lorem ipsum");
+    expect(context.title).toContain("Test Article");
   });
 
   it("respects excludeSelectors (applied to the source DOM before extraction)", async () => {
@@ -136,17 +137,6 @@ describe("HtmlDefuddleMiddleware", () => {
     expect(next).toHaveBeenCalledOnce();
     expect(context.errors).toHaveLength(0);
     expect(context.dom).toBeUndefined();
-  });
-
-  it("populates context.title when not already set", async () => {
-    const middleware = new HtmlDefuddleMiddleware();
-    const context = createMockContext(articleHtml());
-    const next = vi.fn().mockResolvedValue(undefined);
-
-    await middleware.process(context, next);
-
-    expect(context.title).toBeTruthy();
-    expect(context.title).toContain("Test Article");
   });
 
   it("triggers fallback when extracted body is only script content (Next.js hydration)", async () => {

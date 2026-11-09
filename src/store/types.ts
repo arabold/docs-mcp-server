@@ -48,7 +48,6 @@ export interface DbChunk {
   content: string;
   metadata: DbChunkMetadata; // Chunk-specific metadata (level, path, etc.)
   sort_order: number;
-  embedding: Buffer | null; // Binary blob for embeddings
   created_at: string;
   score: number | null; // Added during search queries
 }
@@ -163,6 +162,13 @@ export interface VersionRef {
   version: string; // empty string for unversioned
 }
 
+/** A version found or claimed in the store. */
+export interface ResolvedVersion {
+  versionId: number;
+  /** The library's stored display name. */
+  library: string;
+}
+
 /**
  * Normalizes a version label for storage and lookup.
  *
@@ -180,17 +186,92 @@ export function normalizeVersionLabel(version?: string | null): string {
 }
 
 /**
- * Normalizes a library name for storage and lookup.
+ * Computes a library's lookup key.
  *
- * The counterpart to {@link normalizeVersionLabel}: trim and lowercase, so a
- * library is one row however its name was typed.
+ * The counterpart to {@link normalizeVersionLabel}: trim and lowercase (the
+ * Unicode default lowercase mapping, without full case folding), so a library
+ * is one row however its name was typed. The key is what `libraries.name`
+ * stores and every lookup compares; the name as entered lives on as the display
+ * name ({@link normalizeLibraryDisplayName}).
  *
  * @param library Library name as supplied by a caller.
- * @returns The normalized name.
+ * @returns The lookup key.
  */
 export function normalizeLibraryName(library: string): string {
   return library.trim().toLowerCase();
 }
+
+/**
+ * Whether two library names refer to the same library.
+ *
+ * The one comparison every caller-facing lookup uses, so the identity rule
+ * lives in a single place.
+ *
+ * @param a A library name in any casing or padding.
+ * @param b Another library name.
+ */
+export function libraryNamesMatch(a: string, b: string): boolean {
+  return normalizeLibraryName(a) === normalizeLibraryName(b);
+}
+
+/**
+ * Computes a library's display name: the name as entered, trimmed only.
+ *
+ * Case, inner spacing, punctuation and non-ASCII characters are preserved, so
+ * `Next.js Docs` is stored and shown exactly that way.
+ *
+ * @param library Library name as supplied by a caller.
+ * @returns The display name to store for a new library.
+ */
+export function normalizeLibraryDisplayName(library: string): string {
+  return library.trim();
+}
+
+/** Longest name accepted for a new library, counted in Unicode code points. */
+export const MAX_LIBRARY_NAME_LENGTH = 100;
+
+/** Unicode general category Cc: C0 controls, DEL and C1 controls such as tab, newline and ESC. */
+export const CONTROL_CHARACTER = /\p{Cc}/u;
+
+/**
+ * Explains why a name is unacceptable for a new library.
+ *
+ * Only creation is validated; existing libraries stay reachable under their
+ * stored names. Format characters (Cf) are allowed because emoji sequences rely
+ * on the zero-width joiner. Pure, so the web client can show the same message.
+ *
+ * @param displayName Name submitted for a new library; trimmed before checking.
+ * @returns The broken rule as a short phrase, or `null` when the name is valid.
+ */
+export function describeLibraryNameProblem(displayName: string): string | null {
+  const name = normalizeLibraryDisplayName(displayName);
+  if (name.length === 0) {
+    return "is empty";
+  }
+  if (CONTROL_CHARACTER.test(name)) {
+    return "contains a control character";
+  }
+  if ([...name].length > MAX_LIBRARY_NAME_LENGTH) {
+    return `is longer than ${MAX_LIBRARY_NAME_LENGTH} characters`;
+  }
+  return null;
+}
+
+/**
+ * What indexing does when its target library or version already exists.
+ *
+ * - `reject-library`: fail if the library exists at all (the web UI's "Add library").
+ * - `reject-version`: fail if that version exists; create the library if needed (the default).
+ * - `replace`: rebuild an existing version, or create it (`--replace`, `replace: true`, re-index, retry, refresh).
+ */
+export const EXISTING_TARGET_POLICIES = [
+  "reject-library",
+  "reject-version",
+  "replace",
+] as const;
+
+/** One of {@link EXISTING_TARGET_POLICIES}. */
+export type ExistingTargetPolicy = (typeof EXISTING_TARGET_POLICIES)[number];
 
 /** Normalize a VersionRef (lowercase, trim; empty string for unversioned). */
 export function normalizeVersionRef(ref: VersionRef): VersionRef {
@@ -258,6 +339,27 @@ export interface DbVersion {
  */
 export interface DbVersionWithLibrary extends DbVersion {
   library_name: string;
+}
+
+/**
+ * `versions.updated_at` holds whole seconds (SQLite's `CURRENT_TIMESTAMP`), so
+ * a write can read up to this much older than it happened.
+ */
+export const UPDATED_AT_RESOLUTION_MS = 1000;
+
+/**
+ * How long ago a version was last written, from its `updated_at` (UTC).
+ *
+ * @param version The version as read from the store.
+ * @param now The current time, in milliseconds since the epoch.
+ * @returns Milliseconds since the write, or `Infinity` when the version has no
+ *   readable `updated_at`.
+ */
+export function msSinceWritten(version: DbVersion, now: number): number {
+  const writtenAt = version.updated_at
+    ? Date.parse(`${version.updated_at.replace(" ", "T")}Z`)
+    : Number.NaN;
+  return Number.isNaN(writtenAt) ? Number.POSITIVE_INFINITY : now - writtenAt;
 }
 
 /**
@@ -416,13 +518,13 @@ export interface ActivityDay {
   date: string;
   /** Pages first indexed on this day. */
   pages: number;
-  /** Chunks first stored on this day. */
+  /** Chunks of the pages first indexed on this day. */
   chunks: number;
 }
 
 /**
  * Per-day indexing activity over a trailing window, derived from the
- * `created_at` timestamps already stored on pages and chunks. Days with no
+ * `created_at` timestamps already stored on pages. Days with no
  * activity are present with zero counts, so the series is contiguous and safe
  * to chart directly.
  */
@@ -498,4 +600,61 @@ export interface CompactResult {
   afterBytes: number;
   /** Bytes reclaimed (`beforeBytes - afterBytes`, floored at 0). */
   reclaimedBytes: number;
+}
+
+/**
+ * Options for reading a stored page.
+ */
+export interface PageContentOptions {
+  /** Index of the first chunk to return (default 0). */
+  startChunk?: number;
+  /** Maximum characters to return. Whole chunks only; a single longer chunk is returned on its own. */
+  maxChars?: number;
+}
+
+/**
+ * A window of consecutive chunks of a stored page, assembled for its content type.
+ */
+export interface PageContentResult {
+  url: string;
+  title: string | null;
+  contentType: string | null;
+  content: string;
+  /** Index of the first chunk in `content`. */
+  startChunk: number;
+  totalChunks: number;
+  /** `startChunk` for the next call, or null when `content` reaches the end of the page. */
+  nextChunk: number | null;
+}
+
+/**
+ * Options for listing pages in a library version.
+ */
+export interface ListPagesOptions {
+  /** Keeps only pages whose URL contains this text. */
+  contains?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/**
+ * Item in the list of pages.
+ */
+export interface PageListItem {
+  url: string;
+  title: string | null;
+  depth: number | null;
+}
+
+/**
+ * Result of listing pages for a library version.
+ */
+export interface ListPagesResult {
+  library: string;
+  version: string;
+  total: number;
+  pages: PageListItem[];
+  limit: number;
+  offset: number;
+  hasMore: boolean;
 }

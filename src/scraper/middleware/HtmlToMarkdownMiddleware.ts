@@ -351,9 +351,12 @@ export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
       logger.debug(`Converting HTML content to Markdown for ${context.source}`);
       this.preservedTableHtml.clear();
       this.splitOversizedTables($, context.source);
-      // Provide Turndown with the HTML string content from the Cheerio object's body,
-      // or the whole document if body is empty/unavailable.
-      const htmlToConvert = $("body").html() || $.html();
+      // Convert the body alone. The head holds the title, which is metadata:
+      // converting it too stores the title as the text of a page whose body
+      // is empty. Only a document with no body element, such as a frameset
+      // page, is converted whole.
+      const body = $("body");
+      const htmlToConvert = body.length > 0 ? (body.html() ?? "") : $.html();
       const markdown = this.turndownService.turndown(htmlToConvert).trim();
 
       if (!markdown) {

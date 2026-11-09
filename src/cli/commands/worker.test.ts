@@ -3,25 +3,25 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
 import * as appModule from "../../app";
+import { registerGlobalServices } from "../services";
 import { createWorkerCommand } from "./worker";
 
-const pipelineMock = {
-  start: vi.fn(async () => {}),
-  stop: vi.fn(async () => {}),
-};
+const pipelineMock = {};
 
 // Mock startAppServer
 vi.mock("../../app", () => ({
   startAppServer: vi.fn(async () => ({ shutdown: vi.fn() })),
 }));
 
-vi.mock("../../store", () => ({
-  createLocalDocumentManagement: vi.fn(async () => ({ shutdown: vi.fn() })),
-}));
-vi.mock("../../pipeline", () => ({
-  PipelineFactory: {
-    createPipeline: vi.fn(async () => pipelineMock),
-  },
+vi.mock("../../services/backend", () => ({
+  openBackend: vi.fn(async (options: { serverUrl?: string }) => ({
+    workerUrl: options.serverUrl,
+    docService: {},
+    pipeline: pipelineMock,
+    eventBus: {},
+    isWorkerConnected: undefined,
+    close: vi.fn(),
+  })),
 }));
 vi.mock("../../events", () => ({
   getEventBus: vi.fn(() => ({
@@ -76,28 +76,24 @@ describe("worker command", () => {
     vi.spyOn(process, "exit").mockImplementation((() => {}) as any);
   });
 
-  it("starts worker server with correct config", async () => {
+  // The only check that a worker leaves the web UI and the MCP endpoint off
+  it("starts the API without the web UI or the MCP endpoint", async () => {
     const parser = yargs().scriptName("test");
     createWorkerCommand(parser);
+    // The command waits forever once the server runs; stop it right there.
+    // It reports the stop as a startup failure and resolves.
+    vi.mocked(registerGlobalServices)
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("Simulated Stop");
+      });
 
-    const services = await import("../services");
-    // @ts-expect-error
-    services.registerGlobalServices.mockImplementationOnce(() => {
-      throw new Error("Simulated Stop");
+    await parser.parse("worker");
+
+    expect(vi.mocked(appModule.startAppServer).mock.calls[0]?.[1]).toMatchObject({
+      enableApiServer: true,
+      enableWebInterface: false,
+      enableMcpServer: false,
     });
-
-    try {
-      await parser.parse(`worker --port 8080`);
-    } catch (e: any) {
-      if (e.message !== "Simulated Stop") throw e;
-    }
-
-    expect(appModule.startAppServer).toHaveBeenCalled();
-    const callArgs = (appModule.startAppServer as any).mock.calls[0];
-    const config = callArgs[3]; // 4th arg is config
-    expect(config.enableWorker).toBe(true);
-    expect(config.enableApiServer).toBe(true);
-    expect(config.enableWebInterface).toBe(false);
-    expect(config.port).toBe(8080);
   });
 });

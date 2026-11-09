@@ -11,6 +11,7 @@ import { telemetry } from "../telemetry";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
 import { formatBytes } from "../utils/string";
+import { normalizeUrl } from "../utils/url";
 import {
   isSemanticVersion,
   type SemanticVersionCandidate,
@@ -19,23 +20,32 @@ import {
   VERSION_REQUEST_PATTERN,
   type VersionCandidate,
 } from "../utils/version";
+import { createContentAssemblyStrategy } from "./assembly/ContentAssemblyStrategyFactory";
 import { DocumentRetrieverService } from "./DocumentRetrieverService";
 import { DocumentStore } from "./DocumentStore";
 import type { EmbeddingModelConfig } from "./embeddings/EmbeddingConfig";
 import {
+  AmbiguousPageInStoreError,
   LibraryNotFoundInStoreError,
+  PageNotFoundInStoreError,
   StoreError,
   VersionNotFoundInStoreError,
 } from "./errors";
 import type {
   ActivityHistory,
   CompactResult,
+  DbPageChunk,
   DbVersionWithLibrary,
   EmbeddingConfigInfo,
   FindVersionResult,
   LibrarySummary,
+  ListPagesOptions,
+  ListPagesResult,
   ListVersionChunksOptions,
   ListVersionChunksResult,
+  PageContentOptions,
+  PageContentResult,
+  ResolvedVersion,
   ScraperConfig,
   StoreSearchResult,
   VersionChunkStats,
@@ -44,7 +54,48 @@ import type {
   VersionStatus,
   VersionSummary,
 } from "./types";
-import { normalizeVersionLabel, normalizeVersionRef } from "./types";
+import {
+  type ExistingTargetPolicy,
+  normalizeVersionLabel,
+  normalizeVersionRef,
+} from "./types";
+
+/** Upper bound on the pages listed when a path matches more than one. */
+const MAX_AMBIGUOUS_PAGE_MATCHES = 10;
+
+/**
+ * Returns the distinct spellings a stored URL may use for `value`: as given,
+ * encoded, and percent-decoded.
+ */
+function spellingsOf(value: string, encode: (value: string) => string): string[] {
+  let decoded = value;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    // Not valid percent-encoding; the other spellings still apply.
+  }
+  return [...new Set([value, encode(value), decoded])];
+}
+
+/**
+ * Percent-encodes a path the way URL parsing does when the scraper stores a URL.
+ * Hash-only routes are left alone because they carry no path.
+ */
+function encodePath(path: string): string {
+  if (!path.startsWith("/")) return path;
+  const url = new URL(path, "http://placeholder");
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+/**
+ * Turns a page path into the URL ending to match: rooted at `/` (hash routes
+ * excepted), without trailing slashes. Empty for the root path.
+ */
+function toPathSuffix(path: string): string {
+  const trimmed = path.replace(/\/+$/, "");
+  if (!trimmed) return "";
+  return trimmed.startsWith("/") || trimmed.startsWith("#") ? trimmed : `/${trimmed}`;
+}
 
 /**
  * Provides semantic search capabilities across different versions of library documentation.
@@ -136,14 +187,37 @@ export class DocumentManagementService {
   }
 
   /**
-   * Updates the status of a version.
+   * Marks the jobs of QUEUED or RUNNING versions alive for other processes on
+   * the store.
+   * @param versionIds The versions whose jobs are alive
+   * @throws {StoreError} When the write fails
+   */
+  async markVersionsAlive(versionIds: number[]): Promise<void> {
+    return this.store.markVersionsAlive(versionIds);
+  }
+
+  /**
+   * Claims a version an earlier run left QUEUED or RUNNING, if nothing has
+   * written it since `updatedAt` was read; see {@link DocumentStore.claimInterruptedVersion}.
+   * @returns Whether the claim succeeded
+   */
+  async claimInterruptedVersion(
+    versionId: number,
+    updatedAt: string | null,
+  ): Promise<boolean> {
+    return this.store.claimInterruptedVersion(versionId, updatedAt);
+  }
+
+  /**
+   * Updates the status of a version, and tells views the library list changed.
    */
   async updateVersionStatus(
     versionId: number,
     status: VersionStatus,
     errorMessage?: string,
   ): Promise<void> {
-    return this.store.updateVersionStatus(versionId, status, errorMessage);
+    await this.store.updateVersionStatus(versionId, status, errorMessage);
+    this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
   }
 
   /**
@@ -177,11 +251,54 @@ export class DocumentManagementService {
 
   /**
    * Ensures a library/version exists using a VersionRef and returns version ID.
-   * Delegates to existing ensureLibraryAndVersion for storage.
+   * The `VersionRef` form of {@link ensureLibraryAndVersion}.
    */
   async ensureVersion(ref: VersionRef): Promise<number> {
-    const normalized = normalizeVersionRef(ref);
-    return this.ensureLibraryAndVersion(normalized.library, normalized.version);
+    return this.ensureLibraryAndVersion(ref.library, ref.version);
+  }
+
+  /**
+   * Creates or verifies the library and version an indexing job writes into, atomically.
+   * See {@link DocumentStore.claimVersion} for the policy semantics and errors.
+   */
+  async claimVersion(
+    library: string,
+    version: string,
+    policy: ExistingTargetPolicy,
+  ): Promise<ResolvedVersion> {
+    return this.store.claimVersion(library, version, policy);
+  }
+
+  /**
+   * Looks up a version that must already exist, without creating anything.
+   *
+   * @returns The version id and the library's stored display name.
+   * @throws {LibraryNotFoundInStoreError} When the library does not exist (with suggestions).
+   * @throws {VersionNotFoundInStoreError} When the library exists but the version does not.
+   */
+  async requireVersion(ref: VersionRef): Promise<ResolvedVersion> {
+    const found = await this.store.findVersion(ref.library, ref.version);
+    if (found) {
+      return found;
+    }
+    throw await this.versionNotFound(ref.library, normalizeVersionLabel(ref.version));
+  }
+
+  /**
+   * Builds the version-not-found error for a version that does not resolve,
+   * naming the library as it is stored.
+   * @throws {LibraryNotFoundInStoreError} When the library itself is missing (with suggestions).
+   */
+  private async versionNotFound(
+    library: string,
+    version: string,
+  ): Promise<VersionNotFoundInStoreError> {
+    const { displayName } = await this.requireLibrary(library);
+    return new VersionNotFoundInStoreError(
+      displayName,
+      version,
+      await this.listAvailableLabels(library),
+    );
   }
 
   /**
@@ -234,31 +351,42 @@ export class DocumentManagementService {
   async validateLibraryExists(library: string): Promise<void> {
     logger.info(`🔎 Validating existence of library: ${library}`);
 
-    // Check if the library exists in the libraries table
-    const libraryRecord = await this.store.getLibrary(library);
-
-    if (!libraryRecord) {
-      logger.warn(`⚠️  Library '${library}' not found.`);
-
-      // Library doesn't exist, fetch all libraries to provide suggestions
-      const allLibraries = await this.listLibraries();
-      const libraryNames = allLibraries.map((lib) => lib.library);
-
-      let suggestions: string[] = [];
-      if (libraryNames.length > 0) {
-        const fuse = new Fuse(libraryNames, {
-          threshold: 0.7, // Adjust threshold for desired fuzziness (0=exact, 1=match anything)
-        });
-        const results = fuse.search(library.toLowerCase());
-        // Take top 3 suggestions
-        suggestions = results.slice(0, 3).map((result) => result.item);
-        logger.info(`🔍 Found suggestions: ${suggestions.join(", ")}`);
-      }
-
-      throw new LibraryNotFoundInStoreError(library, suggestions);
-    }
+    await this.requireLibrary(library);
 
     logger.info(`✅ Library '${library}' confirmed to exist.`);
+  }
+
+  /**
+   * Looks up a library that must exist, without creating anything.
+   * @throws {LibraryNotFoundInStoreError} When it does not (with suggestions).
+   */
+  private async requireLibrary(library: string): Promise<{ displayName: string }> {
+    const libraryRecord = await this.store.getLibrary(library);
+    if (!libraryRecord) {
+      throw await this.libraryNotFound(library);
+    }
+    return libraryRecord;
+  }
+
+  /** Builds the library-not-found error, suggesting similarly named libraries. */
+  private async libraryNotFound(library: string): Promise<LibraryNotFoundInStoreError> {
+    logger.warn(`⚠️  Library '${library}' not found.`);
+
+    // Library doesn't exist; suggest from the stored display names
+    const libraryNames = [...(await this.store.queryLibraryVersions()).keys()];
+
+    let suggestions: string[] = [];
+    if (libraryNames.length > 0) {
+      const fuse = new Fuse(libraryNames, {
+        threshold: 0.7, // Adjust threshold for desired fuzziness (0=exact, 1=match anything)
+      });
+      const results = fuse.search(library.toLowerCase());
+      // Take top 3 suggestions
+      suggestions = results.slice(0, 3).map((result) => result.item);
+      logger.info(`🔍 Found suggestions: ${suggestions.join(", ")}`);
+    }
+
+    return new LibraryNotFoundInStoreError(library, suggestions);
   }
 
   /**
@@ -444,11 +572,7 @@ export class DocumentManagementService {
     // documentation is never silently skipped. Only when nothing resolves does
     // unversioned content come into play, and failing that we report the error.
     if (!bestMatch && !hasUnversioned) {
-      throw new VersionNotFoundInStoreError(
-        library,
-        targetVersion ?? "",
-        await this.listAvailableLabels(library),
-      );
+      throw await this.versionNotFound(library, targetVersion ?? "");
     }
 
     return { bestMatch, hasUnversioned };
@@ -704,6 +828,177 @@ export class DocumentManagementService {
     return this.documentRetriever.search(library, normalizedVersion, query, limit);
   }
 
+  /**
+   * Reads consecutive chunks of a stored page, assembled for the page's content type.
+   *
+   * The page is identified by its URL, the URL its content was fetched from, or a
+   * path matching the end of exactly one page URL. Only whole chunks are returned,
+   * so the content never ends inside a code block; `nextChunk` tells the caller
+   * where to continue.
+   *
+   * @param library Library name.
+   * @param version Version or version range, resolved like `findBestVersion`.
+   * @param pathOrUrl Page URL or path.
+   * @param options `startChunk` to continue reading, `maxChars` to bound the size.
+   * @returns The assembled window and its position within the page.
+   * @throws PageNotFoundInStoreError when no page matches, with similar pages as suggestions.
+   * @throws AmbiguousPageInStoreError when a path matches more than one page.
+   */
+  async getPageContent(
+    library: string,
+    version: string | null | undefined,
+    pathOrUrl: string,
+    options: PageContentOptions = {},
+  ): Promise<PageContentResult> {
+    const resolved = await this.resolvePageVersion(library, version);
+    const url = await this.findPageUrl(resolved.library, resolved.version, pathOrUrl);
+    const chunks = await this.store.findChunksByUrl(library, resolved.version, url);
+    const contentType = chunks[0]?.content_type ?? null;
+    const strategy = createContentAssemblyStrategy(contentType, this.appConfig);
+
+    const startChunk = options.startChunk ?? 0;
+    const maxChars = options.maxChars ?? Number.POSITIVE_INFINITY;
+    const window: DbPageChunk[] = [];
+    for (const chunk of chunks.slice(startChunk)) {
+      // The first chunk is always included so every call makes progress.
+      if (
+        window.length > 0 &&
+        strategy.assembleContent([...window, chunk]).length > maxChars
+      ) {
+        break;
+      }
+      window.push(chunk);
+    }
+    const end = startChunk + window.length;
+
+    return {
+      url,
+      title: chunks[0]?.title ?? null,
+      contentType,
+      content: strategy.assembleContent(window),
+      startChunk,
+      totalChunks: chunks.length,
+      nextChunk: end < chunks.length ? end : null,
+    };
+  }
+
+  /**
+   * Lists the stored pages of a library version.
+   *
+   * @param library Library name.
+   * @param version Version or version range, resolved like `findBestVersion`.
+   * @param options `contains` filters URLs; `limit` (default 50) and `offset` paginate.
+   * @returns One page of results and whether more follow.
+   */
+  async listPages(
+    library: string,
+    version: string | null | undefined,
+    options: ListPagesOptions = {},
+  ): Promise<ListPagesResult> {
+    const resolved = await this.resolvePageVersion(library, version);
+    const limit = options.limit ?? 50;
+    const offset = options.offset ?? 0;
+    const { total, pages } = await this.store.listPages(library, resolved.version, {
+      contains: options.contains,
+      limit,
+      offset,
+    });
+    return {
+      library: resolved.library,
+      version: resolved.version,
+      total,
+      pages,
+      limit,
+      offset,
+      hasMore: offset + pages.length < total,
+    };
+  }
+
+  /**
+   * Validates the library and resolves the version label whose pages to read.
+   * @returns The library's stored display name and the resolved version label.
+   * @throws {LibraryNotFoundInStoreError} When the library does not exist (with suggestions).
+   */
+  private async resolvePageVersion(
+    library: string,
+    version: string | null | undefined,
+  ): Promise<{ library: string; version: string }> {
+    const { displayName } = await this.requireLibrary(library);
+    const { bestMatch } = await this.findBestVersion(library, version ?? undefined);
+    return { library: displayName, version: bestMatch ?? "" };
+  }
+
+  /**
+   * Resolves a page URL or path to the URL of exactly one stored page.
+   * `library` is the stored display name, which the not-found and ambiguous
+   * errors repeat.
+   *
+   * An absolute URL must equal a stored URL; a path must match the end of one.
+   * Each is tried as given, spelled the way the scraper stores URLs, and decoded,
+   * and then again without its fragment and query.
+   */
+  private async findPageUrl(
+    library: string,
+    version: string,
+    pathOrUrl: string,
+  ): Promise<string> {
+    const isAbsolute = /^[a-z][a-z\d+.-]*:\/\//i.test(pathOrUrl);
+    const withoutAnchor = pathOrUrl.replace(/[?#].*$/, "");
+
+    for (const input of new Set([pathOrUrl, withoutAnchor])) {
+      if (isAbsolute) {
+        const [url] = await this.store.findPageUrls(
+          library,
+          version,
+          spellingsOf(input, (value) => normalizeUrl(value, { removeHash: false })),
+        );
+        if (url) return url;
+        continue;
+      }
+
+      const suffix = toPathSuffix(input);
+      if (!suffix) continue;
+      const urls = await this.store.findPageUrlsBySuffix(
+        library,
+        version,
+        spellingsOf(suffix, encodePath),
+        MAX_AMBIGUOUS_PAGE_MATCHES,
+      );
+      if (urls.length === 1) return urls[0];
+      if (urls.length > 1) {
+        throw new AmbiguousPageInStoreError(library, version, pathOrUrl, urls);
+      }
+    }
+
+    throw new PageNotFoundInStoreError(
+      library,
+      version,
+      pathOrUrl,
+      await this.suggestPages(library, version, withoutAnchor),
+    );
+  }
+
+  /**
+   * Suggests up to three pages for input that matched none: pages whose URL
+   * contains its last path segment, or else the top-level pages.
+   */
+  private async suggestPages(
+    library: string,
+    version: string,
+    input: string,
+  ): Promise<string[]> {
+    const keyword = input.split("/").filter(Boolean).pop() ?? "";
+    if (keyword.length >= 2) {
+      const { pages } = await this.store.listPages(library, version, {
+        contains: keyword,
+        limit: 3,
+      });
+      if (pages.length > 0) return pages.map((page) => page.url);
+    }
+    const { pages } = await this.store.listPages(library, version, { limit: 3 });
+    return pages.map((page) => page.url);
+  }
+
   // Deprecated simple listing removed: enriched listLibraries() is canonical
 
   /**
@@ -711,17 +1006,10 @@ export class DocumentManagementService {
    * Creates the library and version records if they don't exist.
    */
   async ensureLibraryAndVersion(library: string, version: string): Promise<number> {
-    // Use the same resolution logic as addDocuments but return the version ID
-    const normalizedLibrary = library.toLowerCase();
-    const normalizedVersion = normalizeVersionLabel(version);
-
-    // This will create the library and version if they don't exist
-    const versionId = await this.store.resolveVersionId(
-      normalizedLibrary,
-      normalizedVersion,
-    );
-
-    return versionId;
+    // Same resolution as addDocuments, which creates the library and version if
+    // they don't exist. Both halves go through as submitted: the store computes
+    // the lookup key, normalizes the version, and keeps a new library's display name.
+    return this.store.resolveVersionId(library, version);
   }
 
   /**

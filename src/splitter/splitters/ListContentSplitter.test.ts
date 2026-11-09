@@ -8,12 +8,17 @@ describe("ListContentSplitter", () => {
   } satisfies ContentSplitterOptions;
   const splitter = new ListContentSplitter(options);
 
-  it("should keep small lists intact", async () => {
-    const list = "- Item 1\n- Item 2\n- Item 3";
-    const chunks = await splitter.split(list);
+  it("returns a list that fits unchanged", async () => {
+    const cases: Array<[label: string, list: string]> = [
+      ["small list", "- Item 1\n- Item 2\n- Item 3"],
+      // Items are short: "- A" (3 chars), so many merge into one chunk.
+      ["many tiny items", "- A\n- B\n- C\n- D\n- E\n- F\n- G\n- H\n- I\n- J"],
+      ["numbered list", "1. Item 1\n2. Item 2\n3. Item 3"],
+    ];
 
-    expect(chunks.length).toBe(1);
-    expect(chunks[0]).toBe(list);
+    for (const [label, list] of cases) {
+      expect.soft(await splitter.split(list), label).toEqual([list]);
+    }
   });
 
   it("should split long lists by items", async () => {
@@ -30,16 +35,6 @@ describe("ListContentSplitter", () => {
     for (const chunk of chunks) {
       expect(chunk.length).toBeLessThanOrEqual(options.chunkSize);
     }
-  });
-
-  it("should merge small items if they fit", async () => {
-    // Items are short: "- A" (3 chars).
-    // Should merge many into one chunk.
-    const list = "- A\n- B\n- C\n- D\n- E\n- F\n- G\n- H\n- I\n- J";
-    const chunks = await splitter.split(list);
-
-    expect(chunks.length).toBe(1);
-    expect(chunks[0]).toBe(list);
   });
 
   it("should fallback to text splitting for huge items", async () => {
@@ -59,13 +54,6 @@ describe("ListContentSplitter", () => {
     for (const chunk of chunks) {
       expect(chunk.length).toBeLessThanOrEqual(options.chunkSize);
     }
-  });
-
-  it("should handle numbered lists", async () => {
-    const list = "1. Item 1\n2. Item 2\n3. Item 3";
-    const chunks = await splitter.split(list);
-    expect(chunks.length).toBe(1);
-    expect(chunks[0]).toBe(list);
   });
 
   it("preserves fence balance when an oversized list item contains a code block", async () => {

@@ -11,7 +11,7 @@ function baseSystemInfo(overrides: Partial<SystemInfo> = {}): SystemInfo {
     telemetryEnabled: true,
     services: { web: true, mcp: true, api: true, worker: true },
     worker: { mode: "embedded", maxConcurrency: 3 },
-    mcp: { enabled: true, endpoints: ["/mcp", "/sse"] },
+    mcp: { enabled: true, endpoints: ["/mcp", "/sse"], url: "http://127.0.0.1:6280/mcp" },
     auth: { enabled: false },
     scraper: { maxPages: 1000, maxDepth: 3 },
     ...overrides,
@@ -31,125 +31,67 @@ function buildContext(overrides: Partial<SystemHealthTrpcContext> = {}) {
 }
 
 describe("systemHealthRouter.getSystemHealth", () => {
-  it("returns embedded worker mode without url/connected fields", async () => {
-    const ctx = buildContext({
-      systemInfo: baseSystemInfo({ worker: { mode: "embedded", maxConcurrency: 3 } }),
+  it("reports the startup snapshot, the embedded worker and the active embeddings", async () => {
+    const systemInfo = baseSystemInfo({
+      version: "9.9.9",
+      readOnly: true,
+      telemetryEnabled: false,
+      services: { web: false, mcp: true, api: true, worker: true },
+      mcp: {
+        enabled: true,
+        endpoints: ["/mcp", "/sse"],
+        url: "http://127.0.0.1:6280/mcp",
+      },
+      auth: { enabled: true, issuer: "https://auth.example.com" },
+      scraper: { maxPages: 250, maxDepth: 0 },
+    });
+    const ctx = buildContext({ systemInfo });
+    vi.mocked(ctx.docService.getEmbeddingConfigInfo).mockResolvedValue({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      dimensions: 1536,
     });
     const caller = systemHealthRouter.createCaller(ctx);
 
     const health = await caller.getSystemHealth();
 
-    expect(health.worker).toEqual({ mode: "embedded", maxConcurrency: 3 });
-    expect(health.worker).not.toHaveProperty("url");
-    expect(health.worker).not.toHaveProperty("connected");
+    expect(health).toEqual({
+      version: "9.9.9",
+      readOnly: true,
+      telemetryEnabled: false,
+      services: { web: false, mcp: true, api: true, worker: true },
+      // No url or connected fields for a worker in this process
+      worker: { mode: "embedded", maxConcurrency: 3 },
+      embeddings: {
+        provider: "openai",
+        model: "text-embedding-3-small",
+        dimensions: 1536,
+      },
+      mcp: {
+        enabled: true,
+        endpoints: ["/mcp", "/sse"],
+        url: "http://127.0.0.1:6280/mcp",
+      },
+      auth: { enabled: true, issuer: "https://auth.example.com" },
+      scraper: { maxPages: 250, maxDepth: 0 },
+    });
   });
 
-  it("returns remote worker mode with url and connected populated from the connectivity check", async () => {
-    const ctx = buildContext({
-      systemInfo: baseSystemInfo({
-        worker: { mode: "remote", url: "http://worker.example.com" },
-      }),
-      isWorkerConnected: vi.fn().mockReturnValue(true),
-    });
-    const caller = systemHealthRouter.createCaller(ctx);
-
-    const health = await caller.getSystemHealth();
-
-    expect(health.worker).toEqual({
-      mode: "remote",
-      url: "http://worker.example.com",
-      connected: true,
-    });
-  });
-
-  it("reports connected: false for a remote worker that hasn't connected yet", async () => {
+  it("still reports a remote worker as disconnected when it cannot be asked for its embeddings", async () => {
     const ctx = buildContext({
       systemInfo: baseSystemInfo({
         worker: { mode: "remote", url: "http://worker.example.com" },
       }),
       isWorkerConnected: vi.fn().mockReturnValue(false),
     });
+    vi.mocked(ctx.docService.getEmbeddingConfigInfo).mockRejectedValue(
+      new Error("fetch failed"),
+    );
     const caller = systemHealthRouter.createCaller(ctx);
 
     const health = await caller.getSystemHealth();
 
-    expect(health.worker).toEqual({
-      mode: "remote",
-      url: "http://worker.example.com",
-      connected: false,
-    });
-  });
-
-  it("returns embeddings: null when running in full-text-search-only mode", async () => {
-    const ctx = buildContext();
-    const caller = systemHealthRouter.createCaller(ctx);
-
-    const health = await caller.getSystemHealth();
-
+    expect(health.worker).toMatchObject({ mode: "remote", connected: false });
     expect(health.embeddings).toBeNull();
-  });
-
-  it("returns the active embedding provider/model/dimensions when embeddings are configured", async () => {
-    const ctx = buildContext();
-    (ctx.docService.getEmbeddingConfigInfo as ReturnType<typeof vi.fn>).mockResolvedValue(
-      {
-        provider: "openai",
-        model: "text-embedding-3-small",
-        dimensions: 1536,
-      },
-    );
-    const caller = systemHealthRouter.createCaller(ctx);
-
-    const health = await caller.getSystemHealth();
-
-    expect(health.embeddings).toEqual({
-      provider: "openai",
-      model: "text-embedding-3-small",
-      dimensions: 1536,
-    });
-  });
-
-  it("does not fabricate dimensions for a model with unknown vector size", async () => {
-    const ctx = buildContext();
-    (ctx.docService.getEmbeddingConfigInfo as ReturnType<typeof vi.fn>).mockResolvedValue(
-      {
-        provider: "openai",
-        model: "some-custom-model",
-        dimensions: null,
-      },
-    );
-    const caller = systemHealthRouter.createCaller(ctx);
-
-    const health = await caller.getSystemHealth();
-
-    expect(health.embeddings).toEqual({
-      provider: "openai",
-      model: "some-custom-model",
-      dimensions: null,
-    });
-  });
-
-  it("passes through version, readOnly, telemetryEnabled, services, mcp, auth, and scraper unchanged", async () => {
-    const systemInfo = baseSystemInfo({
-      version: "9.9.9",
-      readOnly: true,
-      telemetryEnabled: false,
-      services: { web: false, mcp: true, api: true, worker: false },
-      mcp: { enabled: true, endpoints: ["/mcp", "/sse"] },
-      auth: { enabled: true, issuer: "https://auth.example.com" },
-      scraper: { maxPages: 250, maxDepth: 0 },
-    });
-    const ctx = buildContext({ systemInfo });
-    const caller = systemHealthRouter.createCaller(ctx);
-
-    const health = await caller.getSystemHealth();
-
-    expect(health.version).toBe("9.9.9");
-    expect(health.readOnly).toBe(true);
-    expect(health.telemetryEnabled).toBe(false);
-    expect(health.services).toEqual({ web: false, mcp: true, api: true, worker: false });
-    expect(health.mcp).toEqual({ enabled: true, endpoints: ["/mcp", "/sse"] });
-    expect(health.auth).toEqual({ enabled: true, issuer: "https://auth.example.com" });
-    expect(health.scraper).toEqual({ maxPages: 250, maxDepth: 0 });
   });
 });

@@ -5,7 +5,8 @@ import { TextContentSplitter } from "./TextContentSplitter";
 import type { ContentSplitterOptions } from "./types";
 
 const fenceCount = (s: string) => (s.match(/```/g) || []).length;
-const tildeFenceCount = (s: string) => (s.match(/(?:^| |\n)~~~/g) || []).length;
+/** Counts the lines that open or close a backtick or tilde fence. */
+const fenceLineCount = (s: string) => (s.match(/^(?:```|~~~)/gm) || []).length;
 
 describe("TextContentSplitter", () => {
   const options = {
@@ -76,38 +77,31 @@ And line four finishes it.`;
     expect(whitespaceChunks[0]).toBe("   \n  \n  ");
   });
 
-  it("should preserve formatting and whitespace", async () => {
-    const textWithFormatting = `  function example() {
+  it("keeps formatting and whitespace, so the chunks join back to the input", async () => {
+    const cases: Array<[label: string, text: string]> = [
+      [
+        "indentation",
+        `  function example() {
     // This has indentation
     const value = "test";
     
     return value;
-  }`;
-
-    const chunks = await splitter.split(textWithFormatting);
-
-    // Should preserve the exact content including indentation and blank lines
-    expect(chunks.join("")).toBe(textWithFormatting);
-
-    // Each chunk should maintain its formatting
-    for (const chunk of chunks) {
-      // Leading/trailing spaces should be preserved within chunks
-      expect(chunk).not.toBe(chunk.trim());
-    }
-  });
-
-  it("should preserve blank lines and spacing", async () => {
-    const textWithSpacing = `Line 1
+  }`,
+      ],
+      [
+        "blank lines",
+        `Line 1
 
 Line 3 with blank line above
 
 
-Line 6 with multiple blank lines above`;
+Line 6 with multiple blank lines above`,
+      ],
+    ];
 
-    const chunks = await splitter.split(textWithSpacing);
-
-    // Should be able to reconstruct exactly
-    expect(chunks.join("")).toBe(textWithSpacing);
+    for (const [label, text] of cases) {
+      expect.soft((await splitter.split(text)).join(""), label).toBe(text);
+    }
   });
 
   it("should split words as last resort", async () => {
@@ -137,28 +131,72 @@ Line 6 with multiple blank lines above`;
       warnSpy.mockRestore();
     });
 
-    it("keeps a fenced code block intact when it would otherwise straddle a paragraph boundary", async () => {
-      const splitter = new TextContentSplitter({ chunkSize: 200 });
-      // The fence contains a blank line, so a naive paragraph split would cut inside it.
-      const text = [
-        "Intro paragraph that takes up some space here in the document.",
-        "",
-        "```ts",
-        "const x = 1;",
-        "",
-        "const y = 2;",
-        "```",
-        "",
-        "Trailing paragraph that follows the example code block.",
-      ].join("\n");
+    it("keeps every fenced code block intact and the chunks lossless", async () => {
+      const cases: Array<[label: string, chunkSize: number, text: string]> = [
+        [
+          // The fence contains a blank line, so a naive paragraph split would cut inside it.
+          "fence straddling a paragraph boundary",
+          70,
+          [
+            "Intro paragraph that takes up some space here in the document.",
+            "",
+            "```ts",
+            "const x = 1;",
+            "",
+            "const y = 2;",
+            "```",
+            "",
+            "Trailing paragraph that follows the example code block.",
+          ].join("\n"),
+        ],
+        [
+          // Only the second fence has a blank line inside, so the split has to track
+          // it after the first fence has closed.
+          "several fences separated by prose",
+          60,
+          [
+            "Para A.",
+            "",
+            "```ts",
+            "a();",
+            "```",
+            "",
+            "Para B that takes a bit of space to write out fully.",
+            "",
+            "```python",
+            "def f():",
+            "",
+            "    return 1",
+            "```",
+            "",
+            "Para C trailing the example.",
+          ].join("\n"),
+        ],
+        [
+          "tilde fence with a blank line inside",
+          60,
+          [
+            "Intro.",
+            "",
+            "~~~",
+            "line 1",
+            "",
+            "line 2 with a blank line inside the fence",
+            "~~~",
+            "",
+            "Trailing.",
+          ].join("\n"),
+        ],
+      ];
 
-      const chunks = await splitter.split(text);
-      for (const c of chunks) {
-        expect(fenceCount(c) % 2).toBe(0);
-        expect(hasOpenFenceAtEnd(c)).toBe(false);
+      for (const [label, chunkSize, text] of cases) {
+        const chunks = await new TextContentSplitter({ chunkSize }).split(text);
+        for (const c of chunks) {
+          expect.soft(fenceLineCount(c) % 2, `${label}: balanced`).toBe(0);
+          expect.soft(hasOpenFenceAtEnd(c), `${label}: no open fence`).toBe(false);
+        }
+        expect.soft(chunks.join(""), `${label}: lossless`).toBe(text);
       }
-      // Reconstruct losslessly.
-      expect(chunks.join("")).toBe(text);
     });
 
     it("emits a single oversize chunk plus a warning when a fenced block alone exceeds chunkSize", async () => {
@@ -183,80 +221,6 @@ Line 6 with multiple blank lines above`;
       expect(warnSpy).toHaveBeenCalled();
       const warnText = warnSpy.mock.calls.map((c) => String(c[0])).join("\n");
       expect(warnText).toContain("TextContentSplitter");
-    });
-
-    it("handles multiple fenced blocks separated by prose without breaking any fence", async () => {
-      const splitter = new TextContentSplitter({ chunkSize: 200 });
-      const text = [
-        "Para A.",
-        "",
-        "```ts",
-        "a();",
-        "```",
-        "",
-        "Para B that takes a bit of space to write out fully.",
-        "",
-        "```python",
-        "def f():",
-        "    return 1",
-        "```",
-        "",
-        "Para C trailing the example.",
-      ].join("\n");
-
-      const chunks = await splitter.split(text);
-      for (const c of chunks) {
-        expect(fenceCount(c) % 2).toBe(0);
-        expect(hasOpenFenceAtEnd(c)).toBe(false);
-      }
-    });
-
-    it("honors the invariant for tilde fences", async () => {
-      const splitter = new TextContentSplitter({ chunkSize: 150 });
-      const text = [
-        "Intro.",
-        "",
-        "~~~",
-        "line 1",
-        "",
-        "line 2 with a blank line inside the fence",
-        "~~~",
-        "",
-        "Trailing.",
-      ].join("\n");
-
-      const chunks = await splitter.split(text);
-      for (const c of chunks) {
-        // Tilde fences must also be balanced.
-        const opens = (c.match(/^~~~/gm) || []).length;
-        expect(opens % 2).toBe(0);
-        expect(hasOpenFenceAtEnd(c)).toBe(false);
-      }
-      // sanity check: at least one fence appears in the input
-      expect(tildeFenceCount(text)).toBeGreaterThan(0);
-    });
-
-    it("treats fences with a language tag the same as bare fences", async () => {
-      const splitter = new TextContentSplitter({ chunkSize: 200 });
-      const text = [
-        "Intro.",
-        "",
-        "```ts",
-        "interface X {",
-        "",
-        "  foo: string;",
-        "",
-        "  bar: number;",
-        "}",
-        "```",
-        "",
-        "Trailing prose to push past chunkSize for variety.",
-      ].join("\n");
-
-      const chunks = await splitter.split(text);
-      for (const c of chunks) {
-        expect(fenceCount(c) % 2).toBe(0);
-      }
     });
   });
 });

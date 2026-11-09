@@ -94,6 +94,7 @@ VOLUME /config
 EXPOSE 6280
 ENV PORT=6280
 ENV HOST=0.0.0.0
+ENV DOCS_MCP_PROTOCOL=http
 
 # Use a numeric non-root default so Kubernetes can verify `runAsNonRoot`.
 # OpenShift and other runtimes may override it with an arbitrary uid. Mounted

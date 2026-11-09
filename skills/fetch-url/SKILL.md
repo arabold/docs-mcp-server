@@ -1,9 +1,10 @@
 ---
 name: fetch-url
 description: >-
-  Fetch a single URL and convert its content to Markdown. Use when you
+  Fetch a single URL and print its content as Markdown. Use when you
   need to read a web page, documentation page, or API reference without
-  indexing it. The content is returned as plain Markdown text on stdout.
+  indexing it. Accepts http(s):// and file:// URLs and writes the result
+  to stdout.
 compatibility: Requires Node.js 22+ and npx
 metadata:
   author: grounded.tools
@@ -11,17 +12,17 @@ metadata:
 
 # Fetch URL
 
-Fetch a single URL and convert its content to clean Markdown. This does **not**
-add anything to the documentation index; it is a one-shot read operation.
+Fetch one URL and print its content as Markdown. Nothing is added to the
+documentation index.
 
 ## When to use
 
-- You need to read a single web page and get its content as Markdown.
-- You want to inspect a documentation page before deciding whether to index it.
-- You need the raw text of a URL for summarisation or analysis.
+- You need to read a single web page as Markdown.
+- You want to look at a documentation page before deciding whether to index it.
+- You need the text of a URL for summarizing or analysis.
 
-If you need to index the content for repeated searching, use the **docs-manage**
-skill (`scrape` command) instead.
+To index content for repeated searching, use the **docs-manage** skill
+(`scrape` command) instead.
 
 ## Command
 
@@ -29,22 +30,26 @@ skill (`scrape` command) instead.
 npx @arabold/docs-mcp-server@latest fetch-url <url> [options]
 ```
 
+`<url>` is an `http://`, `https://` or `file://` URL.
+
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--follow-redirects` | `true` | Follow HTTP redirects |
-| `--no-follow-redirects` | | Disable following redirects |
-| `--scrape-mode auto\|fetch\|playwright` | `auto` | HTML processing strategy |
+| `--no-follow-redirects` | follows redirects | Fail on an HTTP redirect instead of following it |
+| `--scrape-mode auto\|fetch\|playwright` | `auto` | How HTML pages are processed |
 | `--header "Name: Value"` | | Custom HTTP header (repeatable) |
-| `--quiet` | | Suppress non-error diagnostics |
-| `--verbose` | | Enable debug logging |
+| `--quiet` | | Log errors only |
+| `--verbose` | | Log debug output |
 
 ## Scrape modes
 
-| Mode | When to use |
-|------|-------------|
-| `auto` | Default. Tries a simple HTTP fetch first, falls back to Playwright for JS-rendered pages. |
-| `fetch` | Force a plain HTTP fetch. Fastest, but misses content rendered by JavaScript. |
-| `playwright` | Force a headless browser. Use for SPAs or pages that require JavaScript to render. |
+| Mode | Behavior |
+|------|----------|
+| `auto` | Default. Renders HTML pages in headless Chromium, like `playwright`. |
+| `playwright` | Renders HTML pages in headless Chromium, so content built by JavaScript is included. |
+| `fetch` | Converts the HTML as the server sent it. Faster, but misses content built by JavaScript. |
+
+In every mode, a site that refuses the plain request (HTTP 403 or 429) is
+fetched again through the browser.
 
 ## Examples
 
@@ -52,32 +57,37 @@ npx @arabold/docs-mcp-server@latest fetch-url <url> [options]
 # Fetch a documentation page
 npx @arabold/docs-mcp-server@latest fetch-url https://react.dev/reference/react/useEffect
 
-# Fetch with custom auth header
-npx @arabold/docs-mcp-server@latest fetch-url https://docs.internal.com/api \
+# Send an auth header
+npx @arabold/docs-mcp-server@latest fetch-url https://docs.example.com/api \
   --header "Authorization: Bearer tok_xxx"
 
-# Force Playwright for a JS-heavy page
-npx @arabold/docs-mcp-server@latest fetch-url https://some-spa.dev/docs --scrape-mode playwright
+# Skip browser rendering for a static page
+npx @arabold/docs-mcp-server@latest fetch-url https://example.com/docs/page.html --scrape-mode fetch
 
-# Disable redirect following
+# Fail instead of following a redirect
 npx @arabold/docs-mcp-server@latest fetch-url https://example.com/old-page --no-follow-redirects
 ```
 
 ## Output
 
-The command writes the converted Markdown text directly to **stdout**. The
-global `--output` flag is accepted but has no effect because the result is
-already plain text, not structured data.
+The content goes to **stdout**. HTML pages and documents such as PDF or Word
+files are converted to Markdown. JSON, XML and plain text are printed
+unchanged. The `--output` flag has no effect on this command.
 
-Diagnostics and errors go to **stderr** and are suppressed by default in
-non-interactive sessions. Use `--verbose` (or set `LOG_LEVEL=INFO`) to
-re-enable them. Use `--quiet` to suppress all non-error diagnostics
-regardless of session type.
+Logs go to **stderr**. Outside a terminal, only errors are logged; set
+`LOG_LEVEL=INFO` or pass `--verbose` to see progress messages.
+
+On failure the command exits with a non-zero status and prints
+`Unable to fetch or process the URL ...` on stderr. Run it again with
+`--verbose` to see the cause. By default the server refuses private network
+addresses (such as `localhost` or `10.x.x.x`) and local files outside the
+user's Documents folder; the user can allow more in the server configuration
+(`scraper.security`).
 
 ## Tips
 
-- Pipe the output to a file if you want to save it:
+- Save the output to a file:
   `npx @arabold/docs-mcp-server@latest fetch-url <url> > page.md`
-- Combine with search: fetch a page to read its full content after `search`
-  returns a relevant URL.
-- For pages behind authentication, use `--header` to pass cookies or tokens.
+- After `search` (docs-search skill) returns a relevant URL, fetch the page to
+  read all of it.
+- For pages behind authentication, pass cookies or tokens with `--header`.
