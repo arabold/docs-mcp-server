@@ -202,29 +202,48 @@ export class DimensionError extends StoreError {
 export class ConnectionError extends StoreError {}
 
 /**
- * Error thrown when the compiled binary of better-sqlite3 is missing and the
- * server did not download it. npm 12 and later skip dependency install
- * scripts unless they are allowed, which leaves the package installed without
- * the binary its install script fetches. The message names the commands that
- * get the binary: allowing the script and reinstalling after a failed
- * download, or turning `ignore-scripts` off for one start when that setting
- * skipped the download, since it also overrides `allow-scripts`.
+ * Why better-sqlite3's compiled binary cannot load: it is missing, or it was
+ * built for another Node.js version.
  */
-export class NativeModuleMissingError extends StoreError {
+export type NativeModuleProblem = "missing" | "nodeVersion";
+
+/**
+ * Error thrown when better-sqlite3's compiled binary cannot load and the
+ * server did not download one for the running Node.js. npm 12 and later skip
+ * dependency install scripts unless they are allowed, which leaves the
+ * package without the binary its install script fetches. An npx or global
+ * install keeps the binary of the Node.js version it was installed with. The
+ * message names the commands that get a binary: allowing the script and
+ * reinstalling after a failed download, or turning `ignore-scripts` off for one
+ * start when that setting skipped the download, since it also overrides
+ * `allow-scripts`.
+ */
+export class NativeModuleUnavailableError extends StoreError {
   /**
+   * @param options.problem - Why the package's own binary did not load
    * @param options.ignoreScripts - True when npm's `ignore-scripts` setting skipped the download
    */
-  constructor({ ignoreScripts = false }: { ignoreScripts?: boolean } = {}) {
+  constructor({
+    problem = "missing",
+    ignoreScripts = false,
+  }: { problem?: NativeModuleProblem; ignoreScripts?: boolean } = {}) {
+    const cause =
+      problem === "missing"
+        ? "The SQLite native module (better-sqlite3) is missing"
+        : `The SQLite native module (better-sqlite3) was built for a different Node.js version than ${process.version}`;
+    const downloadFailed =
+      problem === "missing"
+        ? `${cause} and could not be downloaded`
+        : `${cause}, and one for that version could not be downloaded`;
     super(
       ignoreScripts
-        ? "The SQLite native module (better-sqlite3) is missing, so the database cannot open. " +
-            "npm's ignore-scripts setting is on, so the server does not download it. " +
+        ? `${cause}, so the database cannot open. ` +
+            "npm's ignore-scripts setting is on, so the server does not download one. " +
             "Start the server once with the setting off:\n" +
             "  npx --ignore-scripts=false @arabold/docs-mcp-server@latest\n" +
             'In an MCP client\'s settings, add "--ignore-scripts=false" before the package name.'
-        : "The SQLite native module (better-sqlite3) is missing and could not be downloaded, so the database cannot open. " +
-            "npm 12 and later skip dependency install scripts unless they are allowed. " +
-            "Allow its script and clear the npx cache:\n" +
+        : `${downloadFailed}, so the database cannot open. ` +
+            "Allow its install script, which npm 12 and later skip, and clear the npx cache so npx installs it again:\n" +
             "  npm config set allow-scripts=better-sqlite3 --location=user\n" +
             "  npm cache npx rm --force\n" +
             "Then start the server again. For a global install, run " +
@@ -234,17 +253,29 @@ export class NativeModuleMissingError extends StoreError {
 }
 
 /**
- * Tells whether an error means a native module's compiled binary is missing,
- * as thrown by the `bindings` package that better-sqlite3 loads it with.
+ * Tells why better-sqlite3's compiled binary failed to load, if the error is
+ * about the binary. The `bindings` package that better-sqlite3 loads it with
+ * reports a missing file, and Node.js reports a binary built for another
+ * Node.js version.
  *
  * @param error - The error thrown while loading the module
- * @returns True when the binary was not found on disk
+ * @returns The problem, or undefined when the error is about something else
  */
-export function isMissingNativeBinding(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    error.message.startsWith("Could not locate the bindings file")
-  );
+export function nativeModuleProblem(error: unknown): NativeModuleProblem | undefined {
+  if (!(error instanceof Error)) {
+    return undefined;
+  }
+  if (error.message.startsWith("Could not locate the bindings file")) {
+    return "missing";
+  }
+  if (
+    "code" in error &&
+    error.code === "ERR_DLOPEN_FAILED" &&
+    error.message.includes("NODE_MODULE_VERSION")
+  ) {
+    return "nodeVersion";
+  }
+  return undefined;
 }
 
 /**

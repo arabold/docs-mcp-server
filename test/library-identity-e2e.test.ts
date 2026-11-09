@@ -14,7 +14,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
-import Database from "better-sqlite3";
+import { openDatabase } from "../src/store/openDatabase";
 import * as sqliteVec from "sqlite-vec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createCli } from "../src/cli";
@@ -316,7 +316,7 @@ describe("Library identity end-to-end", () => {
     // Created before the naming rules existed; seeded in-process, bypassing validation
     const longName = "L".repeat(101);
     await docService.shutdown();
-    const db = new Database(join(tempDir, "documents.db"));
+    const db = openDatabase(join(tempDir, "documents.db"));
     const { lastInsertRowid } = db
       .prepare("INSERT INTO libraries (name, display_name) VALUES (?, ?)")
       .run(longName.toLowerCase(), longName);
@@ -436,7 +436,7 @@ describe("Library identity end-to-end", () => {
   it("makes a padded legacy library reachable after the upgrade", async () => {
     const legacyDir = mkdtempSync(join(tmpdir(), "library-identity-legacy-"));
     try {
-      const db = new Database(join(legacyDir, "documents.db"));
+      const db = openDatabase(join(legacyDir, "documents.db"));
       sqliteVec.load(db);
       await applyMigrations(db);
       restorePre017Libraries(db);

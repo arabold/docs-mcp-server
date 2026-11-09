@@ -31,11 +31,16 @@ npm install -g @arabold/docs-mcp-server
 docs-mcp-server
 ```
 
-#### Install scripts (npm 12 and later)
+#### The SQLite binary
 
-The database runs on [better-sqlite3](https://github.com/WiseLibs/better-sqlite3), which downloads its compiled SQLite binary in an install script. npm 12 and later skip the install scripts of dependencies unless you allow them. When the binary is missing, the server downloads it on its first start with the same tool the install script uses.
+The database runs on [better-sqlite3](https://github.com/WiseLibs/better-sqlite3). Its install script downloads a compiled SQLite binary, which works only with the Node.js version that installed the package. The package's binary does not load in two cases:
 
-When npm's `ignore-scripts` setting is on, the server leaves the binary missing and stops. The setting also overrides `allow-scripts`, so turn it off for one start to let the server download the binary into the existing install:
+- npm 12 and later skip the install scripts of dependencies unless you allow them, so the binary is missing.
+- npx reuses the package it installed earlier after you switch Node.js versions, and a global install keeps its binary too, so the binary is built for another version.
+
+In both cases, the server downloads a binary for the running Node.js on its first start, with the same tool the install script uses. It keeps one binary for each Node.js version in its cache folder: `~/Library/Caches/docs-mcp-server` on macOS, `~/.cache/docs-mcp-server` on Linux and `%LOCALAPPDATA%\docs-mcp-server\Cache` on Windows.
+
+When npm's `ignore-scripts` setting is on, the server downloads nothing and stops. The setting also overrides `allow-scripts`, so turn it off for one start to let the server download the binary:
 
 ```bash
 npx --ignore-scripts=false @arabold/docs-mcp-server@latest
@@ -43,7 +48,7 @@ npx --ignore-scripts=false @arabold/docs-mcp-server@latest
 
 In an MCP client's settings, add `"--ignore-scripts=false"` to `args` before the package name.
 
-If the download fails, for example without network access or in a global install folder you cannot write to, the server stops with "The SQLite native module (better-sqlite3) is missing and could not be downloaded". Older versions, which do not download it, stop with "Could not locate the bindings file" instead. Allow the script, clear the npx cache so npx installs the package again, and start the server again:
+If the download fails, for example without network access, the server stops with "The SQLite native module (better-sqlite3) is missing and could not be downloaded", or says it "was built for a different Node.js version". Older versions, which do not download it, stop with "Could not locate the bindings file" or "NODE_MODULE_VERSION" instead. Allow the script, clear the npx cache so npx installs the package again, and start the server again:
 
 ```bash
 npm config set allow-scripts=better-sqlite3 --location=user

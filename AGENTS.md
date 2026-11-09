@@ -4,7 +4,7 @@ Read `README.md` for setup and configuration, and `ARCHITECTURE.md` before chang
 
 ## Environment
 
-- Use Node.js 22 (`nvm use 22`), even though `package.json` allows newer versions. `better-sqlite3` ships a binary pinned to the Node ABI, so do not raise the engine floor.
+- Use Node.js 22 (`nvm use 22`), which CI runs, and do not raise the engine floor. Under another version, `openDatabase` downloads a `better-sqlite3` binary for it on first use, since the installed one is pinned to the Node ABI. Open databases only through `openDatabase`.
 - Use `npm ci` to get `node_modules`. Use `npm install` only to change dependencies on purpose.
 - Run occasional tools such as `promptfoo` through `npx -y <pkg>@<version>` in a `package.json` script instead of adding a dependency.
 
