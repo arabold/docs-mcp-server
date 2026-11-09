@@ -107,6 +107,13 @@ export class DocumentManagementClient implements IDocumentManagement {
     return this.client.compact.mutate(options ?? {});
   }
 
+  async renameLibrary(
+    library: string,
+    newName: string,
+  ): Promise<{ oldName: string; newName: string }> {
+    return this.client.renameLibrary.mutate({ library, newName });
+  }
+
   async getVersionsByStatus(statuses: VersionStatus[]): Promise<DbVersionWithLibrary[]> {
     return this.client.getVersionsByStatus.query({
       statuses: statuses as unknown as string[],

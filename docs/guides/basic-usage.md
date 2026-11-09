@@ -96,16 +96,17 @@ HTML pages and documents such as PDFs come back as Markdown; JSON, XML and plain
 | `find-version <library>` | Resolve the version that best matches `--version` (the newest when omitted). |
 | `refresh <library>` | Re-index an existing version, skipping unchanged pages. Without `--version`, it refreshes the unversioned documentation. |
 | `remove <library>` | Remove the version given by `--version`, or the unversioned documentation without it. Removing a library's last version removes the library. |
+| `rename <library> <new-name>` | Rename a library in place, keeping its versions and indexed content. It refuses a name that is already taken and a library with an indexing job in flight. |
 | `compact` | Reclaim unused space in the store file. It takes an exclusive lock, may block searches while it runs, and needs free disk space for a temporary copy of the store. |
 
 The server commands `mcp`, `web` and `worker` are described in [Deployment Modes](../infrastructure/deployment-modes.md#commands), and `config` in [Configuration](../setup/configuration.md#the-config-command). `npx @arabold/docs-mcp-server@latest <command> --help` shows each command's options.
 
-`list`, `search`, `find-version`, `scrape`, `refresh`, `remove` and `compact` accept `--server-url` (for example `http://localhost:8080/api`) to work against a separate worker process instead of the local store.
+`list`, `search`, `find-version`, `scrape`, `refresh`, `remove`, `rename` and `compact` accept `--server-url` (for example `http://localhost:8080/api`) to work against a separate worker process instead of the local store.
 
 ### Output Behavior
 
 - `list`, `search` and `find-version` print JSON on stdout. Use `--output json|yaml|toon` to pick another format.
-- `fetch-url`, `scrape`, `refresh`, `remove` and `compact` print plain text on stdout and ignore `--output`.
+- `fetch-url`, `scrape`, `refresh`, `remove`, `rename` and `compact` print plain text on stdout and ignore `--output`.
 - Logs go to stderr. In a terminal they include progress messages; otherwise only errors appear, so scripts and agents can parse stdout. Set `LOG_LEVEL=INFO` to see progress messages anyway.
 - `--verbose` adds debug output, and `--quiet` limits logs to errors.
 - A failed command exits with a non-zero status and prints the error on stderr.
@@ -127,7 +128,7 @@ The [`skills/`](https://github.com/arabold/docs-mcp-server/tree/main/skills) dir
 | Skill | Purpose |
 |-------|---------|
 | `docs-search` | Find indexed libraries and search them (`list`, `search`, `find-version`) |
-| `docs-manage` | Index, refresh, remove and compact documentation (`scrape`, `refresh`, `remove`, `compact`) |
+| `docs-manage` | Index, refresh, remove, rename and compact documentation (`scrape`, `refresh`, `remove`, `rename`, `compact`) |
 | `fetch-url` | Fetch a single URL as Markdown |
 
 Each skill is a folder with a `SKILL.md` file. Copy the folders to the skills location your agent reads, for example for [Claude Code](https://code.claude.com/docs/en/skills), [Gemini CLI](https://geminicli.com/docs/cli/skills/) or [Cursor](https://cursor.com/docs/skills). The agent then loads a skill when a task matches it. [agentskills.io](https://agentskills.io) has the specification and the list of compatible agents.
