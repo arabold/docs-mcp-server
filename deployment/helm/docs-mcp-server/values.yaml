@@ -1,0 +1,171 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/brtydse100/docs-mcp-server-nonroot
+  pullPolicy: Always
+  tag: "3.2.0"
+  digest: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+command: []
+args: ["--protocol", "http", "--host", "0.0.0.0", "--port", "6280"]
+
+serviceAccount:
+  enabled: true
+  automountServiceAccountToken: false
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+# Identity fields are unset by default. Kubernetes uses the image's numeric
+# non-root user, while platforms such as OpenShift may assign another identity.
+# For an NFS-backed PV, set supplementalGroups to the export directory's GID;
+# NFS normally preserves server-side ownership instead of applying fsGroup.
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+  # Writable paths are mounted separately at /data, /config, /tmp, and
+  # /app/.runtime, so shipped application code remains read-only.
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+
+service:
+  type: ClusterIP
+  port: 6280
+  annotations: {}
+
+dataPersistence:
+  enabled: true
+  existingClaim: ""
+  storageClass: ""
+  accessModes: ["ReadWriteOnce"]
+  size: 5Gi
+  annotations: {}
+
+configPersistence:
+  enabled: true
+  existingClaim: ""
+  storageClass: ""
+  accessModes: ["ReadWriteOnce"]
+  size: 1Gi
+  annotations: {}
+
+tmpVolume:
+  emptyDir: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: docs-mcp.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+route:
+  enabled: false
+  host: ""
+  annotations: {}
+  wildcardPolicy: None
+  tls:
+    enabled: false
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+
+resources: {}
+startupProbe:
+  tcpSocket: { port: http }
+  failureThreshold: 30
+  periodSeconds: 2
+readinessProbe:
+  tcpSocket: { port: http }
+  periodSeconds: 10
+  timeoutSeconds: 3
+livenessProbe:
+  tcpSocket: { port: http }
+  periodSeconds: 20
+  timeoutSeconds: 3
+
+# Additional container environment variables. Every application configuration
+# setting is available as DOCS_MCP_<SECTION>_<SETTING>; camelCase becomes
+# UPPER_SNAKE_CASE. The complete configuration reference is at
+# https://github.com/arabold/docs-mcp-server/blob/main/docs/setup/configuration.md.
+#
+# Direct aliases and general settings:
+# DOCS_MCP_CONFIG, DOCS_MCP_PROTOCOL, DOCS_MCP_STORE_PATH, DOCS_MCP_TELEMETRY,
+# DOCS_MCP_READ_ONLY, DOCS_MCP_PORT, DOCS_MCP_WEB_PORT, DOCS_MCP_HOST,
+# DOCS_MCP_SERVER_PUBLIC_ORIGIN, DOCS_MCP_EMBEDDING_MODEL,
+# DOCS_MCP_AUTH_ENABLED, DOCS_MCP_AUTH_ISSUER_URL, DOCS_MCP_AUTH_AUDIENCE,
+# PORT, HOST, LOG_LEVEL.
+#
+# Canonical application and server settings:
+# DOCS_MCP_APP_STORE_PATH, DOCS_MCP_APP_TELEMETRY_ENABLED,
+# DOCS_MCP_APP_READ_ONLY, DOCS_MCP_APP_EMBEDDING_MODEL,
+# DOCS_MCP_SERVER_PROTOCOL, DOCS_MCP_SERVER_HOST,
+# DOCS_MCP_SERVER_PUBLIC_ORIGIN, DOCS_MCP_SERVER_PORTS_DEFAULT,
+# DOCS_MCP_SERVER_PORTS_WORKER, DOCS_MCP_SERVER_PORTS_MCP,
+# DOCS_MCP_SERVER_PORTS_WEB, DOCS_MCP_SERVER_HEARTBEAT_MS.
+#
+# Scraper settings:
+# DOCS_MCP_SCRAPER_MAX_PAGES, DOCS_MCP_SCRAPER_MAX_DEPTH,
+# DOCS_MCP_SCRAPER_MAX_CONCURRENCY, DOCS_MCP_SCRAPER_ABORT_ON_FAILURE_RATE,
+# DOCS_MCP_SCRAPER_PRESERVE_HASHES, DOCS_MCP_SCRAPER_SKIP_KNOWN_TRACKERS,
+# DOCS_MCP_SCRAPER_PAGE_TIMEOUT_MS, DOCS_MCP_SCRAPER_BROWSER_TIMEOUT_MS,
+# DOCS_MCP_SCRAPER_HTML_EXTRACTOR, DOCS_MCP_SCRAPER_FETCHER_MAX_RETRIES,
+# DOCS_MCP_SCRAPER_FETCHER_BASE_DELAY_MS, DOCS_MCP_SCRAPER_FETCHER_TIMEOUT_MS,
+# DOCS_MCP_SCRAPER_FETCHER_MAX_CACHE_ITEMS,
+# DOCS_MCP_SCRAPER_FETCHER_MAX_CACHE_ITEM_SIZE_BYTES,
+# DOCS_MCP_SCRAPER_DOCUMENT_MAX_SIZE,
+# DOCS_MCP_SCRAPER_SECURITY_NETWORK_MODE,
+# DOCS_MCP_SCRAPER_SECURITY_NETWORK_ALLOW_PRIVATE_NETWORKS,
+# DOCS_MCP_SCRAPER_SECURITY_NETWORK_ALLOWED_HOSTS,
+# DOCS_MCP_SCRAPER_SECURITY_NETWORK_ALLOWED_CIDRS,
+# DOCS_MCP_SCRAPER_SECURITY_NETWORK_ALLOW_INVALID_TLS,
+# DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_MODE,
+# DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_ALLOWED_ROOTS,
+# DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_FOLLOW_SYMLINKS,
+# DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_INCLUDE_HIDDEN.
+#
+# Processing and search settings:
+# DOCS_MCP_SPLITTER_MIN_CHUNK_SIZE, DOCS_MCP_SPLITTER_PREFERRED_CHUNK_SIZE,
+# DOCS_MCP_SPLITTER_MAX_CHUNK_SIZE, DOCS_MCP_SPLITTER_TREE_SITTER_SIZE_LIMIT,
+# DOCS_MCP_SPLITTER_JSON_MAX_NESTING_DEPTH, DOCS_MCP_SPLITTER_JSON_MAX_CHUNKS,
+# DOCS_MCP_EMBEDDINGS_BATCH_SIZE, DOCS_MCP_EMBEDDINGS_BATCH_CHARS,
+# DOCS_MCP_EMBEDDINGS_REQUEST_TIMEOUT_MS, DOCS_MCP_EMBEDDINGS_INIT_TIMEOUT_MS,
+# DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION, DOCS_MCP_DB_MIGRATION_MAX_RETRIES,
+# DOCS_MCP_DB_MIGRATION_RETRY_DELAY_MS, DOCS_MCP_SEARCH_OVERFETCH_FACTOR,
+# DOCS_MCP_SEARCH_WEIGHT_VEC, DOCS_MCP_SEARCH_WEIGHT_FTS,
+# DOCS_MCP_SEARCH_VECTOR_MULTIPLIER, DOCS_MCP_SANDBOX_DEFAULT_TIMEOUT_MS,
+# DOCS_MCP_ASSEMBLY_MAX_PARENT_CHAIN_DEPTH, DOCS_MCP_ASSEMBLY_CHILD_LIMIT,
+# DOCS_MCP_ASSEMBLY_PRECEDING_SIBLINGS_LIMIT,
+# DOCS_MCP_ASSEMBLY_SUBSEQUENT_SIBLINGS_LIMIT,
+# DOCS_MCP_ASSEMBLY_MAX_CHUNK_DISTANCE.
+#
+# Embedding-provider and source credentials:
+# OPENAI_API_KEY, OPENAI_API_BASE, OPENAI_ORG_ID, GOOGLE_API_KEY,
+# GOOGLE_APPLICATION_CREDENTIALS, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+# AWS_SESSION_TOKEN, AWS_PROFILE, AWS_REGION, BEDROCK_AWS_REGION,
+# AZURE_OPENAI_API_KEY, AZURE_OPENAI_API_INSTANCE_NAME,
+# AZURE_OPENAI_API_DEPLOYMENT_NAME, AZURE_OPENAI_API_VERSION,
+# GITHUB_TOKEN, GH_TOKEN, PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+# PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD.
+env: []
+envFrom: []
+extraVolumes: []
+extraVolumeMounts: []
+extraResources: []
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
