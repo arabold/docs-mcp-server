@@ -12,7 +12,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import Database from "better-sqlite3";
+import { openDatabase } from "../src/store/openDatabase";
 import * as sqliteVec from "sqlite-vec";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { EventBusService } from "../src/events";
@@ -99,7 +99,7 @@ describe("Vector search E2E", () => {
   });
 
   it("stores one vector for every embedded chunk", () => {
-    const db = new Database(path.join(tempDir, "documents.db"), { readonly: true });
+    const db = openDatabase(path.join(tempDir, "documents.db"), { readonly: true });
     try {
       sqliteVec.load(db);
       const { chunkCount } = db

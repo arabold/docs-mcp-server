@@ -202,6 +202,83 @@ export class DimensionError extends StoreError {
 export class ConnectionError extends StoreError {}
 
 /**
+ * Why better-sqlite3's compiled binary cannot load: it is missing, or it was
+ * built for another Node.js version.
+ */
+export type NativeModuleProblem = "missing" | "nodeVersion";
+
+/**
+ * Error thrown when better-sqlite3's compiled binary cannot load and the
+ * server did not download one for the running Node.js. npm 12 and later skip
+ * dependency install scripts unless they are allowed, which leaves the
+ * package without the binary its install script fetches. An npx or global
+ * install keeps the binary of the Node.js version it was installed with. The
+ * message names the commands that get a binary: allowing the script and
+ * reinstalling after a failed download, or turning `ignore-scripts` off for one
+ * start when that setting skipped the download, since it also overrides
+ * `allow-scripts`.
+ */
+export class NativeModuleUnavailableError extends StoreError {
+  /**
+   * @param options.problem - Why the package's own binary did not load
+   * @param options.ignoreScripts - True when npm's `ignore-scripts` setting skipped the download
+   */
+  constructor({
+    problem = "missing",
+    ignoreScripts = false,
+  }: { problem?: NativeModuleProblem; ignoreScripts?: boolean } = {}) {
+    const cause =
+      problem === "missing"
+        ? "The SQLite native module (better-sqlite3) is missing"
+        : `The SQLite native module (better-sqlite3) was built for a different Node.js version than ${process.version}`;
+    const downloadFailed =
+      problem === "missing"
+        ? `${cause} and could not be downloaded`
+        : `${cause}, and one for that version could not be downloaded`;
+    super(
+      ignoreScripts
+        ? `${cause}, so the database cannot open. ` +
+            "npm's ignore-scripts setting is on, so the server does not download one. " +
+            "Start the server once with the setting off:\n" +
+            "  npx --ignore-scripts=false @arabold/docs-mcp-server@latest\n" +
+            'In an MCP client\'s settings, add "--ignore-scripts=false" before the package name.'
+        : `${downloadFailed}, so the database cannot open. ` +
+            "Allow its install script, which npm 12 and later skip, and clear the npx cache so npx installs it again:\n" +
+            "  npm config set allow-scripts=better-sqlite3 --location=user\n" +
+            "  npm cache npx rm --force\n" +
+            "Then start the server again. For a global install, run " +
+            "npm install -g @arabold/docs-mcp-server after the first command instead.",
+    );
+  }
+}
+
+/**
+ * Tells why better-sqlite3's compiled binary failed to load, if the error is
+ * about the binary. The `bindings` package that better-sqlite3 loads it with
+ * reports a missing file, and Node.js reports a binary built for another
+ * Node.js version.
+ *
+ * @param error - The error thrown while loading the module
+ * @returns The problem, or undefined when the error is about something else
+ */
+export function nativeModuleProblem(error: unknown): NativeModuleProblem | undefined {
+  if (!(error instanceof Error)) {
+    return undefined;
+  }
+  if (error.message.startsWith("Could not locate the bindings file")) {
+    return "missing";
+  }
+  if (
+    "code" in error &&
+    error.code === "ERR_DLOPEN_FAILED" &&
+    error.message.includes("NODE_MODULE_VERSION")
+  ) {
+    return "nodeVersion";
+  }
+  return undefined;
+}
+
+/**
  * Error thrown when the embedding provider fails to embed a page's chunks.
  * Nothing of the page is written when this is thrown.
  */

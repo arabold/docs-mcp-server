@@ -3,7 +3,7 @@
  * indexed corpus in one mode and turns the ranked results into metrics.
  */
 
-import Database from "better-sqlite3";
+import { openDatabase } from "../../src/store/openDatabase";
 import * as sqliteVec from "sqlite-vec";
 import { DocumentRetrieverService } from "../../src/store/DocumentRetrieverService";
 import { DocumentStore } from "../../src/store/DocumentStore";
@@ -252,7 +252,7 @@ export function average(scores: QueryScore[]): Aggregate {
  * @throws PassageNotFoundError listing every passage that no chunk holds.
  */
 export function validatePassages(dbPath: string, queries: GoldenQuery[]): PassageReport {
-  const db = new Database(dbPath, { readonly: true });
+  const db = openDatabase(dbPath, { readonly: true });
   sqliteVec.load(db);
   try {
     const chunksOfPage = db.prepare<[string, string], { content: string; url: string }>(`
