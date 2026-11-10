@@ -362,9 +362,17 @@ describe("compiled pattern caching", () => {
   // filtering: every discovered URL is tested against ~70 default exclusions,
   // twice. Caching must not change any verdict.
   it("returns the same compiled RegExp for a repeated pattern", () => {
-    const first = patternToRegExp("**/*.test.*");
-    const second = patternToRegExp("**/*.test.*");
+    const first = patternToRegExp("/test/");
+    const second = patternToRegExp("/test/");
     expect(second).toBe(first);
+  });
+
+  it("throws for glob patterns instead of converting them", () => {
+    // minimatch v11 removed makeRe, so glob patterns have no RegExp form;
+    // callers must branch on isRegexPattern and use the glob matcher.
+    expect(() => patternToRegExp("**/*.min.js")).toThrow(
+      "Glob patterns cannot be converted to RegExp",
+    );
   });
 
   it("gives the same verdict on repeated evaluation", () => {
