@@ -362,8 +362,8 @@ describe("compiled pattern caching", () => {
   // filtering: every discovered URL is tested against ~70 default exclusions,
   // twice. Caching must not change any verdict.
   it("returns the same compiled RegExp for a repeated pattern", () => {
-    const first = patternToRegExp("**/*.test.*");
-    const second = patternToRegExp("**/*.test.*");
+    const first = patternToRegExp("/test/");
+    const second = patternToRegExp("/test/");
     expect(second).toBe(first);
   });
 
