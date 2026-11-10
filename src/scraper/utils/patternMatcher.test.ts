@@ -367,6 +367,14 @@ describe("compiled pattern caching", () => {
     expect(second).toBe(first);
   });
 
+  it("throws for glob patterns instead of converting them", () => {
+    // minimatch v11 removed makeRe, so glob patterns have no RegExp form;
+    // callers must branch on isRegexPattern and use the glob matcher.
+    expect(() => patternToRegExp("**/*.min.js")).toThrow(
+      "Glob patterns cannot be converted to RegExp",
+    );
+  });
+
   it("gives the same verdict on repeated evaluation", () => {
     const patterns = ["**/archive/**", "/\\.(ini|cfg)$/", "**/*.min.js"];
     const urls = [
