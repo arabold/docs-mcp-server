@@ -189,7 +189,8 @@ export async function applyMigrations(
     db.pragma("synchronous = NORMAL");
     db.pragma("mmap_size = 268435456"); // 256MB memory mapping
     db.pragma("cache_size = -64000"); // 64MB cache (default is ~2MB)
-    db.pragma("temp_store = MEMORY"); // Store temporary data in memory
+    // temp_store stays at SQLite's file default: the VACUUM below copies the
+    // whole store into temp storage, which in memory exhausts RAM on large stores.
     logger.debug("Applied safe migration pragmas");
   } catch (_error) {
     logger.warn("⚠️  Could not apply all migration pragmas");
