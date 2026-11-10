@@ -96,9 +96,20 @@ export function createDataRouter(trpc: unknown) {
             limit?: number;
           };
         }) => {
+          // Resolve the version the same way SearchTool does, so this HTTP
+          // surface cannot disagree with the MCP surface for the same request
+          // (#587): the playground sends "" for its "Latest" option, which is
+          // not a bucket — findBestVersion maps it to the library's best
+          // version, returns a null bestMatch only when unversioned content
+          // is all there is (searchStore normalizes null to ""), and errors
+          // for libraries that hold nothing at all, exactly like search_docs.
+          const { bestMatch } = await ctx.docService.findBestVersion(
+            input.library,
+            input.version ?? undefined,
+          );
           const results = await ctx.docService.searchStore(
             input.library,
-            input.version ?? null,
+            bestMatch,
             input.query,
             input.limit ?? 5,
           );

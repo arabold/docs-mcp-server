@@ -130,6 +130,29 @@ describe("dataRouter", () => {
     expect(pages.hasMore).toBe(false);
   });
 
+  it("stays literal so a resolved version is not resolved twice (#587)", async () => {
+    // Remote clients reach the store over tRPC and send a version that a tool
+    // has already resolved, so this procedure must search the bucket it is
+    // given. Resolving here would answer an exact-match miss for 2.0.0 with
+    // 1.0.0's documentation, and would redirect the unversioned bucket to the
+    // newest labelled version. "" is the unversioned bucket, not "latest".
+    await expect(
+      caller.search({ library: "router-test-lib", version: "", query: "routers" }),
+    ).resolves.toEqual([]);
+
+    const explicit = await caller.search({
+      library: "router-test-lib",
+      version: "1.0.0",
+      query: "routers",
+    });
+    expect(explicit.length).toBeGreaterThan(0);
+
+    // A version that is not stored is a miss, not a fallback.
+    await expect(
+      caller.search({ library: "router-test-lib", version: "2.0.0", query: "routers" }),
+    ).resolves.toEqual([]);
+  });
+
   it("defaults the chunk explorer limit to 50 when omitted", async () => {
     await docService.addScrapeResult("router-test-lib", "1.0.0", 1, {
       url: "https://example.com/page3",
