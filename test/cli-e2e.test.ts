@@ -109,6 +109,33 @@ describe("CLI E2E", () => {
     }
   });
 
+  it("prints the complete large library list through a pipe", async () => {
+    const storePath = mkdtempSync(path.join(tmpdir(), "cli-e2e-large-list-"));
+    const configPath = writeTestConfig(storePath);
+    const libraries = Array.from({ length: 5000 }, (_, index) =>
+      `library-${index}-${"x".repeat(80)}`,
+    );
+
+    try {
+      await withStore(storePath, async (store) => {
+        for (const library of libraries) {
+          await store.ensureVersion({ library, version: "1.0" });
+        }
+      }, { configPath });
+
+      const { code, stdout, stderr } = await runCli([
+        "list", "--output", "json", "--store-path", storePath, "--config", configPath,
+      ], 40_000);
+
+      expect(code, stderr).toBe(0);
+      const listed = JSON.parse(stdout) as { name: string }[];
+      expect(listed.map(({ name }) => name).sort()).toEqual(libraries.sort());
+      expect(Buffer.byteLength(stdout)).toBeGreaterThan(1024 * 1024);
+    } finally {
+      rmSync(storePath, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it("exits with 1 when a command reports its own failure", async () => {
     const storePath = mkdtempSync(path.join(tmpdir(), "cli-e2e-exit-code-"));
     const configPath = writeTestConfig(storePath);
