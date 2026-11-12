@@ -81,6 +81,9 @@ export async function cleanupCliCommand(): Promise<void> {
     // Shutdown analytics for non-server CLI commands to ensure clean exit
     await telemetry.shutdown();
 
+    // A pipe writes asynchronously. Wait for queued output before exiting.
+    await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
+
     // Avoid hanging processes by explicitly exiting, with the exit code a
     // command sets for a failure it reports itself
     process.exit();
