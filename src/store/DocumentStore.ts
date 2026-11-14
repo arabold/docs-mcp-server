@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { statSync } from "node:fs";
 import type { Embeddings } from "@langchain/core/embeddings";
-import Database, { type Database as DatabaseType } from "better-sqlite3";
+import type Database from "better-sqlite3";
+import type { Database as DatabaseType } from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import type { ScrapeResult, ScraperOptions } from "../scraper/types";
 import { withoutRunOnlyOptions } from "../scraper/types";
@@ -35,6 +36,7 @@ import {
   readMcpRecent,
   recordMcpCall,
 } from "./McpStatistics";
+import { openDatabase } from "./openDatabase";
 import type {
   ActivityHistory,
   CompactResult,
@@ -375,7 +377,7 @@ export class DocumentStore {
     this.embeddingInitTimeoutMs = this.config.embeddings.initTimeoutMs;
 
     // Only establish database connection in constructor
-    this.db = new Database(dbPath);
+    this.db = openDatabase(dbPath);
 
     // Store embedding config for later initialization
     this.embeddingConfig = this.resolveEmbeddingConfig(appConfig.app.embeddingModel);

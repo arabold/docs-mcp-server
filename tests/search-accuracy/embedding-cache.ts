@@ -11,7 +11,8 @@ import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { Embeddings } from "@langchain/core/embeddings";
-import Database, { type Database as DatabaseType } from "better-sqlite3";
+import type { Database as DatabaseType } from "better-sqlite3";
+import { openDatabase } from "../../src/store/openDatabase";
 import { splitModelSpec } from "../../src/store/embeddings/EmbeddingConfig";
 
 /**
@@ -56,7 +57,7 @@ export class EmbeddingCache {
     // Readable prefix; the hash keeps specs that slug alike (`a/b`, `a_b`) apart
     const slug = canonicalModelSpec(modelSpec).replace(/[^a-zA-Z0-9.-]+/g, "_");
     const hash = createHash("sha256").update(identity).digest("hex").slice(0, 12);
-    this.db = new Database(
+    this.db = openDatabase(
       path.join(cacheDir, `${slug}-${vectorDimension}-${hash}.sqlite`),
     );
     this.db.pragma("journal_mode = WAL");

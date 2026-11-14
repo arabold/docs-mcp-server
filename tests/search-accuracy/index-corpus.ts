@@ -5,7 +5,7 @@
 import { mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import Database from "better-sqlite3";
+import { openDatabase } from "../../src/store/openDatabase";
 import * as sqliteVec from "sqlite-vec";
 import { EventBusService } from "../../src/events";
 import { PipelineManager } from "../../src/pipeline/PipelineManager";
@@ -122,7 +122,7 @@ export async function indexCorpus(
 /** Rewrites page URLs under the corpus directory to {@link STABLE_CORPUS_URL}. */
 function relocateCorpusUrls(dbPath: string, corpusDir: string): void {
   const actual = pathToFileURL(corpusDir).href;
-  const db = new Database(dbPath);
+  const db = openDatabase(dbPath);
   sqliteVec.load(db);
   try {
     const args = [STABLE_CORPUS_URL, actual.length + 1, actual.length, actual] as const;

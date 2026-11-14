@@ -30,7 +30,7 @@ import path from "node:path";
 import { createApiClient } from "../src/services/apiClient";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import Database from "better-sqlite3";
+import { openDatabase } from "../src/store/openDatabase";
 import { ZipArchive } from "archiver";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -139,7 +139,7 @@ async function startScriptedPage(): Promise<{ port: number; close: () => Promise
 
 /** The stored text of `url`, its chunks joined in order. */
 function indexedContent(dbPath: string, url: string): string {
-  const db = new Database(dbPath, { readonly: true });
+  const db = openDatabase(dbPath, { readonly: true });
   try {
     const rows = db
       .prepare(
@@ -153,7 +153,7 @@ function indexedContent(dbPath: string, url: string): string {
 }
 
 function listIndexedUrls(dbPath: string): string[] {
-  const db = new Database(dbPath, { readonly: true });
+  const db = openDatabase(dbPath, { readonly: true });
   try {
     const rows = db
       .prepare("SELECT url FROM pages ORDER BY url")
