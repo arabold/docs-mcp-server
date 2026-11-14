@@ -221,7 +221,23 @@ A client can start the Docker image as a stdio server. The image serves HTTP unl
 | `cancel_job` | Cancel a queued or running job | `jobId` |
 | `remove_docs` | Remove a library version | `library`, `version` |
 
-`search_docs`, `read_page`, `list_pages` and `find_version` resolve `version`: it accepts an exact version or a range such as `18.x`, an exact version also matches the closest older one, and an omitted version means the newest. `scrape_docs`, `refresh_version` and `remove_docs` take `version` as a literal label instead: `18.x` names a version called `18.x`, and an omitted version means the unversioned documentation.
+`search_docs`, `read_page` and `find_version` accept an indexed library name, a supported package name
+or an [alias](../setup/configuration.md#library-aliases). They prefer the requested
+version or range. For a missing exact release, another patch from the same
+major and minor version takes priority over other release lines or unversioned
+documentation. Successful responses show the indexed label and whether it matches
+the request. An unknown label means the source was indexed without a version.
+Search links point to the relevant section when its address is known, and
+`read_page` opens that section directly.
+
+`find_version` reports the first searchable version in that order. Search can
+continue to other versions when the query finds no useful result there.
+
+`list_pages` accepts a version or a range such as `18.x`.
+An exact version also matches the closest older one, and an omitted version means
+the newest. `scrape_docs`, `refresh_version` and `remove_docs` take a literal
+label. In those tools `18.x` names a version called `18.x`, and an omitted version
+means the unversioned documentation.
 
 `scrape_docs` and `refresh_version` start a background job and return its ID. Follow it with `get_job_info` or `list_jobs`. `scrape_docs` rejects a version that already exists unless `replace` is true.
 

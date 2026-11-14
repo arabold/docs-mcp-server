@@ -191,6 +191,23 @@ General application settings.
 | `telemetryEnabled` | `true` | Send usage events. [Telemetry](../infrastructure/telemetry.md) lists what they contain. |
 | `readOnly` | `false` | Register only the MCP tools that read the index. The tools that scrape, refresh, remove documentation or manage jobs are left out. |
 | `embeddingModel` | `text-embedding-3-small` | Model for vector embeddings. See [Embedding Models](../guides/embedding-models.md). |
+| `libraryAliases` | - | Map package names and other aliases to indexed library names for MCP searches and reads. |
+
+#### Library aliases
+
+Configure aliases in the YAML file. The value is the name already used in the
+index.
+
+```yaml
+app:
+  libraryAliases:
+    "@company/ui": company-ui
+```
+
+An exact indexed name takes precedence. MCP also recognizes `Next.js` and
+`@tanstack/react-query`, and can match package or repository names from stored
+npm, PyPI and GitHub source URLs. Aliases take effect on restart and work with
+existing indexes.
 
 ### Server (`server`)
 

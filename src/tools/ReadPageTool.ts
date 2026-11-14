@@ -8,6 +8,7 @@ export interface ReadPageToolOptions {
   version?: string;
   startChunk?: number;
   maxChars?: number;
+  useVersionFallback?: boolean;
 }
 
 export type ReadPageToolResult = PageContentResult;
@@ -41,7 +42,8 @@ export class ReadPageTool {
   }
 
   async execute(options: ReadPageToolOptions): Promise<ReadPageToolResult> {
-    const { library, pathOrUrl, version, startChunk, maxChars } = options;
+    const { library, pathOrUrl, version, startChunk, maxChars, useVersionFallback } =
+      options;
 
     if (!library || typeof library !== "string" || library.trim() === "") {
       throw new ValidationError(
@@ -75,6 +77,7 @@ export class ReadPageTool {
     return this.docService.getPageContent(library.trim(), version?.trim(), target, {
       startChunk,
       maxChars,
+      ...(useVersionFallback ? { useVersionFallback } : {}),
     });
   }
 }

@@ -595,6 +595,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         };
       }
 
+      const pageUrl = processed.sectionPageUrl ?? effectiveSource;
       const filteredLinks =
         processed.links?.flatMap((link) => {
           try {
@@ -629,15 +630,12 @@ export class WebScraperStrategy extends BaseScraperStrategy {
           }
         }) ?? [];
 
+      const sectionAlias = processed.sectionPageUrl !== undefined;
       return {
-        url: effectiveSource,
-        // Recorded only when the bytes came from somewhere other than the
-        // page's identity, so a later refresh requests that representation and
-        // the validator below goes back to the resource that issued it. Equal
-        // values would claim a divergence that does not exist.
-        contentUrl: effectiveSource === fetchedSource ? undefined : fetchedSource,
-        etag: rawContent.etag,
-        lastModified: rawContent.lastModified,
+        url: pageUrl,
+        contentUrl: sectionAlias || pageUrl === fetchedSource ? undefined : fetchedSource,
+        etag: sectionAlias ? undefined : rawContent.etag,
+        lastModified: sectionAlias ? undefined : rawContent.lastModified,
         sourceContentType: rawContent.mimeType,
         contentType: processed.contentType || rawContent.mimeType,
         content: processed,

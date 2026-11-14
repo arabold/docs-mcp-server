@@ -155,6 +155,38 @@ describe("MCP usage metadata", () => {
 });
 
 describe("MCP tools", () => {
+  it("reports the documentation version and links to the matched section", async () => {
+    // arrange
+    vi.mocked(mockTools.search.execute).mockResolvedValueOnce({
+      library: "next",
+      documentationVersion: {
+        requestedVersion: "16.0.0",
+        indexedVersion: "15.3.0",
+        versionMatch: "different",
+      },
+      results: [
+        {
+          url: "https://example.com/api",
+          sectionUrl: "https://example.com/api#redirect",
+          content: "redirect(path)",
+          score: 1,
+        },
+      ],
+    });
+
+    // act
+    const text = await callTool("search_docs", {
+      library: "Next.js",
+      version: "16.0.0",
+      query: "redirect",
+    });
+
+    // assert
+    expect(text).toContain("Indexed library: next");
+    expect(text).toContain("15.3.0 · requested: 16.0.0 · different");
+    expect(text).toContain("https://example.com/api#redirect");
+  });
+
   it("forwards startChunk and tells the agent how to continue a long page", async () => {
     vi.mocked(mockTools.readPage.execute).mockResolvedValueOnce({
       url: "https://example.com/long",

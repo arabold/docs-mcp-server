@@ -9,12 +9,12 @@ const INTRO =
   "When a question depends on a library's API or behavior, search here before answering from memory.";
 
 const SEARCH =
-  "- `search_docs` searches one library. Pass `version` when the project uses a specific version; " +
-  "without it, the newest indexed version is searched when there is one.";
+  "- `search_docs` searches one library. Pass the version used by the project when known. " +
+  "Check the version reported with results before applying version-specific advice.";
 
 const DISCOVER =
-  "- Library names must match an indexed library. If a search cannot find the library, " +
-  "call `list_libraries` for the exact names and versions.";
+  "- Search by indexed name or package name. If the name cannot be resolved, " +
+  "call `list_libraries` for the exact name and `find_version` for version information.";
 
 const INDEX =
   "- `fetch_url` is for libraries that are not indexed: read their documentation to answer now. " +

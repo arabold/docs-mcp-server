@@ -65,6 +65,19 @@ export class DocumentManagementClient implements IDocumentManagement {
     return this.client.findBestVersion.query({ library, targetVersion });
   }
 
+  /**
+   * Resolves a documentation name and version order on the worker.
+   * @param library Indexed library name or alias.
+   * @param version Requested label or range.
+   * @returns The resolved library name and candidate version labels.
+   */
+  async resolveDocumentation(
+    library: string,
+    version?: string,
+  ): Promise<{ library: string; versions: string[] }> {
+    return this.client.resolveDocumentation.query({ library, version });
+  }
+
   async searchStore(
     library: string,
     version: string | null | undefined,

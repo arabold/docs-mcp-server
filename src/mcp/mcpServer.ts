@@ -9,9 +9,10 @@ import {
 } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { PipelineJobStatus } from "../pipeline/types";
+import { escapeControlCharacters } from "../store/errors";
 import { compactMcpCall } from "../store/mcpStats";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
-import { libraryNamesMatch } from "../store/types";
+import { type DocumentationVersion, libraryNamesMatch } from "../store/types";
 import {
   extractHostname,
   extractProtocol,
@@ -26,6 +27,17 @@ import { getCurrentMcpCaller } from "./context";
 import { buildDefaultInstructions } from "./defaultInstructions";
 import type { McpServerTools } from "./tools";
 import { createError, createResponse } from "./utils";
+
+function documentationVersionNotice(version: DocumentationVersion | undefined): string {
+  if (!version) return "";
+  const indexed = version.indexedVersion
+    ? escapeControlCharacters(version.indexedVersion)
+    : "unknown (unversioned documentation)";
+  const requested = version.requestedVersion
+    ? ` · requested: ${escapeControlCharacters(version.requestedVersion)} · ${version.versionMatch}`
+    : "";
+  return `> Documentation version: ${indexed}${requested}\n\n`;
+}
 
 /**
  * Splits a comma-separated pattern string into an array of patterns. Commas
@@ -195,7 +207,7 @@ function createToolInputSchemas(config: AppConfig) {
         .describe("Library version (optional, refreshes latest if omitted)."),
     }),
     searchDocs: z.object({
-      library: z.string().trim().describe("Library name."),
+      library: z.string().trim().describe("Indexed library or package name."),
       version: z
         .string()
         .trim()
@@ -205,13 +217,13 @@ function createToolInputSchemas(config: AppConfig) {
       limit: z.number().optional().default(5).describe("Maximum number of results."),
     }),
     readPage: z.object({
-      library: z.string().trim().describe("Library name."),
+      library: z.string().trim().describe("Indexed library or package name."),
       pathOrUrl: z
         .string()
         .trim()
         .min(1)
         .describe(
-          "Page URL, or a path matching the end of one page URL (e.g. 'https://react.dev/reference/react' or '/reference/react').",
+          "Page or section URL, or a path matching the end of one page URL (e.g. 'https://react.dev/reference/react' or '/reference/react').",
         ),
       version: z
         .string()
@@ -540,7 +552,7 @@ function createMcpServerInstance(
       description:
         "Search up-to-date documentation for a library or package. Examples:\n\n" +
         '- {library: "react", query: "hooks lifecycle"} -> matches latest version of React\n' +
-        '- {library: "react", version: "18.0.0", query: "hooks lifecycle"} -> matches React 18.0.0 or earlier\n' +
+        '- {library: "react", version: "18.0.0", query: "hooks lifecycle"} -> prefers React 18.0.0 and reports the version used\n' +
         '- {library: "typescript", version: "5.x", query: "ReturnType example"} -> any TypeScript 5.x.x version\n' +
         '- {library: "typescript", version: "5.2.x", query: "ReturnType example"} -> any TypeScript 5.2.x version',
       inputSchema: schemas.searchDocs,
@@ -567,13 +579,13 @@ function createMcpServerInstance(
           version,
           query,
           limit,
-          exactMatch: false, // Always false for MCP interface
+          useVersionFallback: true,
         });
 
         const formattedResults = result.results.map(
-          (r: { url: string; content: string }, i: number) => `
+          (r, i) => `
 ------------------------------------------------------------
-Result ${i + 1}: ${r.url}
+Result ${i + 1}: ${r.sectionUrl ?? r.contentUrl ?? r.url}
 
 ${r.content}\n`,
         );
@@ -583,7 +595,15 @@ ${r.content}\n`,
             `No results found for '${query}' in ${library}. Try to use a different or more general query.`,
           );
         }
-        return createResponse(formattedResults.join(""));
+        const resolvedName =
+          result.library && !libraryNamesMatch(result.library, library)
+            ? `> Indexed library: ${result.library}\n\n`
+            : "";
+        return createResponse(
+          resolvedName +
+            documentationVersionNotice(result.documentationVersion) +
+            formattedResults.join(""),
+        );
       } catch (error) {
         return createError(error);
       }
@@ -595,7 +615,7 @@ ${r.content}\n`,
     "read_page",
     {
       description:
-        "Read the full content of an indexed documentation page, for example a URL returned by `search_docs` or `list_pages`. " +
+        "Read an indexed documentation page or section, for example a URL returned by `search_docs` or `list_pages`. " +
         "Long pages are returned in parts; the response says how to continue.",
       inputSchema: schemas.readPage,
       annotations: {
@@ -619,6 +639,7 @@ ${r.content}\n`,
           version,
           startChunk,
           maxChars,
+          useVersionFallback: true,
         });
 
         if (result.startChunk >= result.totalChunks && result.totalChunks > 0) {
@@ -634,7 +655,10 @@ ${r.content}\n`,
               `To continue, call read_page again with startChunk: ${result.nextChunk}.`
             : "";
 
-        return createResponse(`> Source: ${result.url}\n\n${result.content}${notice}`);
+        return createResponse(
+          documentationVersionNotice(result.documentationVersion) +
+            `> Source: ${result.url}\n\n${result.content}${notice}`,
+        );
       } catch (error) {
         return createError(error);
       }
@@ -739,7 +763,7 @@ ${r.content}\n`,
     "find_version",
     {
       description:
-        "Find the best matching version for a library. Use to identify available or closest versions.",
+        "Find the first indexed version that search_docs would try for a library name or alias.",
       inputSchema: schemas.findVersion,
       annotations: {
         title: "Find Library Version",

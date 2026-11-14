@@ -39,6 +39,10 @@ export interface IDocumentManagement {
   listLibraries(): Promise<LibrarySummary[]>;
   validateLibraryExists(library: string): Promise<void>;
   findBestVersion(library: string, targetVersion?: string): Promise<FindVersionResult>;
+  resolveDocumentation(
+    library: string,
+    version?: string,
+  ): Promise<{ library: string; versions: string[] }>;
   listPages(
     library: string,
     version: string | null | undefined,

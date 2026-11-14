@@ -26,6 +26,16 @@ Matches are grouped by page URL. Within a page they are ordered by position (`so
 
 The number of results can therefore differ from the search limit. The limit applies to matched chunks; grouping merges them and clustering splits them again.
 
+Search gives exact reference-page and identifier matches priority over general
+text matches, including matches in an indexed `llms-full.txt` bundle. The
+full-text index also looks up named API identifiers on their own so broad
+terms in the question do not crowd them out. When a parameter appears in the
+first column of a Markdown table, the passage includes its documented row.
+When the
+same content and section are indexed under
+several section URLs for one page, search keeps a single copy of each match.
+This also applies to existing indexes and uses the stored chunks and vectors.
+
 ## Choosing a strategy
 
 `createContentAssemblyStrategy` ([src/store/assembly/ContentAssemblyStrategyFactory.ts](../../src/store/assembly/ContentAssemblyStrategyFactory.ts)) picks the strategy from the page's stored content type. `HierarchicalAssemblyStrategy` takes source code and JSON, as `MimeTypeUtils.isSourceCode` and `MimeTypeUtils.isJson` classify them. `MarkdownAssemblyStrategy` takes everything else, including pages without a content type.
@@ -35,6 +45,14 @@ The split follows how the content was chunked. Prose is merged into readable chu
 ### Markdown strategy
 
 For each match, `MarkdownAssemblyStrategy` collects the match, its parent, up to `assembly.precedingSiblingsLimit` siblings before it, up to `assembly.childLimit` children, and up to `assembly.subsequentSiblingsLimit` siblings after it. It fetches the union once, in document order, and joins the chunks with a blank line, which keeps paragraphs, lists and headings apart.
+
+Search parses the joined Markdown to select the section that best matches the
+requested identifiers and terms. The result includes the heading and nearby
+whole paragraphs, tables or code blocks. When the selected heading has a
+recorded or indexed URL, that URL accompanies the passage. The search uses
+stored chunks, including chunks indexed before the section URL was recorded.
+An API or CLI query can also include its signature and one relevant example
+from nearby chunks on the same page. Complete code blocks are kept intact.
 
 ### Hierarchical strategy
 
@@ -59,6 +77,12 @@ A result also carries the page URL, the URL its content was retrieved from when 
 ## Reading a page
 
 The `read_page` tool (`ReadPageTool`, backed by `DocumentManagementService.getPageContent`) joins a run of consecutive chunks of one page with the same strategy, so a page reads the same way as a search result. It adds no context. It returns whole chunks up to a character budget and the position to continue from.
+
+HTML indexing records section URLs when the page supplies them. A section URL
+selects the corresponding section and its subsections in `read_page`, and the
+chunk window is relative to that section. Existing chunks can resolve sections
+from their heading paths. A crawl stores one page for a section query URL
+when the page declares the base URL as canonical and links to the section.
 
 ## Adding a strategy
 

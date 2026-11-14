@@ -6,6 +6,8 @@ import type { ScraperOptions } from "../types";
  * Represents the successfully processed content from a pipeline.
  */
 export interface PipelineResult {
+  /** Verified URL of the page when the fetched URL selects one of its sections. */
+  sectionPageUrl?: string;
   /** The title of the page or document, extracted during processing */
   title?: string | null;
   /** The MIME type of the processed content (may differ from input if transformed, e.g., HTML → Markdown) */

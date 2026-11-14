@@ -65,6 +65,18 @@ export function createDataRouter(trpc: unknown) {
         },
       ),
 
+    resolveDocumentation: tt.procedure
+      .input(z.object({ library: nonEmpty, version: z.string().optional() }))
+      .query(
+        ({
+          ctx,
+          input,
+        }: {
+          ctx: DataTrpcContext;
+          input: { library: string; version?: string };
+        }) => ctx.docService.resolveDocumentation(input.library, input.version),
+      ),
+
     validateLibraryExists: tt.procedure
       .input(z.object({ library: nonEmpty }))
       .mutation(
@@ -120,6 +132,7 @@ export function createDataRouter(trpc: unknown) {
             .object({
               startChunk: z.number().int().nonnegative().optional(),
               maxChars: z.number().positive().optional(),
+              useVersionFallback: z.boolean().optional(),
             })
             .optional(),
         }),

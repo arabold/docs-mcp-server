@@ -32,6 +32,7 @@ export interface DbPage {
 export interface DbChunkMetadata {
   level?: number; // Hierarchical level in document
   path?: string[]; // Hierarchical path in document
+  sectionTarget?: string;
   // TODO: Check if `types` is properly used
   types?: string[]; // Types of content in this chunk (e.g., "text", "code", "table")
   // TODO: Enable additional metadata fields again once we have a clear schema for what metadata we want to store with each chunk.
@@ -70,6 +71,7 @@ export interface DbPageChunk extends DbChunk {
  */
 export interface DbChunkRank {
   score: number;
+  documentationPriority?: number;
   vec_rank?: number;
   fts_rank?: number;
 }
@@ -84,6 +86,7 @@ export type DbQueryResult<T> = T | undefined;
  */
 export interface StoreSearchResult {
   url: string;
+  sectionUrl?: string;
   /**
    * Where the content was actually retrieved from, when that differs from
    * `url`.
@@ -610,6 +613,14 @@ export interface PageContentOptions {
   startChunk?: number;
   /** Maximum characters to return. Whole chunks only; a single longer chunk is returned on its own. */
   maxChars?: number;
+  useVersionFallback?: boolean;
+}
+
+/** Identifies which indexed documentation supplied a search or page read. */
+export interface DocumentationVersion {
+  requestedVersion?: string;
+  indexedVersion: string | null;
+  versionMatch: "matched" | "different" | "unversioned" | "not-requested";
 }
 
 /**
@@ -617,6 +628,7 @@ export interface PageContentOptions {
  */
 export interface PageContentResult {
   url: string;
+  documentationVersion?: DocumentationVersion;
   title: string | null;
   contentType: string | null;
   content: string;

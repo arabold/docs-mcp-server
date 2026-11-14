@@ -3,6 +3,12 @@ import { SemanticMarkdownSplitter } from "../../splitter/SemanticMarkdownSplitte
 import type { AppConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
+import {
+  parseUrl,
+  sectionQueryBase,
+  sectionSelector,
+  sectionSlug,
+} from "../../utils/sections";
 import type { ManagedBrowser } from "../fetcher/ManagedBrowser";
 import type { ContentFetcher, RawContent } from "../fetcher/types";
 import { HtmlCheerioParserMiddleware } from "../middleware/HtmlCheerioParserMiddleware";
@@ -118,8 +124,66 @@ export class HtmlPipeline extends BasePipeline {
       typeof context.content === "string" ? context.content : "",
     );
 
+    const headings = new Map<string, Set<string>>();
+    const $ = context.dom;
+    const source = parseUrl(rawContent.source);
+    if ($ && source && /^https?:$/.test(source.protocol) && !options.preserveHashes) {
+      const base = sectionQueryBase(source.href);
+      const page = new URL(base ?? source.href);
+      const linksBySection = new Map<string, string>();
+      for (const href of context.links) {
+        const target = parseUrl(href);
+        const selector = target && sectionSelector(target.href);
+        if (
+          target &&
+          selector &&
+          target.origin === page.origin &&
+          target.pathname === page.pathname &&
+          (target.search === page.search || sectionQueryBase(target.href) === page.href)
+        ) {
+          linksBySection.set(sectionSlug(selector), target.href);
+        }
+      }
+      $("h1,h2,h3,h4,h5,h6").each((_index, element) => {
+        const heading = $(element);
+        const slug = sectionSlug(heading.text());
+        if (!slug) return;
+        const targets = headings.get(slug) ?? new Set<string>();
+        headings.set(slug, targets);
+        const id = heading.attr("id");
+        const linked = linksBySection.get(slug);
+        if (linked) {
+          targets.add(linked);
+        } else if (id) {
+          const url = new URL(page);
+          url.hash = id;
+          targets.add(url.href);
+        }
+      });
+    }
+
+    const base = sectionQueryBase(rawContent.source);
+    const selector = sectionSelector(rawContent.source);
+    const canonicalHref = $ ? $('link[rel="canonical"]').first().attr("href") : undefined;
+    const canonical = canonicalHref && parseUrl(canonicalHref, rawContent.source);
+    const sectionPageUrl =
+      base &&
+      selector &&
+      canonical &&
+      canonical.href === base &&
+      headings.get(sectionSlug(selector))?.has(source?.href ?? "")
+        ? base
+        : undefined;
+    for (const chunk of chunks) {
+      const heading = chunk.section.path.at(-1);
+      const targets = heading ? headings.get(sectionSlug(heading)) : undefined;
+      const [target] = targets?.size === 1 ? targets : [];
+      if (target) chunk.section.target = target;
+    }
+
     return {
       title: context.title,
+      sectionPageUrl,
       contentType: context.contentType,
       textContent: context.content,
       links: context.links,
