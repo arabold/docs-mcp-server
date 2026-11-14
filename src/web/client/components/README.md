@@ -32,6 +32,7 @@ in each file's types and TSDoc.
 | `EmptyState` | `EmptyState.tsx` | Placeholder for an empty list, with an optional action |
 | `Markdown` | `Markdown.tsx` | Renders stored Markdown (search results, chunks) without raw HTML |
 | `AreaChart` | `AreaChart.tsx` | SVG area chart for a series of values |
+| `McpRequestVolumeChart` | `McpRequestVolumeChart.tsx` | Daily MCP tool call chart used on Overview and Statistics |
 | `LibIcon` | `LibIcon.tsx` | Library avatar: the site's favicon, or a two-letter monogram |
 | `Icon` | `Icon.tsx` | One icon from the sprite; `IconName` lists them |
 
@@ -54,7 +55,6 @@ in each file's types and TSDoc.
 | `Textarea` | `Textarea.tsx` | Multi-line input with optional label and hint |
 | `Checkbox` | `Checkbox.tsx` | Checkbox with label and optional hint |
 | `SegmentedControl` | `SegmentedControl.tsx` | Choice between a few options |
-| `McpAdminGate` | `McpAdminGate.tsx` | Operator-key sign-in for token management and usage statistics |
 
 ### Overlays
 

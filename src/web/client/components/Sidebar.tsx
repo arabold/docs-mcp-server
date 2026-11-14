@@ -33,6 +33,8 @@ export function Sidebar() {
     jobsResult?.jobs.filter((job) => ACTIVE_JOB_STATUSES.has(job.status)).length ?? 0;
 
   const worker = workerStatus(health?.worker);
+  const model = health ? (health.embeddings?.model ?? "FTS only") : "—";
+  const version = health ? `v${health.version}` : "—";
 
   return (
     <aside className="sidebar">
@@ -99,14 +101,16 @@ export function Sidebar() {
         <div className="side-row">
           <Icon name="i-bolt" size="xs" style={{ color: "var(--text-faint)" }} />
           <span className="k">Embeddings</span>
-          <span className="v">
-            {health ? (health.embeddings?.model ?? "FTS only") : "—"}
+          <span className="v model-name" title={model}>
+            {model}
           </span>
         </div>
         <div className="side-row">
           <Icon name="i-db" size="xs" style={{ color: "var(--text-faint)" }} />
           <span className="k">Version</span>
-          <span className="v">{health ? `v${health.version}` : "—"}</span>
+          <span className="v" title={version}>
+            {version}
+          </span>
         </div>
       </div>
 

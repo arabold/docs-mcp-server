@@ -168,11 +168,16 @@
   gap: 8px;
   color: var(--text-muted);
 }
+.side-row > :not(.v) {
+  flex-shrink: 0;
+}
 .side-row .k {
   color: var(--text-faint);
 }
 .side-row .v {
+  min-width: 0;
   margin-left: auto;
+  overflow-wrap: anywhere;
   font-family: var(--mono);
   color: var(--text);
   font-size: 11.5px;
@@ -552,6 +557,7 @@
   font-weight: 500;
 }
 .health__row .meta {
+  min-width: 0;
   margin-left: auto;
   font-family: var(--mono);
   font-size: 11.5px;
@@ -611,6 +617,16 @@
   border-radius: 6px;
   padding: 1px 7px;
   display: inline-block;
+}
+
+.model-name {
+  display: -webkit-box;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 /* tables */
@@ -754,6 +770,24 @@ table.tbl {
 }
 .bar__fill.err {
   background: var(--err);
+}
+
+.tool-popularity {
+  display: grid;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+.tool-popularity__summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  column-gap: 8px;
+}
+.tool-popularity__name {
+  color: var(--text);
+  font-family: var(--mono);
+  font-weight: 600;
 }
 
 /* jobs list */
@@ -1090,12 +1124,17 @@ select.input {
   font-size: 12px;
 }
 .set-grid .v {
+  min-width: 0;
   padding: 13px 0;
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   gap: 9px;
   flex-wrap: wrap;
+}
+.set-grid .v .chip {
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .set-grid > div:nth-last-child(-n + 2) {
   border-bottom: none;

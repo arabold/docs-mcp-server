@@ -1,16 +1,11 @@
-/**
- * Statistics page: detailed usage analytics across tools, callers/tokens, and
- * documentation libraries. Helps administrators understand which MCP tools are
- * popular, who is using the server, and what documentation is being accessed.
- */
 import { useMemo, useState } from "react";
+import type { McpToolStatItem } from "../../../store/types";
 import { useListLibraries, useMcpRecentCalls, useMcpStatsOverview } from "../api/hooks";
-import { AreaChart } from "../components/AreaChart";
 import { Card } from "../components/Card";
 import { Chip } from "../components/Chip";
 import { EmptyState } from "../components/EmptyState";
 import { Icon, type IconName } from "../components/Icon";
-import { McpAdminGate } from "../components/McpAdminGate";
+import { McpRequestVolumeChart } from "../components/McpRequestVolumeChart";
 import { Pill } from "../components/Pill";
 import { ProgressBar } from "../components/ProgressBar";
 import { SegmentedControl } from "../components/SegmentedControl";
@@ -51,9 +46,44 @@ function Kpi({
   );
 }
 
-function StatisticsContent() {
+function ToolPopularityRow({
+  tool,
+  totalCalls,
+}: {
+  tool: McpToolStatItem;
+  totalCalls: number;
+}) {
+  const share = (tool.count / totalCalls) * 100;
+  const successShare = (tool.successCalls / tool.count) * 100;
+  const outcomes = `${tool.successCalls.toLocaleString()} succeeded · ${tool.failedCalls.toLocaleString()} failed`;
+
+  return (
+    <div className="tool-popularity">
+      <div className="tool-popularity__summary">
+        <span className="tool-popularity__name">{tool.tool}</span>
+        <span>
+          <b>{tool.count.toLocaleString()}</b> calls ({tool.percentage}%) ·{" "}
+          {tool.avgDurationMs}ms
+        </span>
+      </div>
+      <div className="bar" aria-hidden="true">
+        <div
+          className="bar__fill"
+          style={{
+            width: `${share}%`,
+            background: `linear-gradient(to right, var(--ok) ${successShare}%, var(--err) ${successShare}%)`,
+          }}
+        />
+      </div>
+      <div>{outcomes}</div>
+    </div>
+  );
+}
+
+/** Shows MCP usage history and filters across callers, tools and libraries. */
+export default function Statistics() {
   const [period, setPeriod] = useState<PeriodOption>("7");
-  const [selectedTokenId, setSelectedTokenId] = useState<number | undefined>(undefined);
+  const [selectedCaller, setSelectedCaller] = useState<string | undefined>(undefined);
   const [selectedTool, setSelectedTool] = useState<string | undefined>(undefined);
   const [selectedLibrary, setSelectedLibrary] = useState<string | undefined>(undefined);
 
@@ -62,11 +92,11 @@ function StatisticsContent() {
   const statsFilter = useMemo(
     () => ({
       days: daysParam,
-      tokenId: selectedTokenId,
+      caller: selectedCaller,
       tool: selectedTool,
       library: selectedLibrary,
     }),
-    [daysParam, selectedTokenId, selectedTool, selectedLibrary],
+    [daysParam, selectedCaller, selectedTool, selectedLibrary],
   );
 
   const {
@@ -80,32 +110,8 @@ function StatisticsContent() {
   });
   const { data: catalog } = useMcpStatsOverview();
   const { data: librariesList } = useListLibraries();
-
-  const activityValues = useMemo(() => {
-    if (!overview?.activityHistory || overview.activityHistory.length === 0) return [];
-    return overview.activityHistory.map((d) => d.calls);
-  }, [overview?.activityHistory]);
-
-  const activityXLabels = useMemo(() => {
-    if (!overview?.activityHistory || overview.activityHistory.length === 0) return [];
-    const history = overview.activityHistory;
-    if (history.length <= 4) return history.map((d) => d.date.slice(5));
-    const step = Math.floor(history.length / 3);
-    return [
-      history[0].date.slice(5),
-      history[step].date.slice(5),
-      history[step * 2].date.slice(5),
-      history[history.length - 1].date.slice(5),
-    ];
-  }, [overview?.activityHistory]);
-
-  const maxCalls = Math.max(0, ...activityValues);
-  const activityYLabels = [
-    String(maxCalls),
-    String(Math.round(maxCalls * 0.66)),
-    String(Math.round(maxCalls * 0.33)),
-    "0",
-  ];
+  const callers = new Set(overview?.byToken.map(({ comment }) => comment));
+  const callerOptions = new Set(catalog?.byToken.map(({ comment }) => comment));
 
   if (overviewLoading && !overview) {
     return <Loading label="Loading MCP statistics…" />;
@@ -160,10 +166,9 @@ function StatisticsContent() {
           suffix={overview ? `${overview.failedCalls} errors` : undefined}
         />
         <Kpi
-          icon="i-key"
-          label="Active Tokens"
-          value={overview ? String(overview.activeTokensCount) : "0"}
-          suffix="configured"
+          icon="i-globe"
+          label="Callers"
+          value={callers.size.toLocaleString()}
         />
         <Kpi
           icon="i-clock"
@@ -173,37 +178,8 @@ function StatisticsContent() {
         />
       </div>
 
-      {/* Activity Chart */}
       <div style={{ marginTop: 16 }}>
-        <Card className="panel">
-          <div className="panel__head" style={{ marginBottom: 12 }}>
-            <div>
-              <h3>Request Volume Over Time</h3>
-              <span className="sub" style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                Daily requests made by MCP clients (UTC)
-              </span>
-            </div>
-          </div>
-          {activityValues.length > 1 ? (
-            <AreaChart
-              values={activityValues}
-              xLabels={activityXLabels}
-              yLabels={activityYLabels}
-              label="Daily MCP requests"
-              height={180}
-            />
-          ) : (
-            <div
-              style={{
-                padding: "30px 0",
-                textAlign: "center",
-                color: "var(--text-muted)",
-              }}
-            >
-              Not enough activity data in this time period yet.
-            </div>
-          )}
-        </Card>
+        <McpRequestVolumeChart history={overview?.activityHistory} />
       </div>
 
       {/* Breakdowns Grid */}
@@ -223,28 +199,12 @@ function StatisticsContent() {
           </div>
           {overview && overview.byTool.length > 0 ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {overview.byTool.map((toolItem) => (
-                <div key={toolItem.tool} style={{ fontSize: 12.5 }}>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      marginBottom: 4,
-                    }}
-                  >
-                    <span style={{ fontWeight: 600, fontFamily: "var(--mono)" }}>
-                      {toolItem.tool}
-                    </span>
-                    <span style={{ color: "var(--text-muted)" }}>
-                      <b>{toolItem.count}</b> calls ({toolItem.percentage}%) ·{" "}
-                      {toolItem.avgDurationMs}ms
-                    </span>
-                  </div>
-                  <ProgressBar
-                    value={toolItem.percentage}
-                    variant={toolItem.successRate >= 95 ? "ok" : "err"}
-                  />
-                </div>
+              {overview.byTool.map((tool) => (
+                <ToolPopularityRow
+                  key={tool.tool}
+                  tool={tool}
+                  totalCalls={overview.totalCalls}
+                />
               ))}
             </div>
           ) : (
@@ -255,10 +215,10 @@ function StatisticsContent() {
           )}
         </Card>
 
-        {/* Usage by Caller/Friend */}
+        {/* Usage by Caller */}
         <Card className="panel">
           <div className="panel__head" style={{ marginBottom: 12 }}>
-            <Icon name="i-key" size="sm" style={{ color: "var(--primary)" }} />
+            <Icon name="i-globe" size="sm" style={{ color: "var(--primary)" }} />
             <h3 style={{ marginLeft: 6 }}>Usage by Caller</h3>
           </div>
           {overview && overview.byToken.length > 0 ? (
@@ -294,7 +254,7 @@ function StatisticsContent() {
           ) : (
             <EmptyState
               title="No caller activity"
-              description="Calls with valid tokens will appear here."
+              description="MCP tool calls will appear here."
             />
           )}
         </Card>
@@ -369,21 +329,16 @@ function StatisticsContent() {
                 padding: "4px 8px",
                 fontSize: 12,
               }}
-              value={selectedTokenId ?? ""}
-              onChange={(e) =>
-                setSelectedTokenId(
-                  e.target.value ? Number.parseInt(e.target.value, 10) : undefined,
-                )
-              }
+              aria-label="Caller"
+              value={selectedCaller ?? ""}
+              onChange={(e) => setSelectedCaller(e.target.value || undefined)}
             >
               <option value="">All Callers</option>
-              {catalog?.byToken
-                .filter((t) => t.tokenId !== null)
-                .map((t) => (
-                  <option key={t.tokenId} value={t.tokenId ?? ""}>
-                    {t.comment}
-                  </option>
-                ))}
+              {[...callerOptions].map((caller) => (
+                <option key={caller} value={caller}>
+                  {caller}
+                </option>
+              ))}
             </select>
 
             {/* Filter by Tool */}
@@ -537,17 +492,5 @@ function StatisticsContent() {
         </Card>
       </div>
     </div>
-  );
-}
-
-/**
- * Shows usage analytics to an authenticated operator.
- * @returns The administrative gate and statistics page.
- */
-export default function Statistics() {
-  return (
-    <McpAdminGate>
-      <StatisticsContent />
-    </McpAdminGate>
   );
 }

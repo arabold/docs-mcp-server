@@ -9,7 +9,6 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { createApiLinks } from "../../services/apiClient";
 import { App } from "./App";
-import { mcpAdminHeaders } from "./api/adminAccess";
 import { trpc } from "./api/trpc";
 import "./styles/theme.css";
 import "./styles/components.css";
@@ -25,7 +24,7 @@ const apiUrl = new URL("api", baseUrl).href;
 const queryClient = new QueryClient();
 
 const trpcClient = trpc.createClient({
-  links: createApiLinks(apiUrl, { subscriptions: true, headers: mcpAdminHeaders }).links,
+  links: createApiLinks(apiUrl, { subscriptions: true }).links,
 });
 
 const container = document.getElementById("root");

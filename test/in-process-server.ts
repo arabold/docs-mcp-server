@@ -22,7 +22,6 @@ import { getFreePort } from "./test-helpers";
  * @param options.issuerUrl - The issuer to authenticate against; omit to disable auth.
  * @param options.enableWebInterface - Whether to serve the web UI (default `true`).
  * @param options.serverTitle - The server's title; omit for none.
- * @param options.clientToken - Optional database access token for HTTP MCP clients.
  * @returns The server's event bus, its API URL on the listening port, and
  *   `stop`, which shuts everything down and removes the store.
  */
@@ -33,7 +32,6 @@ export async function startInProcessServer(
     issuerUrl?: string;
     enableWebInterface?: boolean;
     serverTitle?: string;
-    clientToken?: string;
   } = {},
 ): Promise<{ eventBus: EventBusService; apiUrl: string; stop: () => Promise<void> }> {
   const port = options.port ?? (await getFreePort());
@@ -50,9 +48,6 @@ export async function startInProcessServer(
 
   const eventBus = new EventBusService();
   const backend = await openBackend({ appConfig, eventBus, jobs: { interruptedJobs: "fail" } });
-  if (options.clientToken) {
-    await backend.docService.createMcpToken("E2E client", options.clientToken);
-  }
   const appServer = await startAppServer(
     backend,
     createAppServerConfig({

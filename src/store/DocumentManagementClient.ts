@@ -20,7 +20,6 @@ import type {
   McpRecentCallsOptions,
   McpStatsFilterOptions,
   McpStatsOverview,
-  McpTokenRecord,
   McpToolCallInput,
   McpToolCallRecord,
   PageContentOptions,
@@ -208,26 +207,6 @@ export class DocumentManagementClient implements IDocumentManagement {
       library: ref.library,
       version: ref.version,
     });
-  }
-
-  async listMcpTokens(): Promise<McpTokenRecord[]> {
-    return this.client.listMcpTokens.query();
-  }
-
-  async createMcpToken(comment: string, customToken?: string): Promise<McpTokenRecord> {
-    return this.client.createMcpToken.mutate({ comment, token: customToken });
-  }
-
-  async deleteMcpToken(id: number): Promise<void> {
-    await this.client.deleteMcpToken.mutate({ id });
-  }
-
-  async validateMcpToken(token: string): Promise<McpTokenRecord | null> {
-    return this.client.validateMcpToken.mutate({ token });
-  }
-
-  async touchMcpToken(id: number): Promise<void> {
-    await this.client.touchMcpToken.mutate({ id });
   }
 
   async recordMcpToolCall(call: McpToolCallInput): Promise<void> {

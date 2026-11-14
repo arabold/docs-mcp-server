@@ -1,21 +1,19 @@
 import { readFileSync } from "node:fs";
-import Database from "better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EventBusService } from "../events";
 import { loadConfig } from "../utils/config";
-import { logger } from "../utils/logger";
 import { DocumentManagementService } from "./DocumentManagementService";
 import { pruneMcpCalls, readMcpOverview, readMcpRecent } from "./McpStatistics";
+import { openDatabase } from "./openDatabase";
 
 function migration(name: string): string {
   return readFileSync(new URL(`../../db/migrations/${name}`, import.meta.url), "utf8");
 }
 
-describe("MCP tokens and compact statistics", () => {
+describe("Compact MCP statistics", () => {
   let service: DocumentManagementService;
 
   beforeEach(async () => {
-    vi.spyOn(logger, "info");
     const config = loadConfig();
     config.app.storePath = ":memory:";
     config.app.embeddingModel = "";
@@ -25,45 +23,6 @@ describe("MCP tokens and compact statistics", () => {
 
   afterEach(async () => {
     await service.shutdown();
-    vi.restoreAllMocks();
-  });
-
-  it("does not write the initial client token to the log", async () => {
-    // arrange
-    const [token] = await service.listMcpTokens();
-
-    // act
-    const log = vi
-      .mocked(logger.info)
-      .mock.calls.map(([message]) => message)
-      .join("\n");
-
-    // assert
-    expect(log).not.toContain(token.token);
-  });
-
-  it("creates a token that authenticates its caller", async () => {
-    // arrange
-    const token = await service.createMcpToken("Alice");
-
-    // act
-    const authenticated = await service.validateMcpToken(token.token);
-
-    // assert
-    expect(authenticated?.id).toBe(token.id);
-    expect(authenticated?.comment).toBe("Alice");
-  });
-
-  it("rejects a revoked token", async () => {
-    // arrange
-    const token = await service.createMcpToken("Alice");
-    await service.deleteMcpToken(token.id);
-
-    // act
-    const authenticated = await service.validateMcpToken(token.token);
-
-    // assert
-    expect(authenticated).toBeNull();
   });
 
   it("keeps historical totals when recent metadata is pruned", async () => {
@@ -85,15 +44,14 @@ describe("MCP tokens and compact statistics", () => {
     const overview = await service.getMcpStatsOverview();
     expect(overview.totalCalls).toBe(15);
     expect(overview.failedCalls).toBe(1);
+    expect(overview.byTool[0]).toMatchObject({ successCalls: 14, failedCalls: 1 });
     expect(overview.activityHistory.reduce((sum, day) => sum + day.calls, 0)).toBe(15);
   });
 
   it("filters the chart and breakdowns by the same caller, tool and library", async () => {
     // arrange
-    const alice = await service.createMcpToken("Alice");
     await service.recordMcpToolCall({
-      tokenId: alice.id,
-      tokenComment: "Alice",
+      tokenComment: "Anonymous SSE",
       tool: "search_docs",
       library: "react",
       success: true,
@@ -106,8 +64,7 @@ describe("MCP tokens and compact statistics", () => {
       durationMs: 100,
     });
     await service.recordMcpToolCall({
-      tokenId: alice.id,
-      tokenComment: "Alice",
+      tokenComment: "Anonymous SSE",
       tool: "read_page",
       library: "vue",
       success: false,
@@ -117,7 +74,7 @@ describe("MCP tokens and compact statistics", () => {
     // act
     const overview = await service.getMcpStatsOverview({
       days: 1,
-      tokenId: alice.id,
+      caller: "Anonymous SSE",
       tool: "search_docs",
       library: "react",
     });
@@ -130,29 +87,6 @@ describe("MCP tokens and compact statistics", () => {
     expect(overview.byTool.map((row) => row.tool)).toEqual(["search_docs"]);
     expect(overview.byLibrary.map((row) => row.library)).toEqual(["react"]);
     expect(overview.avgDurationMs).toBe(20);
-  });
-
-  it("retains caller attribution after a token is revoked", async () => {
-    // arrange
-    const alice = await service.createMcpToken("Alice");
-    await service.recordMcpToolCall({
-      tokenId: alice.id,
-      tokenComment: "Alice",
-      tool: "read_page",
-      success: true,
-      durationMs: 1,
-    });
-    await service.deleteMcpToken(alice.id);
-
-    // act
-    const overview = await service.getMcpStatsOverview({ tokenId: alice.id });
-
-    // assert
-    expect(overview.byToken[0]).toMatchObject({
-      tokenId: alice.id,
-      comment: "Alice",
-      count: 1,
-    });
   });
 
   it("discards payloads and URL credentials while retaining the document target", async () => {
@@ -184,13 +118,17 @@ describe("MCP tokens and compact statistics", () => {
 });
 
 describe("MCP statistics migration", () => {
-  it("preserves old daily counters and removes payload columns", () => {
+  it("preserves historical caller statistics when removing legacy credentials", () => {
     // arrange
-    const db = new Database(":memory:");
+    const db = openDatabase(":memory:");
     try {
+      db.pragma("foreign_keys = ON");
       db.exec(migration("020-add-mcp-tokens-and-stats.sql"));
-      db.prepare(`INSERT INTO mcp_stats(tool, library, query, detail, error_message, duration_ms, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+      db.exec(
+        "INSERT INTO mcp_tokens (id, token, comment) VALUES (1, 'legacy-secret', 'Alice')",
+      );
+      db.prepare(`INSERT INTO mcp_stats(token_id, token_comment, tool, library, query, detail, error_message, duration_ms, created_at)
+        VALUES (1, 'Alice', ?, ?, ?, ?, ?, ?, ?)`).run(
         "search_docs",
         "react",
         "SECRET".repeat(1000),
@@ -202,12 +140,17 @@ describe("MCP statistics migration", () => {
 
       // act
       db.exec(migration("021-compact-mcp-statistics.sql"));
+      db.exec(migration("022-drop-mcp-access-tokens.sql"));
       pruneMcpCalls(db);
       const overview = readMcpOverview(db);
       const recent = readMcpRecent(db);
 
       // assert
       expect(overview.totalCalls).toBe(1);
+      expect(overview.byToken[0]).toMatchObject({ tokenId: 1, comment: "Alice", count: 1 });
+      expect(
+        db.prepare("SELECT name FROM sqlite_master WHERE name = 'mcp_tokens'").get(),
+      ).toBeUndefined();
       expect(overview.activityHistory[0]).toEqual({
         date: "2020-01-01",
         calls: 1,

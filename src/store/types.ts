@@ -660,17 +660,6 @@ export interface ListPagesResult {
 }
 
 /**
- * Access token for authenticating MCP clients.
- */
-export interface McpTokenRecord {
-  id: number;
-  token: string;
-  comment: string;
-  createdAt: string;
-  lastUsedAt: string | null;
-}
-
-/**
  * Input payload for recording an MCP tool call in the stats log.
  */
 export interface McpToolCallInput {
@@ -708,6 +697,7 @@ export interface McpToolCallRecord {
 export interface McpStatsFilterOptions {
   days?: number;
   tokenId?: number;
+  caller?: string;
   tool?: string;
   library?: string;
 }
@@ -727,6 +717,8 @@ export interface McpToolStatItem {
   tool: string;
   count: number;
   percentage: number;
+  successCalls: number;
+  failedCalls: number;
   successRate: number;
   avgDurationMs: number;
 }
@@ -770,7 +762,6 @@ export interface McpStatsOverview {
   failedCalls: number;
   successRate: number;
   avgDurationMs: number;
-  activeTokensCount: number;
   topTool: string | null;
   topLibrary: string | null;
   byTool: McpToolStatItem[];

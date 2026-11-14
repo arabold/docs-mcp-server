@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { statSync } from "node:fs";
 import type { Embeddings } from "@langchain/core/embeddings";
 import type Database from "better-sqlite3";
@@ -48,7 +47,6 @@ import type {
   McpRecentCallsOptions,
   McpStatsFilterOptions,
   McpStatsOverview,
-  McpTokenRecord,
   McpToolCallInput,
   McpToolCallRecord,
   PageListItem,
@@ -1164,10 +1162,6 @@ export class DocumentStore {
       //    On success, persists model identity to metadata table.
       await this.initializeEmbeddings();
 
-      // 8. Ensure initial default MCP token exists if table is empty
-      await this.ensureDefaultMcpToken();
-
-      // 9. Prune old MCP stats on startup to keep telemetry lean
       await this.pruneOldMcpStats();
     } catch (error) {
       // Re-throw StoreError, ModelConfigurationError, and UnsupportedProviderError directly
@@ -3352,147 +3346,6 @@ export class DocumentStore {
       };
     } catch (error) {
       throw new ConnectionError("Failed to get version composition", error);
-    }
-  }
-
-  /**
-   * Lists all registered MCP access tokens ordered by creation date descending.
-   */
-  async listMcpTokens(): Promise<McpTokenRecord[]> {
-    try {
-      const rows = this.db
-        .prepare(
-          `SELECT
-             id,
-             token,
-             comment,
-             strftime('%Y-%m-%dT%H:%M:%fZ', created_at) as createdAt,
-             strftime('%Y-%m-%dT%H:%M:%fZ', last_used_at) as lastUsedAt
-           FROM mcp_tokens
-           ORDER BY created_at DESC`,
-        )
-        .all() as McpTokenRecord[];
-      return rows;
-    } catch (error) {
-      throw new ConnectionError("Failed to list MCP access tokens", error);
-    }
-  }
-
-  /**
-   * Creates a new MCP access token with the given comment and optional custom token string.
-   */
-  async createMcpToken(comment: string, customToken?: string): Promise<McpTokenRecord> {
-    try {
-      const trimmedComment =
-        (typeof comment === "string" ? comment.trim() : "") || "Default Token";
-      const token =
-        typeof customToken === "string" && customToken.trim().length > 0
-          ? customToken.trim()
-          : `dmcp_${randomBytes(24).toString("hex")}`;
-      const info = this.db
-        .prepare(
-          `INSERT INTO mcp_tokens (token, comment, created_at)
-           VALUES (?, ?, CURRENT_TIMESTAMP)`,
-        )
-        .run(token, trimmedComment);
-
-      const row = this.db
-        .prepare(
-          `SELECT
-             id,
-             token,
-             comment,
-             strftime('%Y-%m-%dT%H:%M:%fZ', created_at) as createdAt,
-             strftime('%Y-%m-%dT%H:%M:%fZ', last_used_at) as lastUsedAt
-           FROM mcp_tokens
-           WHERE id = ?`,
-        )
-        .get(Number(info.lastInsertRowid)) as McpTokenRecord;
-
-      return row;
-    } catch (error) {
-      throw new ConnectionError("Failed to create MCP access token", error);
-    }
-  }
-
-  /**
-   * Deletes an MCP access token by its primary key ID.
-   */
-  async deleteMcpToken(id: number): Promise<void> {
-    try {
-      const countRow = this.db
-        .prepare("SELECT COUNT(*) as count FROM mcp_tokens")
-        .get() as { count: number };
-      if (countRow.count <= 1) {
-        throw new Error("Cannot delete the last remaining MCP access token");
-      }
-      this.db.prepare("DELETE FROM mcp_tokens WHERE id = ?").run(id);
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message.includes("Cannot delete the last remaining")
-      ) {
-        throw error;
-      }
-      throw new ConnectionError("Failed to delete MCP access token", error);
-    }
-  }
-
-  /**
-   * Validates an access token and returns its record if found.
-   */
-  async validateMcpToken(token: string): Promise<McpTokenRecord | null> {
-    try {
-      const trimmed = token.trim();
-      if (!trimmed) return null;
-      const row = this.db
-        .prepare(
-          `SELECT
-             id,
-             token,
-             comment,
-             strftime('%Y-%m-%dT%H:%M:%fZ', created_at) as createdAt,
-             strftime('%Y-%m-%dT%H:%M:%fZ', last_used_at) as lastUsedAt
-           FROM mcp_tokens
-           WHERE token = ?`,
-        )
-        .get(trimmed) as McpTokenRecord | undefined;
-      return row ?? null;
-    } catch (error) {
-      throw new ConnectionError("Failed to validate MCP access token", error);
-    }
-  }
-
-  /**
-   * Updates last_used_at timestamp of an access token.
-   */
-  async touchMcpToken(id: number): Promise<void> {
-    try {
-      this.db
-        .prepare("UPDATE mcp_tokens SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?")
-        .run(id);
-    } catch (error) {
-      logger.debug(`Failed to touch MCP token ${id}: ${error}`);
-    }
-  }
-
-  /**
-   * Generates an initial client access token if no tokens exist in the database.
-   */
-  async ensureDefaultMcpToken(): Promise<McpTokenRecord | null> {
-    try {
-      const countRow = this.db
-        .prepare("SELECT COUNT(*) as count FROM mcp_tokens")
-        .get() as { count: number };
-      if (countRow.count === 0) {
-        const created = await this.createMcpToken("Default Access Token");
-        logger.info(`🔑 Created initial MCP access token (id: ${created.id})`);
-        return created;
-      }
-      return null;
-    } catch (error) {
-      logger.warn(`⚠️ Could not ensure default MCP token: ${error}`);
-      return null;
     }
   }
 

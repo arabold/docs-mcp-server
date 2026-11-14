@@ -8,6 +8,8 @@ import type {
   McpToolCallRecord,
 } from "./types";
 
+const CALLER_LABEL = "COALESCE(NULLIF(token_comment, ''), 'Anonymous')";
+
 function filters(options: McpStatsFilterOptions, daily: boolean) {
   const conditions: string[] = [];
   const params: (string | number)[] = [];
@@ -19,6 +21,7 @@ function filters(options: McpStatsFilterOptions, daily: boolean) {
   }
   for (const [column, value] of [
     ["token_id", options.tokenId],
+    [CALLER_LABEL, options.caller],
     ["tool", options.tool],
     ["library", options.library],
   ] as const) {
@@ -137,12 +140,14 @@ export function readMcpOverview(
   ).map(({ successes, ...row }) => ({
     ...row,
     percentage: percent(row.count),
+    successCalls: successes,
+    failedCalls: row.count - successes,
     successRate: Math.round((successes / row.count) * 100),
   }));
   const byToken = (
     db
       .prepare(`SELECT token_id AS tokenId,
-    COALESCE(NULLIF(token_comment, ''), 'Anonymous') AS comment,
+    ${CALLER_LABEL} AS comment,
     SUM(calls) AS count, MAX(last_used_at) AS lastUsedAt
     FROM mcp_stats_daily ${where} GROUP BY token_id, token_comment
     ORDER BY count DESC, token_id, token_comment`)
@@ -188,9 +193,6 @@ export function readMcpOverview(
     const date = new Date(day).toISOString().slice(0, 10);
     activityHistory.push(byDay.get(date) ?? { date, calls: 0, errors: 0 });
   }
-  const active = db.prepare("SELECT COUNT(*) AS count FROM mcp_tokens").get() as {
-    count: number;
-  };
   return {
     firstDay: totals.firstDay,
     totalCalls: totals.total,
@@ -200,7 +202,6 @@ export function readMcpOverview(
     avgDurationMs: totals.total
       ? Math.round((totals.duration / totals.total) * 10) / 10
       : 0,
-    activeTokensCount: active.count,
     topTool: byTool[0]?.tool ?? null,
     topLibrary: byLibrary[0]?.library ?? null,
     byTool,

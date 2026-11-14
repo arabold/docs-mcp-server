@@ -46,7 +46,6 @@ import type {
   McpRecentCallsOptions,
   McpStatsFilterOptions,
   McpStatsOverview,
-  McpTokenRecord,
   McpToolCallInput,
   McpToolCallRecord,
   PageContentOptions,
@@ -1078,27 +1077,6 @@ export class DocumentManagementService {
   async getVersionComposition(ref: VersionRef): Promise<VersionComposition> {
     const normalized = normalizeVersionRef(ref);
     return this.store.getVersionComposition(normalized.library, normalized.version);
-  }
-
-  // MCP Access Tokens management
-  async listMcpTokens(): Promise<McpTokenRecord[]> {
-    return this.store.listMcpTokens();
-  }
-
-  async createMcpToken(comment: string, customToken?: string): Promise<McpTokenRecord> {
-    return this.store.createMcpToken(comment, customToken);
-  }
-
-  async deleteMcpToken(id: number): Promise<void> {
-    return this.store.deleteMcpToken(id);
-  }
-
-  async validateMcpToken(token: string): Promise<McpTokenRecord | null> {
-    return this.store.validateMcpToken(token);
-  }
-
-  async touchMcpToken(id: number): Promise<void> {
-    return this.store.touchMcpToken(id);
   }
 
   // MCP Usage Analytics & Statistics

@@ -18,7 +18,6 @@ import type {
   McpRecentCallsOptions,
   McpStatsFilterOptions,
   McpStatsOverview,
-  McpTokenRecord,
   McpToolCallInput,
   McpToolCallRecord,
   PageContentOptions,
@@ -101,13 +100,6 @@ export interface IDocumentManagement {
   getVersionStats(ref: VersionRef): Promise<VersionChunkStats>;
   getActivityHistory(days?: number): Promise<ActivityHistory>;
   getVersionComposition(ref: VersionRef): Promise<VersionComposition>;
-
-  // MCP Access Tokens management
-  listMcpTokens(): Promise<McpTokenRecord[]>;
-  createMcpToken(comment: string, customToken?: string): Promise<McpTokenRecord>;
-  deleteMcpToken(id: number): Promise<void>;
-  validateMcpToken(token: string): Promise<McpTokenRecord | null>;
-  touchMcpToken(id: number): Promise<void>;
 
   // MCP Usage Analytics & Statistics
   recordMcpToolCall(call: McpToolCallInput): Promise<void>;
