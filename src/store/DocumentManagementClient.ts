@@ -222,6 +222,42 @@ export class DocumentManagementClient implements IDocumentManagement {
     });
   }
 
+  /**
+   * Lists the worker's registered application tokens.
+   * @returns Token metadata.
+   */
+  async listMcpAppTokens() {
+    return this.client.listMcpAppTokens.query();
+  }
+
+  /**
+   * Registers an application token with the worker.
+   * @param name - Application name shown in statistics.
+   * @param token - Existing token value, or omit to generate one.
+   * @returns The newly registered token, or null if the value already exists.
+   */
+  async createMcpAppToken(name: string, token?: string) {
+    return this.client.createMcpAppToken.mutate({ name, token });
+  }
+
+  /**
+   * Revokes a worker's application token.
+   * @param id - Token ID.
+   * @returns A promise resolved after deletion.
+   */
+  async deleteMcpAppToken(id: number): Promise<void> {
+    await this.client.deleteMcpAppToken.mutate({ id });
+  }
+
+  /**
+   * Resolves a token hash against the worker's registry.
+   * @param hash - SHA-256 digest of a supplied token.
+   * @returns The matching application identity, if still registered.
+   */
+  async resolveMcpAppToken(hash: string) {
+    return this.client.resolveMcpAppToken.mutate({ hash });
+  }
+
   async recordMcpToolCall(call: McpToolCallInput): Promise<void> {
     await this.client.recordMcpToolCall.mutate(call);
   }

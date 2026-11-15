@@ -4,6 +4,8 @@
 
 The Docs MCP Server can require an OAuth 2.0 access token on its MCP endpoint. Authentication is off by default, so local use stays frictionless.
 
+In open mode, optional [app tokens](../guides/mcp-statistics.md#label-calls-by-application) label usage statistics. Requests can still connect anonymously.
+
 When enabled, the server is an OAuth 2.0 **resource server**. It does not issue tokens, register clients, or host sign-in pages. An external identity provider (Clerk, Auth0, Keycloak, Microsoft Entra ID, and others) does all of that. MCP clients discover the provider from the server, sign the user in there, and send the token they receive with every request. The server accepts a token only when it is a JWT that the configured provider issued for this server.
 
 This follows the [MCP authorization specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization) (protocol revision 2026-07-28).

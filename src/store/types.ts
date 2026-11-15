@@ -671,6 +671,19 @@ export interface ListPagesResult {
   hasMore: boolean;
 }
 
+/** An application's token metadata shown in Settings. */
+export interface McpAppToken {
+  id: number;
+  name: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+/** The generated or supplied token value, returned only when it is registered. */
+export interface CreatedMcpAppToken extends McpAppToken {
+  token: string;
+}
+
 /**
  * Input payload for recording an MCP tool call in the stats log.
  */

@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import { statSync } from "node:fs";
 import type { Embeddings } from "@langchain/core/embeddings";
 import type Database from "better-sqlite3";
@@ -44,11 +45,13 @@ import { openDatabase } from "./openDatabase";
 import type {
   ActivityHistory,
   CompactResult,
+  CreatedMcpAppToken,
   DbChunkMetadata,
   DbChunkRank,
   LibraryVersionSummary,
   ListVersionChunksOptions,
   ListVersionChunksResult,
+  McpAppToken,
   McpRecentCallsOptions,
   McpStatsFilterOptions,
   McpStatsOverview,
@@ -3478,6 +3481,65 @@ export class DocumentStore {
     } catch (error) {
       throw new ConnectionError("Failed to get version composition", error);
     }
+  }
+
+  /**
+   * Lists app tokens and their usage timestamps.
+   * @returns Token metadata ordered by application name.
+   */
+  async listMcpAppTokens(): Promise<McpAppToken[]> {
+    return this.db
+      .prepare(`SELECT id, name,
+        strftime('%Y-%m-%dT%H:%M:%SZ', created_at) AS createdAt,
+        strftime('%Y-%m-%dT%H:%M:%SZ', last_used_at) AS lastUsedAt
+        FROM mcp_app_tokens ORDER BY name COLLATE NOCASE, id`)
+      .all() as McpAppToken[];
+  }
+
+  /**
+   * Registers a token for an application.
+   * @param name - Application name used in statistics.
+   * @param token - Existing token value, or omit to generate one.
+   * @returns The token with its metadata, or null when the value is already registered.
+   */
+  async createMcpAppToken(
+    name: string,
+    token = `dmcp_${randomBytes(24).toString("hex")}`,
+  ): Promise<CreatedMcpAppToken | null> {
+    const hash = createHash("sha256").update(token).digest("hex");
+    const row = this.db
+      .prepare(`INSERT INTO mcp_app_tokens (name, token_hash) VALUES (?, ?)
+        ON CONFLICT(token_hash) DO NOTHING
+        RETURNING id, name, strftime('%Y-%m-%dT%H:%M:%SZ', created_at) AS createdAt,
+        last_used_at AS lastUsedAt`)
+      .get(name, hash) as McpAppToken | undefined;
+    return row ? { ...row, token } : null;
+  }
+
+  /**
+   * Revokes a token while preserving its recorded calls.
+   * @param id - The token to revoke.
+   * @returns A promise resolved after deletion.
+   */
+  async deleteMcpAppToken(id: number): Promise<void> {
+    this.db.prepare("DELETE FROM mcp_app_tokens WHERE id = ?").run(id);
+  }
+
+  /**
+   * Resolves a token hash to its caller and updates its last-use timestamp.
+   * @param hash - SHA-256 digest of the supplied token.
+   * @returns The application identity for a registered token, or null.
+   */
+  async resolveMcpAppToken(hash: string): Promise<Pick<McpAppToken, "id" | "name"> | null> {
+    const token = this.db
+      .prepare("SELECT id, name FROM mcp_app_tokens WHERE token_hash = ?")
+      .get(hash) as Pick<McpAppToken, "id" | "name"> | undefined;
+    if (!token) return null;
+    this.db
+      .prepare(`UPDATE mcp_app_tokens SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?
+        AND (last_used_at IS NULL OR last_used_at <= datetime('now', '-1 minute'))`)
+      .run(token.id);
+    return token;
   }
 
   private mcpStatsWriteCount = 0;

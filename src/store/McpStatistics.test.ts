@@ -141,12 +141,17 @@ describe("MCP statistics migration", () => {
       // act
       db.exec(migration("021-compact-mcp-statistics.sql"));
       db.exec(migration("022-drop-mcp-access-tokens.sql"));
+      db.exec(migration("023-add-mcp-app-tokens.sql"));
+      const token = db
+        .prepare("INSERT INTO mcp_app_tokens (name, token_hash) VALUES ('Alice', 'digest')")
+        .run();
       pruneMcpCalls(db);
       const overview = readMcpOverview(db);
       const recent = readMcpRecent(db);
 
       // assert
       expect(overview.totalCalls).toBe(1);
+      expect(Number(token.lastInsertRowid)).toBeGreaterThan(1);
       expect(overview.byToken[0]).toMatchObject({ tokenId: 1, comment: "Alice", count: 1 });
       expect(
         db.prepare("SELECT name FROM sqlite_master WHERE name = 'mcp_tokens'").get(),

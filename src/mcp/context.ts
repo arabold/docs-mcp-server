@@ -6,6 +6,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 /** The bounded caller identity attached to the current tool execution. */
 export interface McpCallerContext {
+  tokenId?: number;
   caller: string;
   protocol: "http" | "sse";
 }

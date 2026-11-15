@@ -5,17 +5,18 @@
 import { initTRPC } from "@trpc/server";
 import superjson from "superjson";
 import { z } from "zod";
-import type {
-  DbVersionWithLibrary,
-  EmbeddingConfigInfo,
-  FindVersionResult,
-  ListPagesOptions,
-  McpRecentCallsOptions,
-  McpStatsFilterOptions,
-  McpToolCallInput,
-  PageContentOptions,
-  StoreSearchResult,
-  VersionStatus,
+import {
+  CONTROL_CHARACTER,
+  type DbVersionWithLibrary,
+  type EmbeddingConfigInfo,
+  type FindVersionResult,
+  type ListPagesOptions,
+  type McpRecentCallsOptions,
+  type McpStatsFilterOptions,
+  type McpToolCallInput,
+  type PageContentOptions,
+  type StoreSearchResult,
+  type VersionStatus,
 } from "../types";
 import type { IDocumentManagement } from "./interfaces";
 
@@ -409,6 +410,32 @@ export function createDataRouter(trpc: unknown) {
           });
         },
       ),
+
+    listMcpAppTokens: tt.procedure.query(({ ctx }) => ctx.docService.listMcpAppTokens()),
+
+    createMcpAppToken: tt.procedure
+      .input(
+        z.object({
+          name: nonEmpty
+            .max(100)
+            .refine((name) => !CONTROL_CHARACTER.test(name), "Invalid application name."),
+          token: z.string().trim().min(32).max(256).regex(/^[!-~]+$/).optional(),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        ctx.docService.createMcpAppToken(input.name, input.token),
+      ),
+
+    deleteMcpAppToken: tt.procedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        await ctx.docService.deleteMcpAppToken(input.id);
+        return { ok: true } as const;
+      }),
+
+    resolveMcpAppToken: tt.procedure
+      .input(z.object({ hash: z.string().regex(/^[a-f0-9]{64}$/) }))
+      .mutation(({ ctx, input }) => ctx.docService.resolveMcpAppToken(input.hash)),
 
     getMcpStatsOverview: tt.procedure
       .input(

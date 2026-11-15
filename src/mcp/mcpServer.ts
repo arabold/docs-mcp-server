@@ -389,6 +389,7 @@ function createMcpServerInstance(
         if (docService) {
           const fields = args as Record<string, unknown>;
           const call = compactMcpCall({
+            tokenId: caller?.tokenId,
             tokenComment: caller?.caller ?? "Local stdio",
             protocol: caller?.protocol ?? "stdio",
             tool: name,

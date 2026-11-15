@@ -8,6 +8,7 @@ import { Chip } from "../components/Chip";
 import { Pill } from "../components/Pill";
 import { Loading } from "../components/Spinner";
 import type { StatusVariant } from "../components/StatusDot";
+import { McpAppTokensSection } from "./settings/McpAppTokensSection";
 
 /** A single label/value row rendered inside a `.set-grid` panel. */
 interface SettingRow {
@@ -195,6 +196,7 @@ export default function Settings() {
       </div>
       <SettingsGroup title="Server" rows={serverRows} />
       <SettingsGroup title="Authentication" rows={authRows} />
+      {health.auth.enabled ? null : <McpAppTokensSection />}
     </div>
   );
 }

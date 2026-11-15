@@ -1237,6 +1237,42 @@ export class DocumentManagementService {
     return this.store.getVersionComposition(normalized.library, normalized.version);
   }
 
+  /**
+   * Lists registered application tokens.
+   * @returns Token metadata.
+   */
+  async listMcpAppTokens() {
+    return this.store.listMcpAppTokens();
+  }
+
+  /**
+   * Registers an application token.
+   * @param name - Application name shown in statistics.
+   * @param token - Existing token value, or omit to generate one.
+   * @returns The newly registered token, or null if the value already exists.
+   */
+  async createMcpAppToken(name: string, token?: string) {
+    return this.store.createMcpAppToken(name, token);
+  }
+
+  /**
+   * Revokes an application token.
+   * @param id - Token ID.
+   * @returns A promise resolved after deletion.
+   */
+  async deleteMcpAppToken(id: number): Promise<void> {
+    return this.store.deleteMcpAppToken(id);
+  }
+
+  /**
+   * Identifies an application from its token hash.
+   * @param hash - SHA-256 digest of a supplied token.
+   * @returns The matching application identity, if still registered.
+   */
+  async resolveMcpAppToken(hash: string) {
+    return this.store.resolveMcpAppToken(hash);
+  }
+
   // MCP Usage Analytics & Statistics
   async recordMcpToolCall(call: McpToolCallInput): Promise<void> {
     return this.store.recordMcpToolCall(call);
