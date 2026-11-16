@@ -419,7 +419,13 @@ export function createDataRouter(trpc: unknown) {
           name: nonEmpty
             .max(100)
             .refine((name) => !CONTROL_CHARACTER.test(name), "Invalid application name."),
-          token: z.string().trim().min(32).max(256).regex(/^[!-~]+$/).optional(),
+          token: z
+            .string()
+            .trim()
+            .min(32)
+            .max(256)
+            .regex(/^[!-~]+$/)
+            .optional(),
         }),
       )
       .mutation(({ ctx, input }) =>
@@ -498,6 +504,7 @@ export function createDataRouter(trpc: unknown) {
           target: z.string().max(256).nullable().optional(),
           protocol: z.enum(["http", "sse", "stdio"]).optional(),
           success: z.boolean(),
+          failureReason: z.string().max(64).nullable().optional(),
           durationMs: z.number(),
         }),
       )

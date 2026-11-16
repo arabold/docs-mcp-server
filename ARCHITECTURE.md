@@ -332,7 +332,7 @@ The headline metrics fail the run when they regress against a checked-in baselin
 
 ## Local MCP Usage Statistics
 
-MCP tool registration wraps callbacks without replacing SDK methods. Each call records its transport and caller label. HTTP and SSE calls without credentials are labeled by transport, stdio calls use a local label, and OAuth calls use the provider's client identifier. Only the tool, caller, library/version, transport, bounded document address, duration and success flag reach the statistics store. Request arguments, search text, responses and error messages are excluded.
+MCP tool registration wraps callbacks without replacing SDK methods. Each call records its transport and caller label. HTTP and SSE calls without credentials are labeled by transport, stdio calls use a local label, and OAuth calls use the provider's client identifier. Recent call metadata includes the tool, caller, library/version, transport, bounded document address, duration, success flag and a predefined failure reason. The server log uses the same failure reason. Request arguments, search text, responses and raw error messages are excluded.
 
 Each completed call atomically writes compact recent metadata to `mcp_stats` and increments `mcp_stats_daily`. Daily keys contain the UTC date, caller, tool, library/version and transport. Page addresses remain in recent metadata only, keeping the daily key cardinality independent of page reads and search text. Historical aggregates retain legacy caller IDs and labels.
 

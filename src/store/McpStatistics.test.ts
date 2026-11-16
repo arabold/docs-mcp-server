@@ -95,12 +95,13 @@ describe("Compact MCP statistics", () => {
       tool: "read_page",
       library: "react",
       version: "19",
-      success: true,
+      success: false,
       durationMs: 3,
       target: "https://user:password@example.com/guide?token=SECRET#SECRET",
       query: "SECRET".repeat(100000),
       detail: "SECRET",
       errorMessage: "SECRET",
+      failureReason: "HTTP 404\nSECRET",
       response: "SECRET",
     };
 
@@ -112,6 +113,7 @@ describe("Compact MCP statistics", () => {
     expect(recent).toMatchObject({ target: "https://example.com/guide", version: "19" });
     expect(recent).not.toHaveProperty("query");
     expect(recent).not.toHaveProperty("errorMessage");
+    expect(recent.failureReason).toBeNull();
     expect(JSON.stringify(recent)).not.toContain("SECRET");
     expect(recent.createdAt).toMatch(/Z$/);
   });
@@ -142,8 +144,12 @@ describe("MCP statistics migration", () => {
       db.exec(migration("021-compact-mcp-statistics.sql"));
       db.exec(migration("022-drop-mcp-access-tokens.sql"));
       db.exec(migration("023-add-mcp-app-tokens.sql"));
+      db.exec(migration("024-add-mcp-failure-reason.sql"));
+      const [legacyCall] = readMcpRecent(db);
       const token = db
-        .prepare("INSERT INTO mcp_app_tokens (name, token_hash) VALUES ('Alice', 'digest')")
+        .prepare(
+          "INSERT INTO mcp_app_tokens (name, token_hash) VALUES ('Alice', 'digest')",
+        )
         .run();
       pruneMcpCalls(db);
       const overview = readMcpOverview(db);
@@ -152,7 +158,11 @@ describe("MCP statistics migration", () => {
       // assert
       expect(overview.totalCalls).toBe(1);
       expect(Number(token.lastInsertRowid)).toBeGreaterThan(1);
-      expect(overview.byToken[0]).toMatchObject({ tokenId: 1, comment: "Alice", count: 1 });
+      expect(overview.byToken[0]).toMatchObject({
+        tokenId: 1,
+        comment: "Alice",
+        count: 1,
+      });
       expect(
         db.prepare("SELECT name FROM sqlite_master WHERE name = 'mcp_tokens'").get(),
       ).toBeUndefined();
@@ -162,6 +172,7 @@ describe("MCP statistics migration", () => {
         errors: 0,
       });
       expect(recent).toEqual([]);
+      expect(legacyCall.failureReason).toBeNull();
       const columns = db.prepare("PRAGMA table_info(mcp_stats)").all() as {
         name: string;
       }[];

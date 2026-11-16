@@ -1,11 +1,12 @@
 import Fastify, { type FastifyInstance } from "fastify";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOriginPolicy } from "../app/originPolicy";
 import { EventBusService } from "../events";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import { DocumentManagementClient } from "../store/DocumentManagementClient";
 import { DocumentManagementService } from "../store/DocumentManagementService";
 import { loadConfig } from "../utils/config";
+import { logger } from "../utils/logger";
 import { createApiClient } from "./apiClient";
 import { registerMcpService } from "./mcpService";
 import type { SystemInfo } from "./systemInfo";
@@ -70,10 +71,11 @@ describe("MCP statistics API", () => {
   it("accepts tool statistics from a remote coordinator without a key", async () => {
     // arrange
     const call = {
-      tool: "list_libraries",
+      tool: "fetch_url",
       protocol: "stdio" as const,
       tokenComment: "Local stdio",
-      success: true,
+      success: false,
+      failureReason: "HTTP 404",
       durationMs: 4,
     };
 
@@ -84,7 +86,11 @@ describe("MCP statistics API", () => {
     expect(await service.getMcpRecentCalls()).toMatchObject([call]);
   });
 
-  function callTool(headers: Record<string, string> = {}) {
+  function callTool(
+    headers: Record<string, string> = {},
+    name = "list_libraries",
+    args: Record<string, unknown> = {},
+  ) {
     return server.inject({
       method: "POST",
       url: "/mcp",
@@ -93,6 +99,7 @@ describe("MCP statistics API", () => {
         accept: "application/json, text/event-stream",
         "mcp-protocol-version": "2026-07-28",
         "mcp-method": "tools/call",
+        "mcp-name": name,
         ...headers,
       },
       payload: {
@@ -100,8 +107,8 @@ describe("MCP statistics API", () => {
         id: 1,
         method: "tools/call",
         params: {
-          name: "list_libraries",
-          arguments: {},
+          name,
+          arguments: args,
           _meta: {
             "io.modelcontextprotocol/protocolVersion": "2026-07-28",
             "io.modelcontextprotocol/clientCapabilities": {},
@@ -110,6 +117,56 @@ describe("MCP statistics API", () => {
       },
     });
   }
+
+  it("reports the reason for a search of a missing library in recent calls", async () => {
+    // arrange
+    const args = { library: "missing-library", query: "Private search query" };
+
+    // act
+    const response = await callTool({}, "search_docs", args);
+    const calls = await remote.getMcpRecentCalls();
+
+    // assert
+    expect(response.json()).toMatchObject({ result: { isError: true } });
+    expect(calls).toMatchObject([
+      { tool: "search_docs", success: false, failureReason: "Library not indexed" },
+    ]);
+    expect(JSON.stringify(calls)).not.toContain(args.query);
+  });
+
+  it("logs a failure reason without the search arguments", async () => {
+    // arrange
+    const args = { library: "private-library-name", query: "Private search query" };
+    const logError = vi.spyOn(logger, "error");
+    try {
+      // act
+      await callTool({}, "search_docs", args);
+
+      // assert
+      expect(logError).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /^❌ MCP tool search_docs failed \(\d+ms\): Library not indexed$/,
+        ),
+      );
+      expect(JSON.stringify(logError.mock.calls)).not.toContain(args.query);
+      expect(JSON.stringify(logError.mock.calls)).not.toContain(args.library);
+    } finally {
+      logError.mockRestore();
+    }
+  });
+
+  it("returns a safe reason with a remote store error", async () => {
+    // arrange
+    const library = "missing-library";
+
+    // act
+    const result = remote.resolveDocumentation(library);
+
+    // assert
+    await expect(result).rejects.toMatchObject({
+      data: { mcpFailureReason: "Library not indexed" },
+    });
+  });
 
   it("attributes open MCP calls to the registered application", async () => {
     // arrange

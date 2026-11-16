@@ -29,9 +29,10 @@ app name to find its past and future calls under the same **All callers** filter
 | Document target | At most 256 characters; URL credentials, query parameters and fragments are removed |
 | Transport | HTTP, SSE or stdio |
 | Outcome and duration | Success flag and elapsed milliseconds |
+| Failure reason | A predefined description or HTTP status shown under the Error badge and written to the server log |
 | Timestamp | UTC |
 
-Search text, full arguments, request and response bodies, document content, stack traces and error messages are not stored. Long page addresses end with a compact hash suffix. `read_page` records its `pathOrUrl` target; `fetch_url` and `scrape_docs` record the requested URL without credentials or parameters.
+Search text, full arguments, request and response bodies, document content, stack traces and raw error messages are not stored. Long page addresses end with a compact hash suffix. `read_page` records its `pathOrUrl` target; `fetch_url` and `scrape_docs` record the requested URL without credentials or parameters.
 
 `mcp_stats_daily` stores one counter row per UTC day, caller, tool, library/version and transport. Each row contains call and success counts, total duration and the last activity timestamp. Addresses and search text are not aggregate dimensions. Historical average latency uses the total duration divided by the number of calls.
 
@@ -42,3 +43,5 @@ Recent metadata is pruned at startup and after every 100 recorded calls. Cleanup
 Daily aggregates are retained independently. All Time and period totals read these aggregates, so pruning recent metadata does not reduce historical counts. Periods use UTC calendar days, including the current day. The graph and all breakdowns apply the same caller, tool, library and period filters.
 
 Migration 021 imports the legacy rows still present at upgrade time into daily aggregates before removing payload columns. Previously pruned calls cannot be reconstructed. Old arbitrary query and error text is discarded rather than converted into document addresses. Migration 022 removes the old token table and preserves both statistics tables. Migration 023 adds a registry for optional app tokens and stores their hashes separately from usage statistics.
+
+Migration 024 adds failure reasons to recent calls. Earlier failures display **Reason unavailable**.

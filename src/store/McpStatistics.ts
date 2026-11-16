@@ -48,8 +48,9 @@ export function recordMcpCall(db: Database, input: McpToolCallInput): void {
   const createdAt = new Date().toISOString().slice(0, 19).replace("T", " ");
   db.transaction(() => {
     db.prepare(`INSERT INTO mcp_stats
-      (token_id, token_comment, tool, library, version, target, protocol, success, duration_ms, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      (token_id, token_comment, tool, library, version, target, protocol, success,
+       failure_reason, duration_ms, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       call.tokenId ?? null,
       call.tokenComment ?? null,
       call.tool,
@@ -58,6 +59,7 @@ export function recordMcpCall(db: Database, input: McpToolCallInput): void {
       call.target ?? null,
       call.protocol ?? "http",
       call.success ? 1 : 0,
+      call.failureReason ?? null,
       call.durationMs,
       createdAt,
     );
@@ -224,7 +226,8 @@ export function readMcpRecent(
   const { where, params } = filters(options, false);
   const rows = db
     .prepare(`SELECT id, token_id AS tokenId, token_comment AS tokenComment,
-    tool, library, version, target, protocol, success, duration_ms AS durationMs,
+    tool, library, version, target, protocol, success, failure_reason AS failureReason,
+    duration_ms AS durationMs,
     created_at AS createdAt FROM mcp_stats ${where}
     ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`)
     .all(

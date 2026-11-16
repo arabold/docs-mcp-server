@@ -1,13 +1,13 @@
-import type { AutoDetectFetcher, RawContent } from "../scraper/fetcher";
+import { type AutoDetectFetcher, FetchStatus, type RawContent } from "../scraper/fetcher";
 import { PipelineFactory } from "../scraper/pipelines/PipelineFactory";
 import type { ContentPipeline, PipelineResult } from "../scraper/pipelines/types";
 import { ScrapeMode } from "../scraper/types";
 import { convertToString } from "../scraper/utils/buffer";
 import { resolveCharset } from "../scraper/utils/charset";
 import type { AppConfig } from "../utils/config";
-import { ChallengeError, RenderError } from "../utils/errors";
+import { ChallengeError, HttpStatusError, RenderError } from "../utils/errors";
 import { logger } from "../utils/logger";
-import { ToolError, ValidationError } from "./errors";
+import { EmptyContentError, ToolError, ValidationError } from "./errors";
 
 export interface FetchUrlToolOptions {
   /**
@@ -56,6 +56,8 @@ export class FetchUrlTool {
    * Currently includes HtmlPipeline, MarkdownPipeline, and TextPipeline (as fallback).
    */
   private readonly pipelines: ContentPipeline[];
+  private activeRequests = 0;
+  private cleanup: Promise<void> | undefined;
 
   constructor(fetcher: AutoDetectFetcher, config: AppConfig) {
     this.fetcher = fetcher;
@@ -66,6 +68,8 @@ export class FetchUrlTool {
   /**
    * Fetches content from a URL and converts it to Markdown.
    * Supports both HTTP/HTTPS URLs and local file URLs (file://).
+   * Concurrent requests keep shared browser resources open until the last one finishes.
+   * @param options - URL and fetch options.
    * @returns The processed Markdown content
    * @throws {ToolError} If fetching or processing fails
    */
@@ -79,7 +83,12 @@ export class FetchUrlTool {
       );
     }
 
+    this.activeRequests += 1;
     try {
+      if (this.cleanup) {
+        await this.cleanup;
+      }
+
       logger.info(`📡 Fetching ${url}...`);
 
       const fetchOptions = {
@@ -90,6 +99,9 @@ export class FetchUrlTool {
 
       // AutoDetectFetcher handles all fallback logic automatically
       const rawContent: RawContent = await this.fetcher.fetch(url, fetchOptions);
+      if (rawContent.status === FetchStatus.NOT_FOUND && !url.startsWith("file://")) {
+        throw new HttpStatusError("Not Found", false, 404);
+      }
 
       logger.info("🔄 Processing content...");
 
@@ -137,7 +149,7 @@ export class FetchUrlTool {
       }
 
       if (typeof processed.textContent !== "string" || !processed.textContent.trim()) {
-        throw new ToolError(
+        throw new EmptyContentError(
           `Processing resulted in empty content for ${url}`,
           this.constructor.name,
         );
@@ -157,6 +169,7 @@ export class FetchUrlTool {
         throw new ToolError(
           `Unable to fetch the URL "${url}": the site answered with a ${error.challengeType} bot challenge instead of the page, which cannot be passed automatically.`,
           this.constructor.name,
+          { cause: error },
         );
       }
 
@@ -165,19 +178,28 @@ export class FetchUrlTool {
         throw new ToolError(
           `${error.message}. Use scrape mode "auto" to read the page as fetched instead.`,
           this.constructor.name,
+          { cause: error },
         );
       }
 
       throw new ToolError(
-        `Unable to fetch or process the URL "${url}". Please verify the URL is correct and accessible.`,
+        error instanceof HttpStatusError
+          ? `HTTP ${error.statusCode} while fetching "${url}".`
+          : `Unable to fetch or process the URL "${url}". Please verify the URL is correct and accessible.`,
         this.constructor.name,
+        { cause: error },
       );
     } finally {
-      // Cleanup all pipelines and fetcher to prevent resource leaks (e.g., browser instances)
-      await Promise.allSettled([
-        ...this.pipelines.map((pipeline) => pipeline.close()),
-        this.fetcher.close(),
-      ]);
+      this.activeRequests -= 1;
+      if (this.activeRequests === 0) {
+        this.cleanup = Promise.allSettled([
+          ...this.pipelines.map((pipeline) => pipeline.close()),
+          this.fetcher.close(),
+        ]).then(() => {
+          this.cleanup = undefined;
+        });
+        await this.cleanup;
+      }
     }
   }
 }

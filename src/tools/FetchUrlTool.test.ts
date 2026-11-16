@@ -30,6 +30,14 @@ describe("FetchUrlTool", () => {
     fetcher.fetch.mockResolvedValue({ content, mimeType, source: "https://example.com" });
   }
 
+  function deferred() {
+    let resolve: () => void = () => {};
+    const promise = new Promise<void>((complete) => {
+      resolve = complete;
+    });
+    return { promise, resolve };
+  }
+
   it("returns Markdown unchanged and a type no pipeline handles as raw text", async () => {
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]); // PNG header
     const cases: Array<{
@@ -110,5 +118,57 @@ describe("FetchUrlTool", () => {
     await expect(fetchUrlTool.execute(options)).rejects.toThrow(ToolError);
     expect(closedPipelines()).toBe(pipelineCount);
     expect(fetcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps resources open until the last concurrent request finishes", async () => {
+    // arrange
+    const slowUrl = "https://example.com/slow";
+    const releaseResponse = deferred();
+    const pipelineClose = vi.spyOn(BasePipeline.prototype, "close");
+    respondWith("# Fast response", "text/markdown");
+    fetcher.fetch.mockImplementationOnce(async () => {
+      await releaseResponse.promise;
+      return { content: "# Slow response", mimeType: "text/markdown", source: slowUrl };
+    });
+
+    // act
+    const slow = fetchUrlTool.execute({ url: slowUrl });
+    const fastResult = await fetchUrlTool.execute({ url: "https://example.com/fast" });
+    const pipelineClosesWhileBusy = pipelineClose.mock.calls.length;
+    const fetcherClosesWhileBusy = fetcher.close.mock.calls.length;
+    releaseResponse.resolve();
+    const slowResult = await slow;
+
+    // assert
+    expect(fastResult).toBe("# Fast response");
+    expect(slowResult).toBe("# Slow response");
+    expect(pipelineClosesWhileBusy).toBe(0);
+    expect(fetcherClosesWhileBusy).toBe(0);
+    expect(pipelineClose).toHaveBeenCalled();
+    expect(fetcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for ongoing cleanup before starting a new fetch", async () => {
+    // arrange
+    const cleanupStarted = deferred();
+    const releaseCleanup = deferred();
+    respondWith("# Response", "text/markdown");
+    fetcher.close.mockImplementationOnce(() => {
+      cleanupStarted.resolve();
+      return releaseCleanup.promise;
+    });
+
+    // act
+    const first = fetchUrlTool.execute({ url: "https://example.com/first" });
+    await cleanupStarted.promise;
+    const second = fetchUrlTool.execute({ url: "https://example.com/second" });
+    const fetchesDuringCleanup = fetcher.fetch.mock.calls.length;
+    releaseCleanup.resolve();
+    const results = await Promise.all([first, second]);
+
+    // assert
+    expect(fetchesDuringCleanup).toBe(1);
+    expect(results).toEqual(["# Response", "# Response"]);
+    expect(fetcher.close).toHaveBeenCalledTimes(2);
   });
 });

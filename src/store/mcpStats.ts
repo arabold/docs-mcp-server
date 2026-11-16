@@ -1,6 +1,34 @@
 import { createHash } from "node:crypto";
 import type { McpToolCallInput } from "./types";
 
+export const mcpFailureReasons = {
+  libraryMissing: "Library not indexed",
+  versionMissing: "Version not indexed",
+  pageMissing: "Page not indexed",
+  pageAmbiguous: "Page address is ambiguous",
+  invalidInput: "Invalid tool arguments",
+  accessDenied: "Blocked by scraper access policy",
+  botChallenge: "Blocked by a bot challenge",
+  tlsFailure: "TLS certificate validation failed",
+  renderFailure: "Browser rendering failed",
+  fetchFailure: "Page fetch failed",
+  emptyContent: "Page has no readable content",
+  unknown: "Tool execution failed",
+} as const;
+
+const allowedFailureReasons = new Set<string>(Object.values(mcpFailureReasons));
+
+/**
+ * Accepts only predefined failure descriptions and numeric HTTP statuses.
+ * @param value - The proposed reason for a failed invocation.
+ * @returns A safe description, or null for arbitrary error text.
+ */
+export function compactMcpFailureReason(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  if (allowedFailureReasons.has(value)) return value;
+  return value.length === 8 && /^HTTP [1-5]\d{2}$/.test(value) ? value : null;
+}
+
 function label(value: unknown, limit: number): string | null {
   if (typeof value !== "string") return null;
   return (
@@ -54,6 +82,8 @@ export function compactMcpCall(call: McpToolCallInput): McpToolCallInput {
     protocol:
       call.protocol === "stdio" || call.protocol === "sse" ? call.protocol : "http",
     success: call.success === true,
+    failureReason:
+      call.success === true ? null : compactMcpFailureReason(call.failureReason),
     durationMs: Number.isFinite(call.durationMs)
       ? Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.round(call.durationMs)))
       : 0,

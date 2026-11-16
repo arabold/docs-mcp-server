@@ -10,7 +10,7 @@ import {
 import { z } from "zod";
 import { PipelineJobStatus } from "../pipeline/types";
 import { escapeControlCharacters } from "../store/errors";
-import { compactMcpCall } from "../store/mcpStats";
+import { compactMcpCall, mcpFailureReasons } from "../store/mcpStats";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
 import { type DocumentationVersion, libraryNamesMatch } from "../store/types";
 import {
@@ -26,7 +26,12 @@ import { logger } from "../utils/logger";
 import { getCurrentMcpCaller } from "./context";
 import { buildDefaultInstructions } from "./defaultInstructions";
 import type { McpServerTools } from "./tools";
-import { createError, createResponse } from "./utils";
+import {
+  createError,
+  createResponse,
+  describeMcpFailure,
+  getToolFailureReason,
+} from "./utils";
 
 function documentationVersionNotice(version: DocumentationVersion | undefined): string {
   if (!version) return "";
@@ -380,12 +385,19 @@ function createMcpServerInstance(
     const tracked = async (args: z.infer<S>, extra: ServerContext) => {
       const startTime = performance.now();
       const caller = getCurrentMcpCaller();
-      let success = false;
+      let failureReason: string | null = null;
       try {
         const result = await handler(args, extra);
-        success = result.isError !== true;
+        failureReason = getToolFailureReason(result);
         return result;
+      } catch (error) {
+        failureReason = describeMcpFailure(error) ?? mcpFailureReasons.unknown;
+        throw error;
       } finally {
+        const durationMs = Math.round(performance.now() - startTime);
+        if (failureReason) {
+          logger.error(`❌ MCP tool ${name} failed (${durationMs}ms): ${failureReason}`);
+        }
         if (docService) {
           const fields = args as Record<string, unknown>;
           const call = compactMcpCall({
@@ -406,8 +418,9 @@ function createMcpServerInstance(
                 : typeof fields.url === "string"
                   ? fields.url
                   : null,
-            durationMs: performance.now() - startTime,
-            success,
+            durationMs,
+            success: failureReason === null,
+            failureReason,
           });
           try {
             await docService.recordMcpToolCall(call);

@@ -165,11 +165,7 @@ export default function Statistics() {
           value={overview ? `${overview.successRate}%` : "100%"}
           suffix={overview ? `${overview.failedCalls} errors` : undefined}
         />
-        <Kpi
-          icon="i-globe"
-          label="Callers"
-          value={callers.size.toLocaleString()}
-        />
+        <Kpi icon="i-globe" label="Callers" value={callers.size.toLocaleString()} />
         <Kpi
           icon="i-clock"
           label="Avg Latency"
@@ -470,11 +466,14 @@ export default function Statistics() {
                           ok
                         </Pill>
                       ) : (
-                        <span title="Tool execution failed">
+                        <>
                           <Pill variant="err" withDot>
                             error
                           </Pill>
-                        </span>
+                          <div className="muted">
+                            <small>{call.failureReason ?? "Reason unavailable"}</small>
+                          </div>
+                        </>
                       )}
                     </Td>
                   </tr>

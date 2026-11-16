@@ -696,6 +696,7 @@ export interface McpToolCallInput {
   target?: string | null;
   protocol?: "http" | "sse" | "stdio";
   success: boolean;
+  failureReason?: string | null;
   durationMs: number;
 }
 
@@ -712,6 +713,7 @@ export interface McpToolCallRecord {
   target: string | null;
   protocol: "http" | "sse" | "stdio";
   success: boolean;
+  failureReason: string | null;
   durationMs: number;
   createdAt: string;
 }
