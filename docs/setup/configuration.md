@@ -115,8 +115,7 @@ These variables are not settings in the config file:
 | `LOG_LEVEL` | `ERROR`, `WARN`, `INFO` or `DEBUG`. Without it, commands log at `INFO` in a terminal and `ERROR` otherwise. `--verbose` and `--quiet` win over it, and a server on stdio logs errors only. |
 | `OPENAI_API_KEY` and other provider credentials | Credentials of the embedding provider. See [Embedding Models](../guides/embedding-models.md#provider-credentials). |
 | `GITHUB_TOKEN`, `GH_TOKEN` | GitHub token for private repositories (see [GitHub Authentication](#github-authentication)). |
-| `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` | Path to a Chromium executable to use for browser rendering. When it is set and the file exists, the server does not install Playwright's Chromium. |
-| `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD` | Set to `1` to skip the automatic Chromium install on startup. |
+| `OBSCURA_EXECUTABLE_PATH` | Full path to Obscura for JavaScript rendering and browser fetches. Defaults to `obscura` on `PATH`. |
 
 ## Command-Line Flags
 
@@ -296,7 +295,7 @@ These settings control which network targets and local files a scrape may reach.
 | `allowPrivateNetworks` | `false` | In `open` mode, allow loopback, the RFC 1918 private ranges, link-local and the other special-use targets. No effect in `allowlist` mode. |
 | `allowedHosts` | `[]` | Host names to allow: literal names (`docs.internal.example`), globs (`*.example.com`, `docs.*`), or regular expressions wrapped in `/.../`. |
 | `allowedCidrs` | `[]` | IP ranges to allow, matched against IP targets and resolved host addresses. |
-| `allowInvalidTls` | `false` | Accept invalid HTTPS certificates for targets the rules above allow. |
+| `allowInvalidTls` | `false` | Accept invalid HTTPS certificates for requests made by Node.js to targets the rules above allow. Obscura's native requests enforce certificate validation. |
 
 [Outbound Network Access](../infrastructure/security.md#outbound-network-access) describes how host names, DNS answers and IP targets are matched.
 

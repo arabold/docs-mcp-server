@@ -13,7 +13,7 @@ This document is the overview. The documents under [References](#references) cov
 - Node.js 22 and TypeScript. Vite builds the server and the web interface, and Vitest runs the tests.
 - SQLite through better-sqlite3, with FTS5 for full-text search and sqlite-vec for vectors. SQL migrations live in `db/migrations/`.
 - LangChain.js for the embedding clients (OpenAI and OpenAI-compatible APIs, Google Gemini and Vertex AI, AWS Bedrock, Azure OpenAI) and for recursive text splitting. tree-sitter parses source code.
-- Playwright with Chromium renders JavaScript pages and fetches pages behind anti-bot challenges. Xberg extracts text from PDF, Office and other binary documents.
+- Obscura renders JavaScript pages and fetches pages behind anti-bot challenges. Playwright drives it over CDP. Xberg extracts text from PDF, Office and other binary documents.
 - Fastify serves HTTP. tRPC carries the application API and its WebSocket event stream. The MCP TypeScript SDK implements the MCP server.
 - The web interface uses React, React Router, tRPC and TanStack Query, styled with plain CSS.
 
@@ -188,17 +188,15 @@ Web fetches send the browser fingerprint's `Accept` header, which asks for HTML 
 
 #### Browser lifecycle
 
-A web scrape runs one headless Chromium. `WebScraperStrategy` creates a `ManagedBrowser` ([src/scraper/fetcher/ManagedBrowser.ts](src/scraper/fetcher/ManagedBrowser.ts)) and hands it to both users of a browser: `BrowserFetcher`, which `AutoDetectFetcher` falls back to when a plain HTTP request meets a challenge or an anti-bot block, and `HtmlPlaywrightMiddleware`, which renders HTML in `playwright` and `auto` scrape modes. Each page gets its own browser context, so pages share the process but not cookies or storage.
+A web scrape shares one Obscura process between `BrowserFetcher` and `HtmlPlaywrightMiddleware` through [`ManagedBrowser`](src/scraper/fetcher/ManagedBrowser.ts). The fetcher handles HTTP challenges and anti-bot blocks. The middleware renders HTML in `playwright` and `auto` modes. Each operation opens a separate CDP connection so its interception state, cookies, and storage are isolated.
 
-`ManagedBrowser` launches Chromium on first use and launches a new one after the old one exits, for example when the operating system kills it under memory pressure. Callers that need a browser at the same time share one launch. `BrowserFetcher` retries a page once on the new browser when Chromium dies while loading it, unless the fetch was aborted. `HtmlPlaywrightMiddleware` replaces the browser only when a page or context fails to close in time, since a stuck cleanup can leave Chromium unresponsive; a failed render alone keeps the browser, which other pages may be using. Closing the browser is bounded by `scraper.pageTimeoutMs` (navigation itself by `scraper.browserTimeoutMs`) and falls back to killing the process, by the process ID Chromium reports over CDP at launch.
+`ManagedBrowser` starts Obscura on first use and replaces it after an exit. Concurrent operations share startup. `BrowserFetcher` retries once when its connection is lost during a fetch. A render that cannot open or close its context can retire the shared process. The server owns the child process directly and stops it when the scrape closes.
 
-Each page's routes check the requests it makes against the access policy, but Playwright routes only the first request of a redirect chain: Chromium follows redirects itself. So at launch, `ManagedBrowser` opens a CDP Fetch session on the browser target, which pauses every request in every context, including those of cross-site iframes that run in processes of their own. The session fails each redirect hop the policy denies, and a browser whose session cannot be set up is closed instead of handed out. `BrowserFetcher` reports a navigation stopped this way as an `AccessPolicyError`.
+Playwright routes check the URLs they receive. A loopback proxy enforces the same outbound policy for Obscura's HTTP requests and HTTPS tunnels, including new connections after redirects. The proxy connects only to the DNS addresses it checks. The CDP endpoint binds to an ephemeral loopback port and requires a per-process token. Requests that Playwright makes directly from Node, such as `route.fetch`, validate redirects one hop at a time.
 
 A crawl that ends early, because an item failed or the job was cancelled, aborts the items still running and waits for them before it returns. `ScraperService` cleans up the strategy, and with it the browser, only after that, so no item is left using a closed browser or launching a new one that nobody closes. An aborted browser fetch closes its context, which ends a navigation in progress.
 
-Playwright's headless shell is the default binary. Installs made with `playwright install --no-shell` have only the full Chromium build, and the launch falls back to it. `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` overrides both. When neither of Playwright's builds is installed, a system Chromium (`/usr/lib/chromium/chromium`, `/usr/bin/chromium` or `/usr/bin/chromium-browser`) is used if one exists.
-
-Commands that can launch a browser in their own process (the default server, `mcp`, `worker`, `fetch-url`, and `scrape`, `refresh` and `web` without `--server-url`) make sure one is installed before they start. Either of Playwright's builds counts. When both are missing, the command installs the headless shell with the CLI of the bundled Playwright, so the revision matches what the launch looks for. The install runs with `--no-remove`, because another process may be running browsers that Playwright would otherwise delete as unused.
+The Docker image includes Obscura v0.2.7. Local installs resolve `OBSCURA_EXECUTABLE_PATH` or look for `obscura` on `PATH` when an operation needs a browser.
 
 #### Sub-resource blocklist
 

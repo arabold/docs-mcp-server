@@ -13,7 +13,6 @@ import { registerGlobalServices } from "../services";
 import {
   type CliContext,
   createAppServerConfig,
-  ensurePlaywrightBrowsersInstalled,
   getEventBus,
   handleEmbeddingModelChange,
   validateHost,
@@ -72,9 +71,6 @@ export function createWorkerCommand(cli: Argv) {
       });
 
       try {
-        // Ensure browsers are installed for scraping
-        ensurePlaywrightBrowsersInstalled();
-
         const eventBus = getEventBus(argv as CliContext);
 
         const backend = await openBackend({

@@ -22,7 +22,7 @@ Started from a terminal, this runs the HTTP server on port 6280:
 
 The server listens on `127.0.0.1` only. [Configuration](configuration.md) covers the host, the port and every other setting.
 
-On its first start, the server installs Playwright's headless Chromium, which it uses for pages that need JavaScript. A Chromium installed with `playwright install` for the same Playwright version counts too. To use a Chromium you already have, set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to its executable.
+For JavaScript rendering and browser-based fetches, install [Obscura v0.2.7](https://github.com/h4ckf0r0day/obscura/releases/tag/v0.2.7) for your platform. Put the executable on `PATH` or set `OBSCURA_EXECUTABLE_PATH` to its full path. On Windows, extract the release ZIP together with its bundled DLLs. The Docker image includes Obscura.
 
 To get a `docs-mcp-server` command instead of calling npx each time, install the package globally:
 

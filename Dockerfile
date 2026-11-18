@@ -38,18 +38,20 @@ COPY . .
 # Build application
 RUN npm run build
 
+FROM node:22-trixie-slim AS browser
+ARG TARGETARCH
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl \
+  && rm -rf /var/lib/apt/lists/*
+COPY scripts/install-obscura-linux.sh /tmp/install-obscura-linux.sh
+RUN sh /tmp/install-obscura-linux.sh "$TARGETARCH" /usr/local/bin
+
 # Production stage
 FROM base AS production
-
-# Set environment variables for Playwright
-ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
-
-# Install Chromium from apt-get
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
-  chromium \
+  && apt-get install -y --no-install-recommends ca-certificates \
   && rm -rf /var/lib/apt/lists/*
+COPY --from=browser /usr/local/bin/obscura /usr/local/bin/obscura
 
 # Copy package files and database
 COPY package*.json .

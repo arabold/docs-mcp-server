@@ -137,7 +137,7 @@ describe("FetchUrlTool E2E", () => {
 
     it("rejects a page the browser cannot render in Playwright mode with a ToolError naming the render", async () => {
       // Every launch fails at once, without needing a real browser.
-      vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", "/nonexistent/chromium");
+      vi.stubEnv("OBSCURA_EXECUTABLE_PATH", "/nonexistent/obscura");
       const url = "https://httpbin.org/html";
 
       try {

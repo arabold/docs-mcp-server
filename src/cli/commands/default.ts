@@ -22,7 +22,6 @@ import {
   type CliContext,
   checkAuthForProtocol,
   createAppServerConfig,
-  ensurePlaywrightBrowsersInstalled,
   getEventBus,
   handleEmbeddingModelChange,
   resolveProtocol,
@@ -109,8 +108,6 @@ export function createDefaultAction(cli: Argv) {
         resolvedProtocol,
         appConfig.server.ports.default,
       );
-
-      ensurePlaywrightBrowsersInstalled();
 
       const eventBus = getEventBus(argv as CliContext);
 

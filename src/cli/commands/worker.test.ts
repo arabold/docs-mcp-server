@@ -39,7 +39,6 @@ vi.mock("../utils", () => ({
   validatePort: vi.fn((p) => parseInt(p || "8080", 10)),
   validateHost: vi.fn((h) => h || "127.0.0.1"),
   createAppServerConfig: vi.fn((config) => config),
-  ensurePlaywrightBrowsersInstalled: vi.fn(),
   CliContext: {},
   setupLogging: vi.fn(),
 }));

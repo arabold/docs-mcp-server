@@ -79,8 +79,13 @@ export class ScraperAccessPolicy {
 
   /**
    * Checks whether a network URL is allowed before connecting.
+   * @param url - The requested URL.
+   * @param resolvedAddresses - DNS answers, when the caller pins its connection to them.
    */
-  async assertNetworkUrlAllowed(url: string): Promise<void> {
+  async assertNetworkUrlAllowed(
+    url: string,
+    resolvedAddresses?: Awaited<ReturnType<typeof resolveAddresses>>,
+  ): Promise<void> {
     const parsed = new URL(url);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return;
@@ -112,7 +117,7 @@ export class ScraperAccessPolicy {
         return;
       }
 
-      const addresses = await resolveAddresses(hostname);
+      const addresses = resolvedAddresses ?? (await resolveAddresses(hostname));
       const allAllowedByCidr =
         addresses.length > 0 &&
         addresses.every((address) => {
@@ -144,7 +149,7 @@ export class ScraperAccessPolicy {
       return;
     }
 
-    const addresses = await resolveAddresses(hostname);
+    const addresses = resolvedAddresses ?? (await resolveAddresses(hostname));
     for (const address of addresses) {
       this.assertSpecialUseAddressAllowed(address.address, url);
     }

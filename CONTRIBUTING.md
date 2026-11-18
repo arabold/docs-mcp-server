@@ -9,7 +9,7 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) for the system design. [AGENTS.md](AGENT
 1. Fork the repository and create a branch named `<type>/<issue>-<description>`, for example `feat/123-add-cache`.
 2. Use Node.js 22 (`.nvmrc`; with nvm, run `nvm use`). CI runs on it. Other versions work too: when the installed `better-sqlite3` binary was built for another Node version, the server and the tests download one for the running version into the user cache folder on first use.
 3. Install dependencies with `npm ci`. Use `npm install` only when you change dependencies on purpose.
-4. Install Chromium for the browser tests: `npx playwright install chromium`.
+4. Install [Obscura v0.2.7](https://github.com/h4ckf0r0day/obscura/releases/tag/v0.2.7) for scraper E2E tests and Chromium for web UI E2E tests (`npx playwright install chromium`).
 
 ## Before You Push
 

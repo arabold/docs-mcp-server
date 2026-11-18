@@ -69,7 +69,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
   constructor(config: AppConfig, options: WebScraperStrategyOptions = {}) {
     super(config, { urlNormalizerOptions: options.urlNormalizerOptions });
     this.shouldFollowLinkFn = options.shouldFollowLink;
-    // The browser fallback and the HTML renderer share one Chromium.
+    // The browser fallback and the HTML renderer share one Obscura process.
     const managedBrowser = new ManagedBrowser(config.scraper);
     this.fetcher = new AutoDetectFetcher(config.scraper, managedBrowser);
     this.pipelines = PipelineFactory.createStandardPipelines(config, managedBrowser);

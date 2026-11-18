@@ -1,9 +1,9 @@
 /**
- * BrowserFetcher against a real Chromium that dies mid-crawl (issue #531).
+ * BrowserFetcher against a real Obscura that dies mid-crawl (issue #531).
  *
- * Chromium is killed with SIGKILL, the way the OS ends it under memory
+ * Obscura is killed with SIGKILL, the way the OS ends it under memory
  * pressure. The fetcher must launch a new browser for the pages that follow,
- * retry the page Chromium died loading, and never start more than one browser
+ * retry the page Obscura died loading, and never start more than one browser
  * for pages that ask at the same time. A page whose shared browser another user
  * replaces is retried too, and a browser that will not close is killed.
  */
@@ -14,18 +14,18 @@ import { BrowserFetcher } from "../src/scraper/fetcher/BrowserFetcher";
 import { ManagedBrowser } from "../src/scraper/fetcher/ManagedBrowser";
 import { FetchStatus } from "../src/scraper/fetcher/types";
 import { type AppConfig, loadConfig } from "../src/utils/config";
-import { chromiumPids, listenOnFreePort } from "./test-helpers";
+import { obscuraPids, listenOnFreePort } from "./test-helpers";
 
-/** Kills every Chromium this process launched and returns their PIDs. */
-function killChromium(): number[] {
-  const pids = chromiumPids();
+/** Kills every Obscura this process launched and returns their PIDs. */
+function killObscura(): number[] {
+  const pids = obscuraPids();
   for (const pid of pids) {
     process.kill(pid, "SIGKILL");
   }
   return pids;
 }
 
-describe.skipIf(process.platform === "win32")("Browser restart after Chromium dies", () => {
+describe.skipIf(process.platform === "win32")("Browser restart after Obscura dies", () => {
   const requests: string[] = [];
   let crashOnPath: string | null = null;
   let retireOnPath: string | null = null;
@@ -40,9 +40,9 @@ describe.skipIf(process.platform === "win32")("Browser restart after Chromium di
       const path = req.url ?? "/";
       requests.push(path);
       if (path === crashOnPath) {
-        // Chromium dies while this page loads; the request is never answered.
+        // Obscura dies while this page loads; the request is never answered.
         crashOnPath = null;
-        killChromium();
+        killObscura();
         return;
       }
       if (path === retireOnPath && sharedBrowser) {
@@ -79,21 +79,21 @@ describe.skipIf(process.platform === "win32")("Browser restart after Chromium di
     await fetcher.close();
   });
 
-  it("launches a new Chromium for the next page after the old one was killed", async () => {
+  it("launches a new Obscura for the next page after the old one was killed", async () => {
     await fetcher.fetch(`${baseUrl}/first`);
-    const killed = killChromium();
+    const killed = killObscura();
     expect(killed).toHaveLength(1);
 
     const result = await fetcher.fetch(`${baseUrl}/second`);
 
     expect(result.status).toBe(FetchStatus.SUCCESS);
     expect(result.content.toString()).toContain("Page /second");
-    const running = chromiumPids();
+    const running = obscuraPids();
     expect(running).toHaveLength(1);
     expect(running).not.toContain(killed[0]);
   });
 
-  it("retries the page Chromium died loading on a new browser", async () => {
+  it("retries the page Obscura died loading on a new browser", async () => {
     crashOnPath = "/crash";
 
     const result = await fetcher.fetch(`${baseUrl}/crash`);
@@ -103,7 +103,7 @@ describe.skipIf(process.platform === "win32")("Browser restart after Chromium di
     expect(requests.filter((path) => path === "/crash")).toHaveLength(2);
   });
 
-  it("starts one Chromium for pages that ask for a browser at the same time", async () => {
+  it("starts one Obscura for pages that ask for a browser at the same time", async () => {
     const results = await Promise.all(
       ["a", "b", "c"].map((name) => fetcher.fetch(`${baseUrl}/${name}`)),
     );
@@ -113,7 +113,7 @@ describe.skipIf(process.platform === "win32")("Browser restart after Chromium di
       FetchStatus.SUCCESS,
       FetchStatus.SUCCESS,
     ]);
-    expect(chromiumPids()).toHaveLength(1);
+    expect(obscuraPids()).toHaveLength(1);
   });
 
   it("retries the page on a new browser when another user retires the shared one", async () => {
@@ -136,17 +136,17 @@ describe.skipIf(process.platform === "win32")("Browser restart after Chromium di
 });
 
 describe.skipIf(process.platform === "win32")("Browser that will not close", () => {
-  it("kills the Chromium process when closing it times out", async () => {
+  it("kills the Obscura process when closing it times out", async () => {
     const config = loadConfig().scraper;
     config.pageTimeoutMs = 500;
     const managed = new ManagedBrowser(config);
     const browser = await managed.get();
-    expect(chromiumPids()).toHaveLength(1);
+    expect(obscuraPids()).toHaveLength(1);
 
     // A browser that never answers the close request.
     browser.close = () => new Promise<void>(() => {});
-    await managed.retire(browser, "close timed out in test");
+    await managed.release(browser);
 
-    await vi.waitFor(() => expect(chromiumPids()).toHaveLength(0), { timeout: 5000 });
+    await vi.waitFor(() => expect(obscuraPids()).toHaveLength(0), { timeout: 5000 });
   });
 });
