@@ -83,7 +83,7 @@ export default defineConfig({
     environment: "node",
     testTimeout: 30000, // 30 seconds for network operations
     // Every test file runs in a fresh child process. The browser suites count
-    // the Chromium processes this process launched (`chromiumPids`), which
+    // the Obscura processes this process launched (`obscuraPids`), which
     // only works while no other file shares it.
     pool: "forks",
     isolate: true,

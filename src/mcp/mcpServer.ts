@@ -1,8 +1,18 @@
 import fs from "node:fs";
-import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
+import {
+  type CallToolResult,
+  McpServer,
+  ResourceTemplate,
+  type ServerContext,
+  type ToolAnnotations,
+  type ToolCallback,
+} from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { PipelineJobStatus } from "../pipeline/types";
-import { libraryNamesMatch } from "../store/types";
+import { escapeControlCharacters } from "../store/errors";
+import { compactMcpCall, mcpFailureReasons } from "../store/mcpStats";
+import type { IDocumentManagement } from "../store/trpc/interfaces";
+import { type DocumentationVersion, libraryNamesMatch } from "../store/types";
 import {
   extractHostname,
   extractProtocol,
@@ -13,9 +23,26 @@ import type { JobInfo } from "../tools";
 import { ToolError } from "../tools/errors";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
+import { getCurrentMcpCaller } from "./context";
 import { buildDefaultInstructions } from "./defaultInstructions";
 import type { McpServerTools } from "./tools";
-import { createError, createResponse } from "./utils";
+import {
+  createError,
+  createResponse,
+  describeMcpFailure,
+  getToolFailureReason,
+} from "./utils";
+
+function documentationVersionNotice(version: DocumentationVersion | undefined): string {
+  if (!version) return "";
+  const indexed = version.indexedVersion
+    ? escapeControlCharacters(version.indexedVersion)
+    : "unknown (unversioned documentation)";
+  const requested = version.requestedVersion
+    ? ` · requested: ${escapeControlCharacters(version.requestedVersion)} · ${version.versionMatch}`
+    : "";
+  return `> Documentation version: ${indexed}${requested}\n\n`;
+}
 
 /**
  * Splits a comma-separated pattern string into an array of patterns. Commas
@@ -185,7 +212,7 @@ function createToolInputSchemas(config: AppConfig) {
         .describe("Library version (optional, refreshes latest if omitted)."),
     }),
     searchDocs: z.object({
-      library: z.string().trim().describe("Library name."),
+      library: z.string().trim().describe("Indexed library or package name."),
       version: z
         .string()
         .trim()
@@ -195,13 +222,13 @@ function createToolInputSchemas(config: AppConfig) {
       limit: z.number().optional().default(5).describe("Maximum number of results."),
     }),
     readPage: z.object({
-      library: z.string().trim().describe("Library name."),
+      library: z.string().trim().describe("Indexed library or package name."),
       pathOrUrl: z
         .string()
         .trim()
         .min(1)
         .describe(
-          "Page URL, or a path matching the end of one page URL (e.g. 'https://react.dev/reference/react' or '/reference/react').",
+          "Page or section URL, or a path matching the end of one page URL (e.g. 'https://react.dev/reference/react' or '/reference/react').",
         ),
       version: z
         .string()
@@ -303,16 +330,18 @@ type ToolInputSchemas = ReturnType<typeof createToolInputSchemas>;
  * per request or connection. Both are resolved here, once, at startup.
  * @param tools The shared tool instances to use for server operations.
  * @param config The application configuration.
+ * @param docService The optional backend for persisting compact tool usage statistics.
  * @returns A function that creates a configured McpServer instance.
  * @throws {Error} If the configured instructions cannot be resolved.
  */
 export function createMcpServerFactory(
   tools: McpServerTools,
   config: AppConfig,
+  docService?: IDocumentManagement,
 ): () => McpServer {
   const instructions = resolveServerInstructions(config);
   const schemas = createToolInputSchemas(config);
-  return () => createMcpServerInstance(tools, config, instructions, schemas);
+  return () => createMcpServerInstance(tools, config, instructions, schemas, docService);
 }
 
 /**
@@ -329,6 +358,7 @@ function createMcpServerInstance(
   config: AppConfig,
   instructions: string,
   schemas: ToolInputSchemas,
+  docService?: IDocumentManagement,
 ): McpServer {
   const readOnly = config.app.readOnly;
   const { name, title } = config.server;
@@ -347,12 +377,68 @@ function createMcpServerInstance(
     },
   );
 
+  function registerTool<S extends z.ZodObject>(
+    name: string,
+    meta: { description?: string; inputSchema: S; annotations?: ToolAnnotations },
+    handler: (args: z.infer<S>, extra: ServerContext) => Promise<CallToolResult>,
+  ) {
+    const tracked = async (args: z.infer<S>, extra: ServerContext) => {
+      const startTime = performance.now();
+      const caller = getCurrentMcpCaller();
+      let failureReason: string | null = null;
+      try {
+        const result = await handler(args, extra);
+        failureReason = getToolFailureReason(result);
+        return result;
+      } catch (error) {
+        failureReason = describeMcpFailure(error) ?? mcpFailureReasons.unknown;
+        throw error;
+      } finally {
+        const durationMs = Math.round(performance.now() - startTime);
+        if (failureReason) {
+          logger.error(`❌ MCP tool ${name} failed (${durationMs}ms): ${failureReason}`);
+        }
+        if (docService) {
+          const fields = args as Record<string, unknown>;
+          const call = compactMcpCall({
+            tokenId: caller?.tokenId,
+            tokenComment: caller?.caller ?? "Local stdio",
+            protocol: caller?.protocol ?? "stdio",
+            tool: name,
+            library: typeof fields.library === "string" ? fields.library : null,
+            version:
+              typeof fields.version === "string"
+                ? fields.version
+                : typeof fields.targetVersion === "string"
+                  ? fields.targetVersion
+                  : null,
+            target:
+              typeof fields.pathOrUrl === "string"
+                ? fields.pathOrUrl
+                : typeof fields.url === "string"
+                  ? fields.url
+                  : null,
+            durationMs,
+            success: failureReason === null,
+            failureReason,
+          });
+          try {
+            await docService.recordMcpToolCall(call);
+          } catch {
+            logger.debug(`Failed to record statistics for MCP tool ${name}`);
+          }
+        }
+      }
+    };
+    return server.registerTool(name, meta, tracked as ToolCallback<S>);
+  }
+
   // --- Tool Definitions ---
 
   // Only register write/job tools if not in read-only mode
   if (!readOnly) {
     // Scrape docs tool - suppress deep inference issues
-    server.registerTool(
+    registerTool(
       "scrape_docs",
       {
         description:
@@ -427,7 +513,7 @@ function createMcpServerInstance(
     );
 
     // Refresh version tool - suppress deep inference issues
-    server.registerTool(
+    registerTool(
       "refresh_version",
       {
         description:
@@ -474,13 +560,13 @@ function createMcpServerInstance(
   }
 
   // Search docs tool
-  server.registerTool(
+  registerTool(
     "search_docs",
     {
       description:
         "Search up-to-date documentation for a library or package. Examples:\n\n" +
         '- {library: "react", query: "hooks lifecycle"} -> matches latest version of React\n' +
-        '- {library: "react", version: "18.0.0", query: "hooks lifecycle"} -> matches React 18.0.0 or earlier\n' +
+        '- {library: "react", version: "18.0.0", query: "hooks lifecycle"} -> prefers React 18.0.0 and reports the version used\n' +
         '- {library: "typescript", version: "5.x", query: "ReturnType example"} -> any TypeScript 5.x.x version\n' +
         '- {library: "typescript", version: "5.2.x", query: "ReturnType example"} -> any TypeScript 5.2.x version',
       inputSchema: schemas.searchDocs,
@@ -507,13 +593,13 @@ function createMcpServerInstance(
           version,
           query,
           limit,
-          exactMatch: false, // Always false for MCP interface
+          useVersionFallback: true,
         });
 
         const formattedResults = result.results.map(
-          (r: { url: string; content: string }, i: number) => `
+          (r, i) => `
 ------------------------------------------------------------
-Result ${i + 1}: ${r.url}
+Result ${i + 1}: ${r.sectionUrl ?? r.contentUrl ?? r.url}
 
 ${r.content}\n`,
         );
@@ -523,7 +609,15 @@ ${r.content}\n`,
             `No results found for '${query}' in ${library}. Try to use a different or more general query.`,
           );
         }
-        return createResponse(formattedResults.join(""));
+        const resolvedName =
+          result.library && !libraryNamesMatch(result.library, library)
+            ? `> Indexed library: ${result.library}\n\n`
+            : "";
+        return createResponse(
+          resolvedName +
+            documentationVersionNotice(result.documentationVersion) +
+            formattedResults.join(""),
+        );
       } catch (error) {
         return createError(error);
       }
@@ -531,11 +625,11 @@ ${r.content}\n`,
   );
 
   // Read page tool
-  server.registerTool(
+  registerTool(
     "read_page",
     {
       description:
-        "Read the full content of an indexed documentation page, for example a URL returned by `search_docs` or `list_pages`. " +
+        "Read an indexed documentation page or section, for example a URL returned by `search_docs` or `list_pages`. " +
         "Long pages are returned in parts; the response says how to continue.",
       inputSchema: schemas.readPage,
       annotations: {
@@ -559,6 +653,7 @@ ${r.content}\n`,
           version,
           startChunk,
           maxChars,
+          useVersionFallback: true,
         });
 
         if (result.startChunk >= result.totalChunks && result.totalChunks > 0) {
@@ -574,7 +669,10 @@ ${r.content}\n`,
               `To continue, call read_page again with startChunk: ${result.nextChunk}.`
             : "";
 
-        return createResponse(`> Source: ${result.url}\n\n${result.content}${notice}`);
+        return createResponse(
+          documentationVersionNotice(result.documentationVersion) +
+            `> Source: ${result.url}\n\n${result.content}${notice}`,
+        );
       } catch (error) {
         return createError(error);
       }
@@ -582,7 +680,7 @@ ${r.content}\n`,
   );
 
   // List pages tool
-  server.registerTool(
+  registerTool(
     "list_pages",
     {
       description:
@@ -640,7 +738,7 @@ ${r.content}\n`,
   );
 
   // List libraries tool
-  server.registerTool(
+  registerTool(
     "list_libraries",
     {
       description:
@@ -675,11 +773,11 @@ ${r.content}\n`,
   );
 
   // Find version tool
-  server.registerTool(
+  registerTool(
     "find_version",
     {
       description:
-        "Find the best matching version for a library. Use to identify available or closest versions.",
+        "Find the first indexed version that search_docs would try for a library name or alias.",
       inputSchema: schemas.findVersion,
       annotations: {
         title: "Find Library Version",
@@ -713,7 +811,7 @@ ${r.content}\n`,
   // Job and write tools - only available when not in read-only mode
   if (!readOnly) {
     // List jobs tool - suppress deep inference issues
-    server.registerTool(
+    registerTool(
       "list_jobs",
       {
         description: "List all indexing jobs. Optionally filter by status.",
@@ -755,7 +853,7 @@ ${r.content}\n`,
     );
 
     // Get job info tool
-    server.registerTool(
+    registerTool(
       "get_job_info",
       {
         description:
@@ -789,7 +887,7 @@ ${r.content}\n`,
     );
 
     // Cancel job tool
-    server.registerTool(
+    registerTool(
       "cancel_job",
       {
         description:
@@ -820,7 +918,7 @@ ${r.content}\n`,
     );
 
     // Remove docs tool
-    server.registerTool(
+    registerTool(
       "remove_docs",
       {
         description:
@@ -854,7 +952,7 @@ ${r.content}\n`,
   }
 
   // Fetch URL tool
-  server.registerTool(
+  registerTool(
     "fetch_url",
     {
       description:

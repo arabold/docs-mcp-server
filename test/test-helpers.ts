@@ -441,17 +441,16 @@ export function launchChromium(): Promise<Browser> {
 }
 
 /**
- * PIDs of the Chromium browsers this test process launched. Playwright starts
- * the browser as a direct child, talking to it over `--remote-debugging-pipe`;
- * its renderer and GPU helpers are children of the browser, not of this process.
+ * PIDs of the Obscura servers the scraper launched in this test process.
  * Relies on `pgrep`, so it is not available on Windows.
+ * @returns The matching direct child process IDs.
  */
-export function chromiumPids(): number[] {
+export function obscuraPids(): number[] {
   // pgrep exits with 1 when nothing matches, which spawnSync does not treat as
   // an error.
   const { stdout } = spawnSync(
     "pgrep",
-    ["-P", String(process.pid), "-f", "remote-debugging-pipe"],
+    ["-P", String(process.pid), "-f", "grounded-docs-obscura-"],
     { encoding: "utf8" },
   );
   return stdout.split("\n").filter(Boolean).map(Number);

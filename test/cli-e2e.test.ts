@@ -162,14 +162,14 @@ describe("CLI E2E", () => {
     // Two CLI processes; generous for CI runners, which are several times slower
   }, 60000);
 
-  describe("when Chromium cannot start", () => {
+  describe("when Obscura cannot start", () => {
     // Every launch fails at once, without needing a real browser.
-    const brokenChromium = { PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: "/nonexistent/chromium" };
+    const brokenObscura = { OBSCURA_EXECUTABLE_PATH: "/nonexistent/obscura" };
     let storePath: string;
     let configPath: string;
 
     beforeAll(() => {
-      storePath = mkdtempSync(path.join(tmpdir(), "cli-e2e-no-chromium-"));
+      storePath = mkdtempSync(path.join(tmpdir(), "cli-e2e-no-obscura-"));
       configPath = writeTestConfig(storePath);
     });
 
@@ -191,7 +191,7 @@ describe("CLI E2E", () => {
           scrapeMode,
         ],
         40_000,
-        { env: brokenChromium },
+        { env: brokenObscura },
       );
     }
 

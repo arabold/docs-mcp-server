@@ -12,8 +12,17 @@ import {
 
 vi.mock("playwright", () => ({
   chromium: {
-    launch: vi.fn(),
+    connectOverCDP: vi.fn(),
   },
+}));
+
+vi.mock("./obscura", () => ({
+  startObscura: async () => ({
+    endpoint: "ws://127.0.0.1:9222/devtools/browser",
+    token: "test-token",
+    isRunning: () => true,
+    close: async () => {},
+  }),
 }));
 
 import { chromium } from "playwright";
@@ -52,7 +61,7 @@ function makeScraperConfig(): AppConfig["scraper"] {
  */
 function mockBrowser(pageOverrides: Record<string, unknown> = {}) {
   const mocks = buildBrowser(pageOverrides);
-  vi.mocked(chromium.launch).mockResolvedValue(mocks.browser as never);
+  vi.mocked(chromium.connectOverCDP).mockResolvedValue(mocks.browser as never);
   return mocks;
 }
 
@@ -83,19 +92,13 @@ function buildBrowser(pageOverrides: Record<string, unknown> = {}) {
   };
   const browser = {
     newContext: vi.fn().mockResolvedValue(context),
-    // The CDP session ManagedBrowser checks redirects in.
-    newBrowserCDPSession: vi.fn().mockResolvedValue({
-      on: vi.fn(),
-      send: vi.fn().mockResolvedValue({}),
-      detach: vi.fn().mockResolvedValue(undefined),
-    }),
     close: vi.fn().mockResolvedValue(undefined),
     isConnected: vi.fn().mockReturnValue(true),
   };
   return { page, context, browser };
 }
 
-/** Builds a mocked browser whose Chromium exits as soon as a page is opened. */
+/** Builds a mocked browser whose CDP connection ends as soon as a page is opened. */
 function crashingBrowser() {
   const { browser } = buildBrowser();
   browser.newContext.mockImplementation(async () => {
@@ -151,8 +154,8 @@ describe("BrowserFetcher", () => {
     expect(callerAccept).toEqual(expect.objectContaining({ accept: "text/html" }));
   });
 
-  it("keeps connection-level headers off the page so Chromium can navigate", async () => {
-    // Chromium fails a navigation that carries one of these; generated
+  it("keeps connection-level headers off the page so Obscura can navigate", async () => {
+    // Obscura fails a navigation that carries one of these; generated
     // Firefox fingerprints include TE.
     const generateHeaders = vi
       .spyOn(FingerprintGenerator.prototype, "generateHeaders")
@@ -365,7 +368,7 @@ describe("BrowserFetcher", () => {
   });
 
   it("sends the same fingerprint/Accept headers to the request-API fallback as the page navigation", async () => {
-    // The page leaves Sec-Fetch-* to Chromium; the request API is Playwright's
+    // The page leaves Sec-Fetch-* to Obscura; the request API is Playwright's
     // own client, so it sends them to look like the same browser.
     const generateHeaders = vi
       .spyOn(FingerprintGenerator.prototype, "generateHeaders")
@@ -403,7 +406,7 @@ describe("BrowserFetcher", () => {
   });
 
   it("does not fetch through the request API when the page was detached mid-navigation", async () => {
-    // Chromium reports a navigation cut off by a closing browser as ERR_ABORTED
+    // Obscura reports a navigation cut off by a closing browser as ERR_ABORTED
     // too; fetching the resource again there only adds a request.
     const goto = vi
       .fn()
@@ -559,15 +562,15 @@ describe("BrowserFetcher", () => {
     });
   });
 
-  describe("Chromium exiting mid-fetch", () => {
+  describe("Obscura exiting mid-fetch", () => {
     it("gives up after one retry when the new browser exits too", async () => {
-      vi.mocked(chromium.launch).mockImplementation(
+      vi.mocked(chromium.connectOverCDP).mockImplementation(
         async () => crashingBrowser() as never,
       );
       const fetcher = new BrowserFetcher(makeScraperConfig());
 
       await expect(fetcher.fetch("https://example.com")).rejects.toThrow(ScraperError);
-      expect(chromium.launch).toHaveBeenCalledTimes(2);
+      expect(chromium.connectOverCDP).toHaveBeenCalledTimes(2);
     });
 
     it("does not retry a failure while the browser is still connected", async () => {
@@ -576,7 +579,7 @@ describe("BrowserFetcher", () => {
       const fetcher = new BrowserFetcher(makeScraperConfig());
 
       await expect(fetcher.fetch("https://example.com")).rejects.toThrow(ScraperError);
-      expect(chromium.launch).toHaveBeenCalledTimes(1);
+      expect(chromium.connectOverCDP).toHaveBeenCalledTimes(1);
       expect(browser.newContext).toHaveBeenCalledTimes(1);
     });
 
@@ -592,13 +595,13 @@ describe("BrowserFetcher", () => {
           "browser.newContext: Target page, context or browser has been closed",
         );
       });
-      vi.mocked(chromium.launch).mockResolvedValue(browser as never);
+      vi.mocked(chromium.connectOverCDP).mockResolvedValue(browser as never);
       const fetcher = new BrowserFetcher(makeScraperConfig());
 
       await expect(
         fetcher.fetch("https://example.com", { signal: controller.signal }),
       ).rejects.toThrow("Browser fetch cancelled");
-      expect(chromium.launch).toHaveBeenCalledTimes(1);
+      expect(chromium.connectOverCDP).toHaveBeenCalledTimes(1);
     });
   });
 

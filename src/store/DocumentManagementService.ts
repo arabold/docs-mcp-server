@@ -10,6 +10,8 @@ import type { Chunk } from "../splitter/types";
 import { telemetry } from "../telemetry";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
+import { MimeTypeUtils } from "../utils/mimeTypeUtils";
+import { sectionQueryBase, sectionSelector, sectionSlug } from "../utils/sections";
 import { formatBytes } from "../utils/string";
 import { normalizeUrl } from "../utils/url";
 import {
@@ -22,10 +24,15 @@ import {
 } from "../utils/version";
 import { createContentAssemblyStrategy } from "./assembly/ContentAssemblyStrategyFactory";
 import { DocumentRetrieverService } from "./DocumentRetrieverService";
+import {
+  describeDocumentationVersion,
+  documentationFallbacks,
+} from "./documentationVersions";
 import { DocumentStore } from "./DocumentStore";
 import type { EmbeddingModelConfig } from "./embeddings/EmbeddingConfig";
 import {
   AmbiguousPageInStoreError,
+  escapeControlCharacters,
   LibraryNotFoundInStoreError,
   PageNotFoundInStoreError,
   StoreError,
@@ -43,6 +50,11 @@ import type {
   ListPagesResult,
   ListVersionChunksOptions,
   ListVersionChunksResult,
+  McpRecentCallsOptions,
+  McpStatsFilterOptions,
+  McpStatsOverview,
+  McpToolCallInput,
+  McpToolCallRecord,
   PageContentOptions,
   PageContentResult,
   ResolvedVersion,
@@ -56,12 +68,40 @@ import type {
 } from "./types";
 import {
   type ExistingTargetPolicy,
+  normalizeLibraryName,
   normalizeVersionLabel,
   normalizeVersionRef,
 } from "./types";
 
 /** Upper bound on the pages listed when a path matches more than one. */
 const MAX_AMBIGUOUS_PAGE_MATCHES = 10;
+
+const PACKAGE_ALIASES = new Map([
+  ["next.js", "next"],
+  ["nextjs", "next"],
+  ["@tanstack/react-query", "tanstack-query"],
+]);
+
+function sourcePackageName(sourceUrl: string | null): string | null {
+  if (!sourceUrl) return null;
+  try {
+    const { hostname, pathname } = new URL(sourceUrl);
+    if (/^(?:www\.)?npmjs\.(?:com|org)$/.test(hostname)) {
+      return decodeURIComponent(
+        pathname.match(/^\/package\/((?:@[^/]+\/)?[^/]+)/)?.[1] ?? "",
+      );
+    }
+    if (/^(?:www\.)?pypi\.org$/.test(hostname)) {
+      return pathname.match(/^\/project\/([^/]+)/)?.[1] ?? null;
+    }
+    if (hostname === "github.com") {
+      return pathname.match(/^\/([^/]+\/[^/]+)/)?.[1]?.replace(/\.git$/, "") ?? null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
 
 /**
  * Returns the distinct spellings a stored URL may use for `value`: as given,
@@ -369,11 +409,14 @@ export class DocumentManagementService {
   }
 
   /** Builds the library-not-found error, suggesting similarly named libraries. */
-  private async libraryNotFound(library: string): Promise<LibraryNotFoundInStoreError> {
+  private async libraryNotFound(
+    library: string,
+    names?: string[],
+  ): Promise<LibraryNotFoundInStoreError> {
     logger.warn(`⚠️  Library '${library}' not found.`);
 
     // Library doesn't exist; suggest from the stored display names
-    const libraryNames = [...(await this.store.queryLibraryVersions()).keys()];
+    const libraryNames = names ?? [...(await this.store.queryLibraryVersions()).keys()];
 
     let suggestions: string[] = [];
     if (libraryNames.length > 0) {
@@ -576,6 +619,53 @@ export class DocumentManagementService {
     }
 
     return { bestMatch, hasUnversioned };
+  }
+
+  /**
+   * Resolves an indexed name or package alias and orders buckets for documentation lookup.
+   * @param library Name or package identifier from the caller.
+   * @param version Preferred version label or range.
+   * @returns The stored library name and indexed labels in lookup order.
+   */
+  async resolveDocumentation(
+    library: string,
+    version?: string,
+  ): Promise<{ library: string; versions: string[] }> {
+    const name = await this.resolveDocumentationLibrary(library);
+    const labels = await this.store.queryUniqueVersions(name, true);
+    const preferred = this.resolveVersionLabel(toVersionCandidates(labels), version);
+    return {
+      library: name,
+      versions: documentationFallbacks(labels, preferred, version),
+    };
+  }
+
+  private async resolveDocumentationLibrary(library: string): Promise<string> {
+    const exact = await this.store.getLibrary(library);
+    if (exact) return exact.displayName;
+
+    const key = normalizeLibraryName(library);
+    const configured = Object.entries(this.appConfig.app.libraryAliases ?? {}).find(
+      ([alias]) => normalizeLibraryName(alias) === key,
+    )?.[1];
+    const alias = configured ?? PACKAGE_ALIASES.get(key);
+    const target = alias ? await this.store.getLibrary(alias) : null;
+    if (target) return target.displayName;
+
+    const summaries = await this.store.queryLibraryVersions();
+    const candidates = [...summaries].filter(([, versions]) =>
+      versions.some(({ sourceUrl }) =>
+        normalizeLibraryName(sourcePackageName(sourceUrl ?? null) ?? "") === key,
+      ),
+    );
+    if (candidates.length === 1) return candidates[0][0];
+    if (candidates.length > 1) {
+      const names = candidates.map(([name]) => escapeControlCharacters(name));
+      throw new StoreError(
+        `Package ${escapeControlCharacters(library)} matches several indexed libraries. Pass one of: ${names.join(", ")}.`,
+      );
+    }
+    throw await this.libraryNotFound(library, [...summaries.keys()]);
   }
 
   /**
@@ -850,10 +940,78 @@ export class DocumentManagementService {
     pathOrUrl: string,
     options: PageContentOptions = {},
   ): Promise<PageContentResult> {
-    const resolved = await this.resolvePageVersion(library, version);
-    const url = await this.findPageUrl(resolved.library, resolved.version, pathOrUrl);
-    const chunks = await this.store.findChunksByUrl(library, resolved.version, url);
-    const contentType = chunks[0]?.content_type ?? null;
+    if (!options.useVersionFallback) {
+      const match = await this.resolvePageVersion(library, version);
+      return this.readResolvedPage(match.library, match.version, pathOrUrl, options);
+    }
+
+    const request = version ?? undefined;
+    const resolved = await this.resolveDocumentation(library, request);
+    let missing: PageNotFoundInStoreError | undefined;
+    let empty: PageContentResult | undefined;
+    for (const label of resolved.versions) {
+      try {
+        const result = await this.readResolvedPage(
+          resolved.library,
+          label,
+          pathOrUrl,
+          options,
+        );
+        const response = {
+          ...result,
+          documentationVersion: describeDocumentationVersion(request, label),
+        };
+        if (result.totalChunks > 0) return response;
+        empty ??= response;
+      } catch (error) {
+        if (!(error instanceof PageNotFoundInStoreError)) throw error;
+        missing ??= error;
+      }
+    }
+    if (empty) return empty;
+    throw missing ?? new PageNotFoundInStoreError(resolved.library, "", pathOrUrl, []);
+  }
+
+  private async readResolvedPage(
+    library: string,
+    version: string,
+    pathOrUrl: string,
+    options: PageContentOptions,
+  ): Promise<PageContentResult> {
+    const url = await this.findPageUrl(library, version, pathOrUrl);
+    const pageChunks = await this.store.findChunksByUrl(library, version, url);
+    const selector = sectionSelector(pathOrUrl);
+    const contentType = pageChunks[0]?.content_type ?? null;
+    const legacySection = sectionQueryBase(url);
+    const selectorSlug = selector ? sectionSlug(selector) : "";
+    const legacyHeading = pathOrUrl.includes("#") || url.endsWith(pathOrUrl);
+    const section =
+      selector &&
+      !url.includes("#") &&
+      contentType &&
+      MimeTypeUtils.isMarkdown(contentType)
+        ? pageChunks.find(
+            ({ metadata }) =>
+              metadata.sectionTarget &&
+              sectionSelector(metadata.sectionTarget) === selector,
+          ) ??
+          (legacyHeading && selectorSlug
+            ? pageChunks.find(({ metadata }) =>
+                metadata.path?.some((heading) => sectionSlug(heading) === selectorSlug),
+              )
+            : undefined)
+        : undefined;
+    const path = section?.metadata.path;
+    const anchorIndex = path?.findIndex((heading) => sectionSlug(heading) === selectorSlug);
+    const sectionPath =
+      path && anchorIndex !== undefined && anchorIndex >= 0
+        ? path.slice(0, anchorIndex + 1)
+        : path;
+    const chunks = sectionPath?.length
+      ? pageChunks.filter(({ metadata }) =>
+          sectionPath.every((part, index) => metadata.path?.[index] === part),
+        )
+      : pageChunks;
     const strategy = createContentAssemblyStrategy(contentType, this.appConfig);
 
     const startChunk = options.startChunk ?? 0;
@@ -871,9 +1029,13 @@ export class DocumentManagementService {
     }
     const end = startChunk + window.length;
 
+    const source = options.useVersionFallback ? pageChunks[0]?.content_url : undefined;
+    const sectionUrl =
+      section?.metadata.sectionTarget ??
+      (section && legacySection ? url : undefined);
     return {
-      url,
-      title: chunks[0]?.title ?? null,
+      url: sectionUrl ?? source ?? url,
+      title: sectionPath?.at(-1) ?? pageChunks[0]?.title ?? null,
       contentType,
       content: strategy.assembleContent(window),
       startChunk,
@@ -943,9 +1105,10 @@ export class DocumentManagementService {
     pathOrUrl: string,
   ): Promise<string> {
     const isAbsolute = /^[a-z][a-z\d+.-]*:\/\//i.test(pathOrUrl);
-    const withoutAnchor = pathOrUrl.replace(/[?#].*$/, "");
+    const withoutAnchor = pathOrUrl.replace(/#.*$/, "");
+    const withoutQuery = withoutAnchor.replace(/\?.*$/, "");
 
-    for (const input of new Set([pathOrUrl, withoutAnchor])) {
+    for (const input of new Set([pathOrUrl, withoutAnchor, withoutQuery])) {
       if (isAbsolute) {
         const [url] = await this.store.findPageUrls(
           library,
@@ -1072,5 +1235,58 @@ export class DocumentManagementService {
   async getVersionComposition(ref: VersionRef): Promise<VersionComposition> {
     const normalized = normalizeVersionRef(ref);
     return this.store.getVersionComposition(normalized.library, normalized.version);
+  }
+
+  /**
+   * Lists registered application tokens.
+   * @returns Token metadata.
+   */
+  async listMcpAppTokens() {
+    return this.store.listMcpAppTokens();
+  }
+
+  /**
+   * Registers an application token.
+   * @param name - Application name shown in statistics.
+   * @param token - Existing token value, or omit to generate one.
+   * @returns The newly registered token, or null if the value already exists.
+   */
+  async createMcpAppToken(name: string, token?: string) {
+    return this.store.createMcpAppToken(name, token);
+  }
+
+  /**
+   * Revokes an application token.
+   * @param id - Token ID.
+   * @returns A promise resolved after deletion.
+   */
+  async deleteMcpAppToken(id: number): Promise<void> {
+    return this.store.deleteMcpAppToken(id);
+  }
+
+  /**
+   * Identifies an application from its token hash.
+   * @param hash - SHA-256 digest of a supplied token.
+   * @returns The matching application identity, if still registered.
+   */
+  async resolveMcpAppToken(hash: string) {
+    return this.store.resolveMcpAppToken(hash);
+  }
+
+  // MCP Usage Analytics & Statistics
+  async recordMcpToolCall(call: McpToolCallInput): Promise<void> {
+    return this.store.recordMcpToolCall(call);
+  }
+
+  async getMcpStatsOverview(options?: McpStatsFilterOptions): Promise<McpStatsOverview> {
+    return this.store.getMcpStatsOverview(options);
+  }
+
+  async getMcpRecentCalls(options?: McpRecentCallsOptions): Promise<McpToolCallRecord[]> {
+    return this.store.getMcpRecentCalls(options);
+  }
+
+  async pruneOldMcpStats(retentionDays?: number, maxRows?: number): Promise<void> {
+    return this.store.pruneOldMcpStats(retentionDays, maxRows);
   }
 }

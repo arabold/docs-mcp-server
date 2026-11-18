@@ -1,5 +1,5 @@
 /**
- * Content that a docs page embeds, rendered in a real Chromium.
+ * Content that a docs page embeds, rendered in Obscura.
  *
  * With `scrapeMode: playwright`, the HTML pipeline renders each page and pulls
  * in text that a plain HTML parser never sees: the bodies of iframes, the

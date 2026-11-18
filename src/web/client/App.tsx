@@ -18,6 +18,7 @@ import LibraryDetail from "./pages/LibraryDetail";
 import Overview from "./pages/Overview";
 import Search from "./pages/Search";
 import Settings from "./pages/Settings";
+import Statistics from "./pages/Statistics";
 
 /** Sidebar + sticky topbar + scrollable `<Outlet/>`, matching the mockup's `.app` layout. */
 function Shell() {
@@ -54,6 +55,7 @@ export function App() {
           <Route path="libraries/:library" element={<LibraryDetail />} />
           <Route path="jobs" element={<Jobs />} />
           <Route path="search" element={<Search />} />
+          <Route path="statistics" element={<Statistics />} />
           <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>

@@ -5,14 +5,18 @@
 import { initTRPC } from "@trpc/server";
 import superjson from "superjson";
 import { z } from "zod";
-import type {
-  DbVersionWithLibrary,
-  EmbeddingConfigInfo,
-  FindVersionResult,
-  ListPagesOptions,
-  PageContentOptions,
-  StoreSearchResult,
-  VersionStatus,
+import {
+  CONTROL_CHARACTER,
+  type DbVersionWithLibrary,
+  type EmbeddingConfigInfo,
+  type FindVersionResult,
+  type ListPagesOptions,
+  type McpRecentCallsOptions,
+  type McpStatsFilterOptions,
+  type McpToolCallInput,
+  type PageContentOptions,
+  type StoreSearchResult,
+  type VersionStatus,
 } from "../types";
 import type { IDocumentManagement } from "./interfaces";
 
@@ -60,6 +64,18 @@ export function createDataRouter(trpc: unknown) {
           );
           return result as FindVersionResult;
         },
+      ),
+
+    resolveDocumentation: tt.procedure
+      .input(z.object({ library: nonEmpty, version: z.string().optional() }))
+      .query(
+        ({
+          ctx,
+          input,
+        }: {
+          ctx: DataTrpcContext;
+          input: { library: string; version?: string };
+        }) => ctx.docService.resolveDocumentation(input.library, input.version),
       ),
 
     validateLibraryExists: tt.procedure
@@ -117,6 +133,7 @@ export function createDataRouter(trpc: unknown) {
             .object({
               startChunk: z.number().int().nonnegative().optional(),
               maxChars: z.number().positive().optional(),
+              useVersionFallback: z.boolean().optional(),
             })
             .optional(),
         }),
@@ -394,8 +411,110 @@ export function createDataRouter(trpc: unknown) {
         },
       ),
 
-    // Lets a web process report its remote worker's embedding config in the
-    // system-health snapshot (the worker, not the web process, holds it).
+    listMcpAppTokens: tt.procedure.query(({ ctx }) => ctx.docService.listMcpAppTokens()),
+
+    createMcpAppToken: tt.procedure
+      .input(
+        z.object({
+          name: nonEmpty
+            .max(100)
+            .refine((name) => !CONTROL_CHARACTER.test(name), "Invalid application name."),
+          token: z
+            .string()
+            .trim()
+            .min(32)
+            .max(256)
+            .regex(/^[!-~]+$/)
+            .optional(),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        ctx.docService.createMcpAppToken(input.name, input.token),
+      ),
+
+    deleteMcpAppToken: tt.procedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        await ctx.docService.deleteMcpAppToken(input.id);
+        return { ok: true } as const;
+      }),
+
+    resolveMcpAppToken: tt.procedure
+      .input(z.object({ hash: z.string().regex(/^[a-f0-9]{64}$/) }))
+      .mutation(({ ctx, input }) => ctx.docService.resolveMcpAppToken(input.hash)),
+
+    getMcpStatsOverview: tt.procedure
+      .input(
+        z
+          .object({
+            days: z.number().int().positive().max(3650).optional(),
+            tokenId: z.number().int().optional(),
+            caller: z.string().max(100).optional(),
+            tool: z.string().optional(),
+            library: z.string().optional(),
+          })
+          .optional(),
+      )
+      .query(
+        async ({
+          ctx,
+          input,
+        }: {
+          ctx: DataTrpcContext;
+          input: McpStatsFilterOptions | undefined;
+        }) => {
+          return await ctx.docService.getMcpStatsOverview(input);
+        },
+      ),
+
+    getMcpRecentCalls: tt.procedure
+      .input(
+        z
+          .object({
+            limit: z.number().int().positive().max(200).optional(),
+            offset: z.number().int().nonnegative().optional(),
+            days: z.number().int().positive().max(3650).optional(),
+            tokenId: z.number().int().optional(),
+            caller: z.string().max(100).optional(),
+            tool: z.string().optional(),
+            library: z.string().optional(),
+          })
+          .optional(),
+      )
+      .query(
+        async ({
+          ctx,
+          input,
+        }: {
+          ctx: DataTrpcContext;
+          input: McpRecentCallsOptions | undefined;
+        }) => {
+          return await ctx.docService.getMcpRecentCalls(input);
+        },
+      ),
+
+    recordMcpToolCall: tt.procedure
+      .input(
+        z.object({
+          tokenId: z.number().int().nullable().optional(),
+          tokenComment: z.string().max(100).nullable().optional(),
+          tool: z.string().min(1).max(64),
+          library: z.string().max(256).nullable().optional(),
+          version: z.string().max(64).nullable().optional(),
+          target: z.string().max(256).nullable().optional(),
+          protocol: z.enum(["http", "sse", "stdio"]).optional(),
+          success: z.boolean(),
+          failureReason: z.string().max(64).nullable().optional(),
+          durationMs: z.number(),
+        }),
+      )
+      .mutation(
+        async ({ ctx, input }: { ctx: DataTrpcContext; input: McpToolCallInput }) => {
+          await ctx.docService.recordMcpToolCall(input);
+          return { ok: true } as const;
+        },
+      ),
+
     getEmbeddingConfig: tt.procedure.query(
       async ({ ctx }: { ctx: DataTrpcContext }): Promise<EmbeddingConfigInfo | null> => {
         return ctx.docService.getEmbeddingConfigInfo();

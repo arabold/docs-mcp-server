@@ -30,7 +30,8 @@ export type IconName =
   | "i-x"
   | "i-check"
   | "i-globe"
-  | "i-chevron";
+  | "i-chevron"
+  | "i-chart";
 
 export interface IconProps {
   /** Symbol id to render, e.g. `"i-search"`. */
@@ -95,6 +96,7 @@ export function IconSprite(): JSX.Element {
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
   <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 3.8 5.8 3.8 9S14.5 18.5 12 21c-2.5-2.5-3.8-5.8-3.8-9S9.5 5.5 12 3z"/></symbol>
   <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M18 20V10M12 20V4M6 20v-6"/></symbol>
         `,
       }}
     />

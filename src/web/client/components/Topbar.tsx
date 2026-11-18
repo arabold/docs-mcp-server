@@ -34,6 +34,7 @@ function useRouteTitle(): RouteTitle {
   }
   if (pathname === "/jobs") return { title: "Jobs & Queue", crumb: "/ jobs" };
   if (pathname === "/search") return { title: "Search Playground", crumb: "/ search" };
+  if (pathname === "/statistics") return { title: "Statistics", crumb: "/ statistics" };
   if (pathname === "/settings") return { title: "Settings", crumb: "/ settings" };
   return { title: "Overview", crumb: "/ dashboard" };
 }

@@ -6,7 +6,10 @@
  * {@link ../services/appRouter}, keeping HTTP and WebSocket behavior identical.
  */
 
-import { fastifyTRPCPlugin } from "@trpc/server/adapters/fastify";
+import {
+  type CreateFastifyContextOptions,
+  fastifyTRPCPlugin,
+} from "@trpc/server/adapters/fastify";
 import { applyWSSHandler } from "@trpc/server/adapters/ws";
 import type { FastifyInstance } from "fastify";
 import type { WebSocketServer } from "ws";
@@ -37,14 +40,16 @@ export async function registerTrpcService(
     prefix: "/api",
     trpcOptions: {
       router: appRouter,
-      createContext: async () =>
-        createAppRouterContext({
+      createContext: async ({ res }: CreateFastifyContextOptions) => {
+        res.header("Cache-Control", "no-store");
+        return createAppRouterContext({
           pipeline,
           docService,
           eventBus,
           systemInfo,
           isWorkerConnected,
-        }),
+        });
+      },
     },
   });
 }

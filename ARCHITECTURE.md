@@ -13,7 +13,7 @@ This document is the overview. The documents under [References](#references) cov
 - Node.js 22 and TypeScript. Vite builds the server and the web interface, and Vitest runs the tests.
 - SQLite through better-sqlite3, with FTS5 for full-text search and sqlite-vec for vectors. SQL migrations live in `db/migrations/`.
 - LangChain.js for the embedding clients (OpenAI and OpenAI-compatible APIs, Google Gemini and Vertex AI, AWS Bedrock, Azure OpenAI) and for recursive text splitting. tree-sitter parses source code.
-- Playwright with Chromium renders JavaScript pages and fetches pages behind anti-bot challenges. Xberg extracts text from PDF, Office and other binary documents.
+- Obscura renders JavaScript pages and fetches pages behind anti-bot challenges. Playwright drives it over CDP. Xberg extracts text from PDF, Office and other binary documents.
 - Fastify serves HTTP. tRPC carries the application API and its WebSocket event stream. The MCP TypeScript SDK implements the MCP server.
 - The web interface uses React, React Router, tRPC and TanStack Query, styled with plain CSS.
 
@@ -188,17 +188,15 @@ Web fetches send the browser fingerprint's `Accept` header, which asks for HTML 
 
 #### Browser lifecycle
 
-A web scrape runs one headless Chromium. `WebScraperStrategy` creates a `ManagedBrowser` ([src/scraper/fetcher/ManagedBrowser.ts](src/scraper/fetcher/ManagedBrowser.ts)) and hands it to both users of a browser: `BrowserFetcher`, which `AutoDetectFetcher` falls back to when a plain HTTP request meets a challenge or an anti-bot block, and `HtmlPlaywrightMiddleware`, which renders HTML in `playwright` and `auto` scrape modes. Each page gets its own browser context, so pages share the process but not cookies or storage.
+A web scrape shares one Obscura process between `BrowserFetcher` and `HtmlPlaywrightMiddleware` through [`ManagedBrowser`](src/scraper/fetcher/ManagedBrowser.ts). The fetcher handles HTTP challenges and anti-bot blocks. The middleware renders HTML in `playwright` and `auto` modes. Each operation opens a separate CDP connection so its interception state, cookies, and storage are isolated.
 
-`ManagedBrowser` launches Chromium on first use and launches a new one after the old one exits, for example when the operating system kills it under memory pressure. Callers that need a browser at the same time share one launch. `BrowserFetcher` retries a page once on the new browser when Chromium dies while loading it, unless the fetch was aborted. `HtmlPlaywrightMiddleware` replaces the browser only when a page or context fails to close in time, since a stuck cleanup can leave Chromium unresponsive; a failed render alone keeps the browser, which other pages may be using. Closing the browser is bounded by `scraper.pageTimeoutMs` (navigation itself by `scraper.browserTimeoutMs`) and falls back to killing the process, by the process ID Chromium reports over CDP at launch.
+`ManagedBrowser` starts Obscura on first use and replaces it after an exit. Concurrent operations share startup. `BrowserFetcher` retries once when its connection is lost during a fetch. A render that cannot open or close its context can retire the shared process. The server owns the child process directly and stops it when the scrape closes.
 
-Each page's routes check the requests it makes against the access policy, but Playwright routes only the first request of a redirect chain: Chromium follows redirects itself. So at launch, `ManagedBrowser` opens a CDP Fetch session on the browser target, which pauses every request in every context, including those of cross-site iframes that run in processes of their own. The session fails each redirect hop the policy denies, and a browser whose session cannot be set up is closed instead of handed out. `BrowserFetcher` reports a navigation stopped this way as an `AccessPolicyError`.
+Playwright routes check the URLs they receive. A loopback proxy enforces the same outbound policy for Obscura's HTTP requests and HTTPS tunnels, including new connections after redirects. The proxy connects only to the DNS addresses it checks. The CDP endpoint binds to an ephemeral loopback port and requires a per-process token. Requests that Playwright makes directly from Node, such as `route.fetch`, validate redirects one hop at a time.
 
 A crawl that ends early, because an item failed or the job was cancelled, aborts the items still running and waits for them before it returns. `ScraperService` cleans up the strategy, and with it the browser, only after that, so no item is left using a closed browser or launching a new one that nobody closes. An aborted browser fetch closes its context, which ends a navigation in progress.
 
-Playwright's headless shell is the default binary. Installs made with `playwright install --no-shell` have only the full Chromium build, and the launch falls back to it. `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` overrides both. When neither of Playwright's builds is installed, a system Chromium (`/usr/lib/chromium/chromium`, `/usr/bin/chromium` or `/usr/bin/chromium-browser`) is used if one exists.
-
-Commands that can launch a browser in their own process (the default server, `mcp`, `worker`, `fetch-url`, and `scrape`, `refresh` and `web` without `--server-url`) make sure one is installed before they start. Either of Playwright's builds counts. When both are missing, the command installs the headless shell with the CLI of the bundled Playwright, so the revision matches what the launch looks for. The install runs with `--no-remove`, because another process may be running browsers that Playwright would otherwise delete as unused.
+The Docker image includes Obscura v0.2.7. Local installs resolve `OBSCURA_EXECUTABLE_PATH` or look for `obscura` on `PATH` when an operation needs a browser.
 
 #### Sub-resource blocklist
 
@@ -272,7 +270,7 @@ The browser builds its links with `createApiLinks()` from `src/services/apiClien
 
 With `--server-url`, the web server's `/api` answers through its remote backend: `DocumentManagementClient` and `PipelineClient` forward calls to the worker, and `RemoteEventProxy` relays the worker's events onto the local `EventBus` that the subscription reads. The browser talks only to the web server.
 
-Every request and WebSocket upgrade passes the host check (see [MCP Protocol Integration](#mcp-protocol-integration)). On a loopback bind, the API and its WebSocket also refuse foreign browser origins. Upgrades are accepted only at `/api`, and at the root for coordinators of earlier releases. Authentication covers the MCP endpoint only, never the web interface or the API.
+Every request and WebSocket upgrade passes the host check (see [MCP Protocol Integration](#mcp-protocol-integration)). On a loopback bind, the API and its WebSocket also refuse foreign browser origins. Upgrades are accepted only at `/api`, and at the root for coordinators of earlier releases. The web interface and API, including MCP statistics, use the server's network trust boundary. Optional OAuth covers the MCP endpoint.
 
 See [Web Client Conventions](src/web/client/CONVENTIONS.md) for the client's directory layout, adding pages and routes, data hooks, and the shared component library.
 
@@ -281,11 +279,11 @@ See [Web Client Conventions](src/web/client/CONVENTIONS.md) for the client's dir
 The MCP server publishes the tools layer as MCP tools. It is built on the MCP TypeScript SDK v2 and has these transports and checks:
 
 - stdio transport: for AI tools that launch the server as a child process. It serves clients on protocol revision 2026-07-28 and on earlier, handshake-based revisions.
-- HTTP transport: Streamable HTTP at `/mcp`, for protocol revision 2026-07-28 and, statelessly, for clients on earlier handshake-based revisions. The SDK's per-request handler is mounted on the application's Fastify route. Before it, the route checks the browser `Origin`, answers CORS preflights and non-POST methods, and verifies bearer tokens when authentication is enabled.
+- HTTP transport: Streamable HTTP at `/mcp`, for protocol revision 2026-07-28 and, statelessly, for clients on earlier handshake-based revisions. The SDK's per-request handler is mounted on the application's Fastify route. Before it, the route checks the browser `Origin`, answers CORS preflights and non-POST methods, and verifies bearer tokens when OAuth is enabled.
 - Host check: a global hook refuses (`403`) every request and WebSocket upgrade whose `Host` names an unknown host, which stops DNS rebinding. Accepted are IP literals, `localhost`, single-label names, the public URL's host and the hosts of `server.allowedOrigins` (`createHostPolicy` in `src/app/originPolicy.ts`).
-- Deprecated HTTP+SSE transport: `GET /sse` and `POST /messages`, registered only while authentication is off, for handshake-era clients. It uses the SDK's frozen `SSEServerTransport` from `@modelcontextprotocol/server-legacy`, with one MCP server instance per stream, and goes away in a future major release.
+- Deprecated HTTP+SSE transport: `GET /sse` and `POST /messages`, registered while OAuth is off for handshake-era clients. It uses the SDK's frozen `SSEServerTransport` from `@modelcontextprotocol/server-legacy`, with one MCP server instance per stream, and goes away in a future major release.
 
-When authentication is enabled, the HTTP transport acts as an OAuth 2.0 resource server. It publishes protected resource metadata and accepts only JWTs the configured identity provider issued for its public URL; see [Authentication](docs/infrastructure/authentication.md).
+When OAuth is enabled, the HTTP transport acts as an OAuth 2.0 resource server. It publishes protected resource metadata and accepts only JWTs the configured identity provider issued for its public URL; see [Authentication](docs/infrastructure/authentication.md).
 
 All advertised URLs derive from one resolved public location (`server.publicUrl`). The server answers every route with or without that URL's path prefix, so it runs behind reverse proxies that strip the prefix or forward it; see [Reverse Proxy Deployment](docs/infrastructure/reverse-proxy.md).
 
@@ -329,3 +327,11 @@ The headline metrics fail the run when they regress against a checked-in baselin
 - [Configuration](docs/setup/configuration.md) - Configuration layers, options and environment variables
 - [Embedding Models](docs/guides/embedding-models.md) - Choosing and configuring an embedding provider
 - [Benchmarking](docs/guides/benchmarking.md) - Running the search-quality benchmark
+
+## Local MCP Usage Statistics
+
+MCP tool registration wraps callbacks without replacing SDK methods. Each call records its transport and caller label. HTTP and SSE calls without credentials are labeled by transport, stdio calls use a local label, and OAuth calls use the provider's client identifier. Recent call metadata includes the tool, caller, library/version, transport, bounded document address, duration, success flag and a predefined failure reason. The server log uses the same failure reason. Request arguments, search text, responses and raw error messages are excluded.
+
+Each completed call atomically writes compact recent metadata to `mcp_stats` and increments `mcp_stats_daily`. Daily keys contain the UTC date, caller, tool, library/version and transport. Page addresses remain in recent metadata only, keeping the daily key cardinality independent of page reads and search text. Historical aggregates retain legacy caller IDs and labels.
+
+Overview totals, breakdowns and activity charts read the daily table with shared filters. Recent-call cleanup never changes historical counters. Migration 021 aggregates retained legacy calls before rebuilding the recent table without payload columns. See [MCP Statistics](docs/guides/mcp-statistics.md).

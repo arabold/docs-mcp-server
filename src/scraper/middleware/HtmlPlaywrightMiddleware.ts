@@ -133,7 +133,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
   /**
    * Upper bound for one page render. Navigation has its own timeout; the waits
    * and extraction after it share six page timeouts of headroom. Several of those
-   * Playwright calls take no timeout at all, and a wedged Chromium leaves them
+   * Playwright calls take no timeout at all, and a wedged browser leaves them
    * pending, so the whole render runs under this bound.
    */
   private getRenderTimeoutMs(): number {
@@ -153,7 +153,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
    * the page timeout.
    *
    * @returns Whether the page and context closed. A route that fails to clear
-   * is only logged: it says nothing about whether Chromium still responds.
+   * is only logged: it says nothing about whether Obscura still responds.
    */
   private async cleanupPageAndContext(
     page: Page | null,
@@ -836,9 +836,8 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
    * Fetches a routed request in Node, following its redirects one hop at a time
    * so that the access policy checks each target before it is requested.
    *
-   * `route.fetch` would follow the redirects unchecked, and Chromium follows a
-   * redirect it is handed without Playwright routing the next request, so no
-   * 3xx response may leave this method.
+   * Playwright's Node.js client follows redirects internally unless directed
+   * to return each response, so the scraper has to check each hop here.
    *
    * @param route - The intercepted request.
    * @param headers - The headers to send with the first hop.
@@ -1115,7 +1114,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
         handles.browserContext,
         context.source,
       );
-      // A page or context that will not close may have left Chromium stuck, and
+      // A page or context that will not close may have left Obscura stuck, and
       // so may a render that failed before it had a context of its own: that
       // call was waiting on the browser itself. Either way, replace it. A failed
       // render alone does not: its context closed cleanly, and other pages may be
@@ -1130,6 +1129,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
             : `reset after Playwright cleanup failure for ${context.source}`,
         );
       }
+      if (browser) await this.managedBrowser.release(browser);
     }
 
     if (renderedHtml !== null) {

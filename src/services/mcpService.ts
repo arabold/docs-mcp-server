@@ -16,8 +16,10 @@
  *
  * While authentication is off, it also serves the deprecated HTTP+SSE
  * transport (`GET /sse`, `POST /messages`) for handshake-era clients.
+ * In open mode, a registered app token identifies the caller in statistics.
  */
 
+import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import {
@@ -36,6 +38,7 @@ import {
   setCorsResponseHeaders,
 } from "../app/originPolicy";
 import { missingTokenChallenge } from "../auth/protectedResourceMetadata";
+import { type McpCallerContext, mcpRequestContextStore } from "../mcp/context";
 import { createMcpServerFactory } from "../mcp/mcpServer";
 import { initializeTools } from "../mcp/tools";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
@@ -70,6 +73,26 @@ export interface McpServiceDeps {
 
 /** Legacy SSE streams open at once; more connections get 503. */
 export const LEGACY_SSE_MAX_SESSIONS = 100;
+
+async function openCaller(
+  docService: IDocumentManagement,
+  headers: FastifyRequest["headers"],
+  protocol: McpCallerContext["protocol"],
+): Promise<McpCallerContext> {
+  const specificKey = headers["x-api-key"];
+  const bearer = headers.authorization?.match(/^Bearer\s+(\S+)$/i)?.[1];
+  const token = bearer ?? (typeof specificKey === "string" ? specificKey.trim() : "");
+  if (token.length >= 32 && token.length <= 256) {
+    const hash = createHash("sha256").update(token).digest("hex");
+    try {
+      const app = await docService.resolveMcpAppToken(hash);
+      if (app) return { tokenId: app.id, caller: app.name, protocol };
+    } catch {
+      logger.debug("Failed to resolve MCP application token for statistics");
+    }
+  }
+  return { caller: protocol === "http" ? "Anonymous HTTP" : "Anonymous SSE", protocol };
+}
 
 function jsonRpcError(message: string) {
   return { jsonrpc: "2.0", error: { code: -32000, message }, id: null };
@@ -152,7 +175,7 @@ function createPreflightChecks(originPolicy: OriginPolicy) {
  *
  * @param server - The Fastify instance.
  * @param deps - Services and policy the endpoint needs.
- * @param auth - Authentication for the endpoint; omit to serve it without authentication.
+ * @param auth - OAuth authentication for deployments that enable it.
  */
 export async function registerMcpService(
   server: FastifyInstance,
@@ -160,7 +183,7 @@ export async function registerMcpService(
   auth?: McpEndpointAuth,
 ): Promise<void> {
   const tools = await initializeTools(deps.docService, deps.pipeline, deps.config);
-  const createServer = createMcpServerFactory(tools, deps.config);
+  const createServer = createMcpServerFactory(tools, deps.config, deps.docService);
   const onerror = (error: Error) => logger.error(`❌ Error in MCP endpoint: ${error}`);
   const handleMcpRequest = toNodeHandler(
     createMcpHandler(createServer, { legacy: "stateless", onerror }),
@@ -188,13 +211,18 @@ export async function registerMcpService(
         }
       }
 
+      const caller: McpCallerContext = authInfo
+        ? { caller: `OAuth ${authInfo.clientId}`, protocol: "http" }
+        : await openCaller(deps.docService, request.headers, "http");
       reply.hijack();
       const raw = request.raw as IncomingMessage & { auth?: AuthInfo };
       if (authInfo) {
         raw.auth = authInfo;
       }
       // The adapter answers 500 itself and reports the failure to `onerror`.
-      await handleMcpRequest(raw, reply.raw, request.body);
+      await mcpRequestContextStore.run(caller, async () => {
+        await handleMcpRequest(raw, reply.raw, request.body);
+      });
     },
   );
 
@@ -285,9 +313,12 @@ function registerLegacySseTransport(
       if (!transport) {
         return reply.code(404).send(jsonRpcError("Unknown session."));
       }
+      const caller = await openCaller(deps.docService, request.headers, "sse");
       reply.hijack();
       try {
-        await transport.handlePostMessage(request.raw, reply.raw, request.body);
+        await mcpRequestContextStore.run(caller, () =>
+          transport.handlePostMessage(request.raw, reply.raw, request.body),
+        );
       } catch (error) {
         logger.error(`❌ Error in legacy SSE message endpoint: ${error}`);
         endWithServerError(reply.raw);

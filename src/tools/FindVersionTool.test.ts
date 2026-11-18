@@ -4,13 +4,13 @@ import { ValidationError } from "./errors";
 import { FindVersionTool } from "./FindVersionTool";
 
 describe("FindVersionTool", () => {
-  let findBestVersion: Mock<DocumentManagementService["findBestVersion"]>;
+  let resolveDocumentation: Mock<DocumentManagementService["resolveDocumentation"]>;
   let findVersionTool: FindVersionTool;
 
   beforeEach(() => {
-    findBestVersion = vi.fn();
+    resolveDocumentation = vi.fn();
     findVersionTool = new FindVersionTool({
-      findBestVersion,
+      resolveDocumentation,
     } as unknown as DocumentManagementService);
   });
 
@@ -18,49 +18,62 @@ describe("FindVersionTool", () => {
     const cases: Array<{
       label: string;
       library: string;
+      resolvedLibrary?: string;
       targetVersion?: string;
-      found: { bestMatch: string | null; hasUnversioned: boolean };
+      versions: string[];
       message: string;
     }> = [
       {
         label: "best match only",
         library: "react",
         targetVersion: "18.2.0",
-        found: { bestMatch: "18.2.0", hasUnversioned: false },
-        message: "Best match: 18.2.0.",
+        versions: ["18.2.0"],
+        message: "Best match: 18.2.0. Matches requested version 18.2.0.",
       },
       {
         label: "best match and unversioned docs",
         library: "react",
         targetVersion: "18.x",
-        found: { bestMatch: "18.3.1", hasUnversioned: true },
-        message: "Best match: 18.3.1. Unversioned docs also available.",
+        versions: ["18.3.1", ""],
+        message: "Best match: 18.3.1. Matches requested version 18.x. Unversioned docs also available.",
       },
       {
         label: "unversioned docs only",
         library: "vue",
         targetVersion: "4.0.0",
-        found: { bestMatch: null, hasUnversioned: true },
-        message: "No matching version found for vue@4.0.0, but unversioned docs exist.",
+        versions: [""],
+        message: "Requested: 4.0.0. Using unversioned documentation. The source version is unknown.",
       },
       {
         // The store receives no target version, not a stand-in for one
         label: "no target version",
         library: "react",
-        found: { bestMatch: "18.3.1", hasUnversioned: false },
+        versions: ["18.3.1"],
         message: "Best match: 18.3.1.",
+      },
+      {
+        label: "alias and same-line fallback",
+        library: "Spring Boot",
+        resolvedLibrary: "spring-boot",
+        targetVersion: "3.4.1",
+        versions: ["3.4.13", ""],
+        message: "Indexed library: spring-boot. Best match: 3.4.13. Requested: 3.4.1. Using a different indexed version. Unversioned docs also available.",
       },
     ];
 
-    for (const { label, library, targetVersion, found, message } of cases) {
-      findBestVersion.mockResolvedValueOnce(found);
+    for (const { label, library, resolvedLibrary, targetVersion, versions, message } of cases) {
+      resolveDocumentation.mockResolvedValueOnce({ library: resolvedLibrary ?? library, versions });
 
       const result = await findVersionTool.execute({ library, targetVersion });
 
       expect
-        .soft(findBestVersion, label)
+        .soft(resolveDocumentation, label)
         .toHaveBeenLastCalledWith(library, targetVersion);
-      expect.soft(result, label).toEqual({ ...found, message });
+      expect.soft(result, label).toEqual({
+        bestMatch: versions[0] || null,
+        hasUnversioned: versions.includes(""),
+        message,
+      });
     }
   });
 
@@ -72,7 +85,7 @@ describe("FindVersionTool", () => {
     ];
 
     for (const error of errors) {
-      findBestVersion.mockRejectedValueOnce(error);
+      resolveDocumentation.mockRejectedValueOnce(error);
       await expect
         .soft(findVersionTool.execute({ library: "react" }), error.message)
         .rejects.toBe(error);

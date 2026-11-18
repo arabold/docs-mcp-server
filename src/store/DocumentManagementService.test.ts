@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventBusService } from "../events";
+import { FindVersionTool } from "../tools/FindVersionTool";
+import { SearchTool } from "../tools/SearchTool";
 import type { AppConfig } from "../utils/config";
 import { loadConfig } from "../utils/config";
 import { DocumentManagementService } from "./DocumentManagementService";
@@ -619,6 +621,36 @@ describe("DocumentManagementService", () => {
       contentType = "text/markdown",
     ) => addPage(library, "1.0.0", url, chunks, contentType);
 
+    it("reads only the requested section from chunks indexed without section metadata", async () => {
+      // arrange
+      const url = "https://x.dev/api?id=section1";
+      await addPageToRead(url, ["Page introduction", "Selected section", "Other section"]);
+
+      // act
+      const result = await docService.getPageContent(library, "1.0.0", url);
+
+      // assert
+      expect(result).toMatchObject({ url, content: "Selected section", totalChunks: 1 });
+    });
+
+    it("reads a page from another indexed version when the requested version lacks it", async () => {
+      // arrange
+      await addPage("pages-lib", "2.0.0", "https://x.dev/other");
+      await addPageToRead("https://x.dev/guide");
+
+      // act
+      const result = await docService.getPageContent(library, "2.0.0", "/guide", {
+        useVersionFallback: true,
+      });
+
+      // assert
+      expect(result.documentationVersion).toEqual({
+        indexedVersion: "1.0.0",
+        requestedVersion: "2.0.0",
+        versionMatch: "different",
+      });
+    });
+
     it("reads a page stored with a percent-encoded URL when given that exact URL", async () => {
       await addPageToRead("https://x.dev/docs/My%20Page");
 
@@ -767,6 +799,82 @@ describe("DocumentManagementService", () => {
       expect(result.total).toBe(3);
       expect(result.pages).toHaveLength(2);
       expect(result.hasMore).toBe(true);
+    });
+  });
+
+  describe("documentation search", () => {
+    it("prefers the same release line over generic docs for a missing patch version", async () => {
+      // arrange
+      const query = "Java requirements";
+      await addPage("library", "", "https://x.dev/current", [query]);
+      await addPage("library", "4.1.2", "https://x.dev/4.1", [query]);
+      await addPage("library", "3.4.13", "https://x.dev/3.4", [query]);
+      await addPage("library", "3.3.0", "https://x.dev/3.3", [query]);
+      await addVersions("library", ["3.4.1"]);
+
+      // act
+      const result = await new SearchTool(docService).execute({
+        library: "library",
+        query,
+        version: "3.4.1",
+        useVersionFallback: true,
+      });
+      const version = await new FindVersionTool(docService).execute({
+        library: "library",
+        targetVersion: "3.4.1",
+      });
+
+      // assert
+      expect(result.documentationVersion).toMatchObject({
+        indexedVersion: "3.4.13",
+        requestedVersion: "3.4.1",
+        versionMatch: "different",
+      });
+      expect(version.bestMatch).toBe(result.documentationVersion?.indexedVersion);
+    });
+
+    it("looks up an already indexed package by its alias", async () => {
+      // arrange
+      await addPage("tanstack-query", "5.0.0", "https://x.dev/useQuery", ["useQuery"]);
+
+      // act
+      const result = await new SearchTool(docService).execute({
+        library: "@tanstack/react-query",
+        query: "useQuery",
+        version: "5.x",
+        useVersionFallback: true,
+      });
+
+      // assert
+      expect(result).toMatchObject({
+        library: "tanstack-query",
+        documentationVersion: {
+          indexedVersion: "5.0.0",
+          requestedVersion: "5.x",
+          versionMatch: "matched",
+        },
+        results: [{ url: "https://x.dev/useQuery" }],
+      });
+    });
+
+    it("finds an exact identifier in another version after a partial match", async () => {
+      // arrange
+      await addPage("library", "2.0.0", "https://x.dev/new", ["z.other()"]);
+      await addPage("library", "1.0.0", "https://x.dev/old", ["z.discriminatedUnion()"]);
+
+      // act
+      const result = await new SearchTool(docService).execute({
+        library: "library",
+        query: "z.discriminatedUnion() other",
+        version: "2.0.0",
+        useVersionFallback: true,
+      });
+
+      // assert
+      expect(result).toMatchObject({
+        documentationVersion: { indexedVersion: "1.0.0", versionMatch: "different" },
+        results: [{ content: "z.discriminatedUnion()" }],
+      });
     });
   });
 });

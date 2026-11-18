@@ -21,6 +21,7 @@ export interface Chunk {
   section: {
     level: number;
     path: string[];
+    target?: string;
   };
 }
 

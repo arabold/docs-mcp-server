@@ -22,7 +22,6 @@ import {
   type CliContext,
   checkAuthForProtocol,
   createAppServerConfig,
-  ensurePlaywrightBrowsersInstalled,
   getEventBus,
   handleEmbeddingModelChange,
   resolveProtocol,
@@ -108,9 +107,6 @@ export function createMcpCommand(cli: Argv) {
 
       checkAuthForProtocol(appConfig.auth, resolvedProtocol, appConfig.server.ports.mcp);
 
-      // The fetch_url tool renders pages here, even when jobs run on a server
-      ensurePlaywrightBrowsersInstalled();
-
       try {
         const serverUrl = argv.serverUrl as string | undefined;
 
@@ -140,7 +136,11 @@ export function createMcpCommand(cli: Argv) {
             backend.pipeline,
             appConfig,
           );
-          const mcpServer = await startStdioServer(mcpTools, appConfig);
+          const mcpServer = await startStdioServer(
+            mcpTools,
+            appConfig,
+            backend.docService,
+          );
 
           registerGlobalServices({ mcpStdioServer: mcpServer });
 

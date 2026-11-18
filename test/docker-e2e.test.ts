@@ -3,11 +3,10 @@
  *
  * Exercises the actual production container end-to-end:
  *   1. Container starts and runs as a non-root user (security hardening).
- *   2. Chromium is installed where the runtime expects it (Playwright path).
+ *   2. Obscura is installed and can start.
  *   3. The Playwright-backed scrape pipeline renders a page served from the
  *      host, running its JavaScript, and a live documentation site whose
- *      content only its scripts produce. It uses the image's Chromium and
- *      never downloads Playwright's own.
+ *      content only its scripts produce. It uses the image's Obscura.
  *   4. The Xberg-backed PDF pipeline can extract a PDF from a mounted volume.
  *   5. The web server serves the built admin UI (SPA shell, hashed assets,
  *      client-route fallback) and the tRPC API over HTTP.
@@ -192,18 +191,17 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     expect(uid).toBe("1000"); // the `node` user shipped by the base image
   });
 
-  it("ships Chromium where the Playwright runtime expects it", async () => {
+  it("ships the pinned Obscura binary", async () => {
     const r = await docker([
       "run",
       "--rm",
       "--entrypoint",
-      "sh",
+      "/usr/local/bin/obscura",
       IMAGE_TAG,
-      "-c",
-      "test -x /usr/bin/chromium && echo OK",
+      "--version",
     ]);
     expect(r.status, r.stderr).toBe(0);
-    expect(r.stdout).toContain("OK");
+    expect(r.stdout).toContain("0.2.7");
   });
 
   it("renders a page's JavaScript through the Playwright pipeline", async () => {
@@ -252,12 +250,10 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     }
   }, 240_000);
 
-  it("renders with the image's Chromium instead of downloading Playwright's", async () => {
+  it("fetches rendered HTML with the image's Obscura", async () => {
     const page = await startScriptedPage();
     const pageUrl = `http://host.docker.internal:${page.port}/`;
     try {
-      // fetch-url makes sure a browser is installed before it renders. A
-      // download would land in Playwright's cache in the user's home.
       const r = await docker(
         [
           "run",
@@ -286,10 +282,8 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-docker-live-"));
     fs.chmodSync(dataDir, 0o777);
     // Docsify serves an empty `<div id="app">`. Its scripts, loaded from a CDN,
-    // fetch README.md and render it, so the tagline below reaches the store only
-    // when Chromium ran them; the shell's meta description lacks "site". A
-    // Chromium that starts but cannot load the scripts renders an empty app,
-    // which only the content check catches.
+    // fetch README.md and render it. The tagline reaches the store only after
+    // Obscura runs the scripts, because the HTML shell lacks that content.
     const siteUrl = "https://docsify.js.org/";
     try {
       const r = await docker(

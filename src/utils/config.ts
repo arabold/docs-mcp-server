@@ -247,6 +247,9 @@ export const AppConfigSchema = z.object({
       telemetryEnabled: envBoolean.default(DEFAULT_CONFIG.app.telemetryEnabled),
       readOnly: envBoolean.default(DEFAULT_CONFIG.app.readOnly),
       embeddingModel: z.string().default(DEFAULT_CONFIG.app.embeddingModel),
+      libraryAliases: z
+        .record(z.string().trim().min(1), z.string().trim().min(1))
+        .optional(),
     })
     .default(DEFAULT_CONFIG.app),
   server: z

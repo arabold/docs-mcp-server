@@ -48,7 +48,7 @@ export function AreaChart({
   const gradientId = useId();
   const classes = className ? `chart ${className}` : "chart";
 
-  if (values.length < 2) {
+  if (values.length === 0) {
     return (
       <svg
         className={classes}
@@ -69,7 +69,8 @@ export function AreaChart({
   const span = max - min || 1;
 
   const coords = values.map((value, index) => {
-    const x = plotLeft + (index / (values.length - 1)) * (plotRight - plotLeft);
+    const offset = values.length === 1 ? 0.5 : index / (values.length - 1);
+    const x = plotLeft + offset * (plotRight - plotLeft);
     const y = plotBottom - ((value - min) / span) * (plotBottom - plotTop);
     return [x, y] as const;
   });
@@ -112,7 +113,7 @@ export function AreaChart({
           textAnchor="end"
         >
           {yLabels.map((text, i) => (
-            <text key={text} x={plotLeft - 8} y={(gridY[i] ?? plotTop) + 4}>
+            <text key={gridY[i]} x={plotLeft - 8} y={(gridY[i] ?? plotTop) + 4}>
               {text}
             </text>
           ))}
@@ -145,7 +146,11 @@ export function AreaChart({
           {xLabels.map((text, i) => (
             <text
               key={text}
-              x={plotLeft + (i / (xLabels.length - 1 || 1)) * (plotRight - plotLeft)}
+              x={
+                plotLeft +
+                (xLabels.length === 1 ? 0.5 : i / (xLabels.length - 1)) *
+                  (plotRight - plotLeft)
+              }
               y={height - 12}
             >
               {text}

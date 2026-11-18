@@ -22,7 +22,6 @@ import {
   type CliContext,
   checkAuthForProtocol,
   createAppServerConfig,
-  ensurePlaywrightBrowsersInstalled,
   getEventBus,
   handleEmbeddingModelChange,
   resolveProtocol,
@@ -110,8 +109,6 @@ export function createDefaultAction(cli: Argv) {
         appConfig.server.ports.default,
       );
 
-      ensurePlaywrightBrowsersInstalled();
-
       const eventBus = getEventBus(argv as CliContext);
 
       const backend = await openBackend({
@@ -143,7 +140,7 @@ export function createDefaultAction(cli: Argv) {
           backend.pipeline,
           appConfig,
         );
-        const mcpServer = await startStdioServer(mcpTools, appConfig);
+        const mcpServer = await startStdioServer(mcpTools, appConfig, backend.docService);
 
         registerGlobalServices({ mcpStdioServer: mcpServer });
 

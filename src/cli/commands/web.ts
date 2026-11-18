@@ -13,7 +13,6 @@ import { registerGlobalServices } from "../services";
 import {
   type CliContext,
   createAppServerConfig,
-  ensurePlaywrightBrowsersInstalled,
   getEventBus,
   validateHost,
   validatePort,
@@ -66,11 +65,6 @@ export function createWebCommand(cli: Argv) {
         // loadConfig needs options to find file.
         searchDir: argv.storePath as string,
       });
-
-      // With a server URL, the server runs the jobs and their browser
-      if (!serverUrl) {
-        ensurePlaywrightBrowsersInstalled();
-      }
 
       try {
         const eventBus = getEventBus(argv as CliContext);

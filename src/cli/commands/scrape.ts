@@ -17,12 +17,7 @@ import { logger } from "../../utils/logger";
 import { followJobLogs } from "../JobOutputFollower";
 import { renderTextOutput } from "../output";
 import { registerGlobalServices } from "../services";
-import {
-  type CliContext,
-  ensurePlaywrightBrowsersInstalled,
-  getEventBus,
-  parseHeaders,
-} from "../utils";
+import { type CliContext, getEventBus, parseHeaders } from "../utils";
 
 export function createScrapeCommand(cli: Argv) {
   cli.command(
@@ -196,11 +191,6 @@ export function createScrapeCommand(cli: Argv) {
         hasExcludePatterns: (argv.excludePattern as string[]).length > 0,
         useServerUrl: !!serverUrl,
       });
-
-      // With a server URL, the server runs the job and its browser
-      if (!serverUrl) {
-        ensurePlaywrightBrowsersInstalled();
-      }
 
       const eventBus = getEventBus(argv as CliContext);
 

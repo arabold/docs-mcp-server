@@ -9,6 +9,17 @@ import {
 } from "./HtmlPlaywrightMiddleware";
 import type { MiddlewareContext } from "./types";
 
+const { obscuraClose } = vi.hoisted(() => ({ obscuraClose: vi.fn(async () => {}) }));
+
+vi.mock("../fetcher/obscura", () => ({
+  startObscura: async () => ({
+    endpoint: "ws://127.0.0.1:9222/devtools/browser",
+    token: "test-token",
+    isRunning: () => true,
+    close: obscuraClose,
+  }),
+}));
+
 /**
  * The real scraper defaults, with the test hosts listed so the access policy
  * accepts them without a DNS lookup. IP literals are still checked against the
@@ -79,12 +90,6 @@ function fakeBrowser(page: FakePage) {
   page.context.mockReturnValue(browserContext);
   const browser = {
     newContext: vi.fn().mockResolvedValue(browserContext),
-    // The CDP session ManagedBrowser checks redirects in.
-    newBrowserCDPSession: vi.fn().mockResolvedValue({
-      on: vi.fn(),
-      send: vi.fn().mockResolvedValue({}),
-      detach: vi.fn().mockResolvedValue(undefined),
-    }),
     isConnected: vi.fn().mockReturnValue(true),
     on: vi.fn(),
     close: vi.fn().mockResolvedValue(undefined),
@@ -93,7 +98,9 @@ function fakeBrowser(page: FakePage) {
 }
 
 function launch(browser: ReturnType<typeof fakeBrowser>["browser"]) {
-  return vi.spyOn(chromium, "launch").mockResolvedValue(browser as unknown as Browser);
+  return vi
+    .spyOn(chromium, "connectOverCDP")
+    .mockResolvedValue(browser as unknown as Browser);
 }
 
 function fakeResponse(body: string, contentType: string, status = 200) {
@@ -177,9 +184,10 @@ describe("HtmlPlaywrightMiddleware", () => {
   beforeEach(() => {
     middleware = new HtmlPlaywrightMiddleware(makeScraperConfig());
     next.mockReset();
-    // Unit tests never start Chromium; each test that renders provides a fake.
-    vi.spyOn(chromium, "launch").mockRejectedValue(
-      new Error("Chromium is not available"),
+    obscuraClose.mockClear();
+    // Unit tests never open a real CDP connection; each test that renders provides a fake.
+    vi.spyOn(chromium, "connectOverCDP").mockRejectedValue(
+      new Error("CDP is not available"),
     );
   });
 
@@ -207,7 +215,7 @@ describe("HtmlPlaywrightMiddleware", () => {
         expect.soft(context.content, label).toBe(FETCHED_HTML);
         expect.soft(context.errors, label).toEqual([]);
       }
-      expect(chromium.launch).not.toHaveBeenCalled();
+      expect(chromium.connectOverCDP).not.toHaveBeenCalled();
       expect(next).toHaveBeenCalledTimes(cases.length);
     });
 
@@ -354,7 +362,7 @@ describe("HtmlPlaywrightMiddleware", () => {
 
         expect(context.content).toBe(RENDERED_HTML);
         expect(context.errors).toEqual([]);
-        expect(fakes.browser.close).toHaveBeenCalled();
+        expect(obscuraClose).toHaveBeenCalled();
         expect(next).toHaveBeenCalledOnce();
       },
     );
@@ -367,9 +375,9 @@ describe("HtmlPlaywrightMiddleware", () => {
 
       await middleware.process(htmlContext(), next);
 
-      // The page and context closed, so nothing suggests Chromium is stuck.
+      // The page and context closed, so the shared Obscura process stays available.
       expect(page.close).toHaveBeenCalled();
-      expect(browser.close).not.toHaveBeenCalled();
+      expect(obscuraClose).not.toHaveBeenCalled();
     });
 
     describe("render deadline", () => {
@@ -436,9 +444,9 @@ describe("HtmlPlaywrightMiddleware", () => {
             expect(fakes[name].close).toHaveBeenCalled();
           }
           if (replacesBrowser) {
-            expect(fakes.browser.close).toHaveBeenCalled();
+            expect(obscuraClose).toHaveBeenCalled();
           } else {
-            expect(fakes.browser.close).not.toHaveBeenCalled();
+            expect(obscuraClose).not.toHaveBeenCalled();
           }
           expect(next).toHaveBeenCalledOnce();
         },

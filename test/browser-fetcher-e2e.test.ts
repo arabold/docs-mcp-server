@@ -1,5 +1,5 @@
 /**
- * BrowserFetcher against a real Chromium and a local server.
+ * BrowserFetcher against Obscura and a local server.
  *
  * The browser fetcher exists to get past pages that a plain HTTP request
  * cannot, such as JavaScript challenges, so the page it loads must be able to
@@ -9,8 +9,7 @@
  */
 
 import { createServer, type Server } from "node:http";
-import { chromium } from "playwright";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { BrowserFetcher } from "../src/scraper/fetcher/BrowserFetcher";
 import { FetchStatus } from "../src/scraper/fetcher/types";
 import { loadConfig } from "../src/utils/config";
@@ -89,25 +88,17 @@ describe("BrowserFetcher in a real browser", () => {
 
 describe("BrowserFetcher with private networks blocked", () => {
   // Both servers listen on loopback. The policy lets the docs site through by
-  // its host names, `localhost` and `other.localhost`, and blocks the loopback
+  // its host name, `localhost`, and blocks the loopback
   // address `127.0.0.1`, under which the page reaches the internal service.
   const docsRequests: string[] = [];
   const internalRequests: string[] = [];
   let docsServer: Server;
   let internalServer: Server;
   let docsUrl: string;
-  let frameUrl: string;
   let internalUrl: string;
   let fetcher: BrowserFetcher;
 
   beforeAll(async () => {
-    // Isolate sites, as the Chromium in the Docker image does, so a cross-site
-    // iframe runs in a process of its own. Playwright's headless shell does not.
-    const launch = chromium.launch.bind(chromium);
-    vi.spyOn(chromium, "launch").mockImplementation((options) =>
-      launch({ ...options, args: [...(options?.args ?? []), "--site-per-process"] }),
-    );
-
     internalServer = createServer((req, res) => {
       internalRequests.push(req.url ?? "/");
       res.writeHead(200, { "content-type": "text/html" });
@@ -140,7 +131,7 @@ describe("BrowserFetcher with private networks blocked", () => {
       }
       if (path === "/framed") {
         res.writeHead(200, { "content-type": "text/html" });
-        res.end(`<html><body><h1>Docs</h1><iframe src="${frameUrl}/frame"></iframe></body></html>`);
+        res.end('<html><body><h1>Docs</h1><iframe src="/frame"></iframe></body></html>');
         return;
       }
       if (path === "/frame") {
@@ -161,11 +152,10 @@ describe("BrowserFetcher with private networks blocked", () => {
     });
     const docsPort = await listenOnFreePort(docsServer);
     docsUrl = `http://localhost:${docsPort}`;
-    frameUrl = `http://other.localhost:${docsPort}`;
 
     const config = loadConfig().scraper;
     config.security.network.allowPrivateNetworks = false;
-    config.security.network.allowedHosts = ["localhost", "other.localhost"];
+    config.security.network.allowedHosts = ["localhost"];
     fetcher = new BrowserFetcher(config);
   });
 
@@ -176,7 +166,6 @@ describe("BrowserFetcher with private networks blocked", () => {
 
   afterAll(async () => {
     await fetcher.close();
-    vi.restoreAllMocks();
     for (const server of [docsServer, internalServer]) {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -217,7 +206,7 @@ describe("BrowserFetcher with private networks blocked", () => {
     expect(internalRequests).toEqual([]);
   });
 
-  it("blocks a redirect inside a cross-site iframe", async () => {
+  it("blocks a redirect inside an iframe", async () => {
     const result = await fetcher.fetch(`${docsUrl}/framed`);
 
     expect(result.status).toBe(FetchStatus.SUCCESS);

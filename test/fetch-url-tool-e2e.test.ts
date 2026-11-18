@@ -119,23 +119,25 @@ describe("FetchUrlTool E2E", () => {
       );
     });
 
-    it("rejects a 404 response with a ToolError naming the URL", async () => {
+    it("reports the HTTP status and URL when the remote site returns 404", async () => {
+      // arrange
       const url = "https://httpbin.org/status/404";
 
-      await expect(fetchUrlTool.execute({ url })).rejects.toThrow(
+      // act
+      const result = fetchUrlTool.execute({ url });
+
+      // assert
+      await expect(result).rejects.toThrow(
         expect.objectContaining({
           name: "ToolError",
-          message: expect.stringContaining(url),
+          message: `HTTP 404 while fetching "${url}".`,
         }),
       );
     });
 
-    // Today the error reads "Processing resulted in empty content".
-    it.todo("reports a 404 response as not found");
-
     it("rejects a page the browser cannot render in Playwright mode with a ToolError naming the render", async () => {
       // Every launch fails at once, without needing a real browser.
-      vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", "/nonexistent/chromium");
+      vi.stubEnv("OBSCURA_EXECUTABLE_PATH", "/nonexistent/obscura");
       const url = "https://httpbin.org/html";
 
       try {

@@ -10,6 +10,7 @@ import {
 } from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
+import { withTimeout } from "../../utils/timeout";
 import { detectChallengePage } from "./challenge";
 import { FingerprintGenerator } from "./FingerprintGenerator";
 import {
@@ -18,6 +19,7 @@ import {
   withoutBrowserManagedHeaders,
 } from "./headers";
 import { ManagedBrowser } from "./ManagedBrowser";
+import { PROXY_POLICY_HEADER } from "./obscuraProxy";
 import {
   type ContentFetcher,
   type FetchOptions,
@@ -40,6 +42,7 @@ export class BrowserFetcher implements ContentFetcher {
   private readonly managedBrowser: ManagedBrowser;
   private fingerprintGenerator: FingerprintGenerator;
   private readonly defaultTimeoutMs: number;
+  private readonly closeTimeoutMs: number;
   private readonly accessPolicy: ScraperAccessPolicy;
 
   /**
@@ -53,6 +56,7 @@ export class BrowserFetcher implements ContentFetcher {
   ) {
     this.managedBrowser = managedBrowser;
     this.defaultTimeoutMs = scraperConfig.browserTimeoutMs;
+    this.closeTimeoutMs = scraperConfig.pageTimeoutMs;
     this.fingerprintGenerator = new FingerprintGenerator();
     this.accessPolicy = new ScraperAccessPolicy(scraperConfig.security);
   }
@@ -75,22 +79,22 @@ export class BrowserFetcher implements ContentFetcher {
       options?.signal?.throwIfAborted();
       await this.accessPolicy.assertNetworkUrlAllowed(source);
 
-      const browser = await this.managedBrowser.get();
+      let browser = await this.managedBrowser.get();
       try {
         return await this.fetchWithBrowser(browser, source, options);
       } catch (error) {
         if (this.managedBrowser.isCurrent(browser) || options?.signal?.aborted) {
           throw error;
         }
-        // The browser went away under this page: Chromium exited (e.g. under
+        // The browser went away under this page: Obscura exited (e.g. under
         // memory pressure), or another user retired it. The page never got a
         // fair attempt, so give it one more on the current browser.
         logger.warn(`⚠️  Browser closed while fetching ${source}, retrying once`);
-        return await this.fetchWithBrowser(
-          await this.managedBrowser.get(),
-          source,
-          options,
-        );
+        await this.managedBrowser.release(browser);
+        browser = await this.managedBrowser.get();
+        return await this.fetchWithBrowser(browser, source, options);
+      } finally {
+        await this.managedBrowser.release(browser);
       }
     } catch (error) {
       if (options?.signal?.aborted) {
@@ -159,14 +163,15 @@ export class BrowserFetcher implements ContentFetcher {
 
         return await route.continue();
       });
-      // The browser fails redirects to blocked addresses (see ManagedBrowser);
-      // remember which hop stopped the navigation, to name it in the error.
+      // Keep the request URL for navigation failures reported by Playwright.
       let blockedNavigation: string | undefined;
       page.on("requestfailed", (request) => {
         if (
           request.frame() === page?.mainFrame() &&
           request.isNavigationRequest() &&
-          request.failure()?.errorText.includes("ERR_BLOCKED_BY_CLIENT")
+          /ERR_BLOCKED_BY_CLIENT|BlockedByClient/i.test(
+            request.failure()?.errorText ?? "",
+          )
         ) {
           blockedNavigation = request.url();
         }
@@ -180,7 +185,7 @@ export class BrowserFetcher implements ContentFetcher {
         ...fingerprintHeaders,
         ...options?.headers,
       };
-      // Chromium sets the Sec-Fetch-* and connection-level headers itself;
+      // Obscura sets the Sec-Fetch-* and connection-level headers itself;
       // overriding them would make it fail the page's scripts, styles and other
       // sub-resources, or the navigation itself. The request API is
       // Playwright's own client, so it keeps them.
@@ -209,7 +214,7 @@ export class BrowserFetcher implements ContentFetcher {
         response = await page.goto(source, { waitUntil: "load", timeout });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (/ERR_BLOCKED_BY_CLIENT/.test(message)) {
+        if (/ERR_BLOCKED_BY_CLIENT|BlockedByClient/i.test(message)) {
           throw new AccessPolicyError(
             `Security policy blocked network access to ${blockedNavigation ?? source}`,
           );
@@ -275,6 +280,14 @@ export class BrowserFetcher implements ContentFetcher {
       // content type, body, etag — must come from the document that actually
       // ended up loaded, not from the one page.goto() first returned.
       response = lastMainFrameResponse ?? response;
+      if (
+        finalUrl.startsWith("http:") &&
+        response.headers()[PROXY_POLICY_HEADER] === "1"
+      ) {
+        throw new AccessPolicyError(
+          `Security policy blocked network access to ${finalUrl}`,
+        );
+      }
       const finalStatus = response.status();
       if (finalStatus === 404) {
         logger.debug(`Browser navigation to ${source} returned 404`);
@@ -327,9 +340,16 @@ export class BrowserFetcher implements ContentFetcher {
       } satisfies RawContent;
     } finally {
       options?.signal?.removeEventListener("abort", closeOnAbort);
-      await page?.unroute("**/*").catch(() => undefined);
-      await page?.close().catch(() => undefined);
-      await browserContext?.close().catch(() => undefined);
+      try {
+        const cleanup = async () => {
+          await page?.unroute("**/*").catch(() => undefined);
+          await page?.close().catch(() => undefined);
+          await browserContext?.close().catch(() => undefined);
+        };
+        await withTimeout(cleanup(), this.closeTimeoutMs, "Browser fetch cleanup");
+      } catch (error) {
+        await this.managedBrowser.retire(browser, `fetch cleanup failed: ${error}`);
+      }
     }
   }
 
@@ -346,7 +366,7 @@ export class BrowserFetcher implements ContentFetcher {
    * @param timeout - Navigation/request timeout in milliseconds.
    * @param headers - The composed fingerprint and caller headers, including
    * any Sec-Fetch-* or connection-level values among them. The page itself
-   * leaves those to Chromium; the request-API call sends them as composed, so
+   * leaves those to Obscura. The request-API call sends them as composed, so
    * it presents the same client identity as the browser that (potentially)
    * just solved a challenge.
    * @returns The fetched raw content.

@@ -1,5 +1,12 @@
 import type { AppConfig } from "../utils/config";
+import { MimeTypeUtils } from "../utils/mimeTypeUtils";
+import { parseUrl, sectionQueryBase, sectionSlug } from "../utils/sections";
 import { createContentAssemblyStrategy } from "./assembly/ContentAssemblyStrategyFactory";
+import {
+  addUsageContext,
+  focusMarkdownPassage,
+  requestedApiNames,
+} from "./assembly/markdownPassage";
 import type { DocumentStore } from "./DocumentStore";
 import {
   type DbChunkRank,
@@ -7,6 +14,8 @@ import {
   normalizeVersionLabel,
   type StoreSearchResult,
 } from "./types";
+
+const USAGE_CHUNK_RADIUS = 8;
 
 export class DocumentRetrieverService {
   private documentStore: DocumentStore;
@@ -48,7 +57,7 @@ export class DocumentRetrieverService {
     const resultsByUrl = this.groupResultsByUrl(initialResults);
 
     // Process each URL group with appropriate strategy
-    const results: StoreSearchResult[] = [];
+    const results: Array<StoreSearchResult & { priority: number }> = [];
     for (const [url, urlResults] of resultsByUrl.entries()) {
       // Cluster chunks based on distance
       const clusters = this.clusterChunksByDistance(urlResults);
@@ -60,6 +69,7 @@ export class DocumentRetrieverService {
           normalizedVersion,
           url,
           cluster,
+          query,
         );
         results.push(result);
       }
@@ -68,9 +78,18 @@ export class DocumentRetrieverService {
     // Sort all results by score descending
     // This ensures that if a highly relevant chunk was split from a less relevant one,
     // the highly relevant one appears first in the final list.
-    results.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    results.sort(
+      (a, b) => b.priority - a.priority || (b.score ?? 0) - (a.score ?? 0),
+    );
 
-    return results;
+    const seen = new Set<string>();
+    return results.flatMap(({ priority: _priority, ...result }) => {
+      const page = sectionQueryBase(result.url) ?? result.url;
+      const key = JSON.stringify([page, result.content]);
+      if (seen.has(key)) return [];
+      seen.add(key);
+      return [result];
+    });
   }
 
   /**
@@ -103,23 +122,16 @@ export class DocumentRetrieverService {
     version: string,
     url: string,
     initialChunks: (DbPageChunk & DbChunkRank)[],
-  ): Promise<StoreSearchResult> {
-    // Extract processed and source MIME types from page-level fields.
-    // Convert null to undefined for consistency.
-    const mimeType =
-      initialChunks.length > 0 ? (initialChunks[0].content_type ?? undefined) : undefined;
-    const sourceMimeType =
-      initialChunks.length > 0
-        ? (initialChunks[0].source_content_type ?? undefined)
-        : undefined;
-    // The identity can be one this crawl derived rather than one the site
-    // serves, so a caller linking to the source needs the location that
-    // actually answered. Undefined when the two coincide.
-    const contentUrl =
-      initialChunks.length > 0 ? (initialChunks[0].content_url ?? undefined) : undefined;
-
-    // Find the maximum score from the initial results
-    const maxScore = Math.max(...initialChunks.map((chunk) => chunk.score));
+    query: string,
+  ): Promise<StoreSearchResult & { priority: number }> {
+    const best = initialChunks.reduce((current, candidate) => {
+      const difference =
+        (candidate.documentationPriority ?? 0) - (current.documentationPriority ?? 0);
+      return (difference || candidate.score - current.score) > 0 ? candidate : current;
+    });
+    const mimeType = best.content_type ?? undefined;
+    const sourceMimeType = best.source_content_type ?? undefined;
+    const contentUrl = best.content_url ?? undefined;
 
     // Create appropriate assembly strategy based on content type
     const strategy = createContentAssemblyStrategy(mimeType, this.config);
@@ -132,16 +144,117 @@ export class DocumentRetrieverService {
       this.documentStore,
     );
 
-    const content = strategy.assembleContent(selectedChunks);
+    const assembled = strategy.assembleContent(selectedChunks);
+    const headingHint = best.metadata.path?.at(-1);
+    const passage =
+      mimeType && MimeTypeUtils.isMarkdown(mimeType)
+        ? focusMarkdownPassage(
+            assembled,
+            query,
+            this.config.splitter.maxChunkSize,
+            headingHint,
+          )
+        : { content: assembled };
+    const heading = passage.heading ?? headingHint;
+    const sectionUrl = await this.findSectionUrl(
+      library,
+      version,
+      url,
+      heading,
+      selectedChunks,
+    );
+    const content =
+      mimeType && MimeTypeUtils.isMarkdown(mimeType)
+        ? await this.withUsageContext(library, version, best, query, passage.content)
+        : passage.content;
 
     return {
       url,
       contentUrl,
+      sectionUrl,
       content,
-      score: maxScore,
+      score: best.score,
       mimeType,
       sourceMimeType,
+      priority: best.documentationPriority ?? 0,
     };
+  }
+
+  private async withUsageContext(
+    library: string,
+    version: string,
+    best: DbPageChunk,
+    query: string,
+    passage: string,
+  ): Promise<string> {
+    const pathname = parseUrl(best.url)?.pathname ?? "";
+    const pageName =
+      pathname.split("/").filter(Boolean).at(-1)?.replace(/\.(?:html?|mdx?)$/i, "") ??
+      "";
+    const title = best.title?.split(/\s+(?:[|–—]|::)\s+/)[0] ?? "";
+    const names = requestedApiNames(query, title, pageName);
+    const cliPath = pathname.split("/reference/cli/")[1];
+    const cliCommand = cliPath?.split("/").filter(Boolean).join(" ");
+    const queryWords = ` ${query.toLowerCase().trim().replace(/[^\w-]+/g, " ")} `;
+    const command =
+      cliCommand && queryWords.includes(` ${cliCommand} `) ? cliCommand : undefined;
+    if (!names.length && !command) return passage;
+
+    const first = Math.max(0, best.sort_order - USAGE_CHUNK_RADIUS);
+    const chunks = await this.documentStore.findChunksByUrl(library, version, best.url, {
+      first,
+      last: best.sort_order + USAGE_CHUNK_RADIUS,
+    });
+    const pageStart =
+      first !== 0
+        ? await this.documentStore.findChunksByUrl(library, version, best.url, {
+            first: 0,
+            last: 0,
+          })
+        : [];
+    const nearby = [...pageStart, ...chunks].map((chunk) => chunk.content).join("\n\n");
+    return addUsageContext(
+      passage,
+      nearby,
+      query,
+      { names, command },
+      this.config.splitter.maxChunkSize,
+    );
+  }
+
+  private async findSectionUrl(
+    library: string,
+    version: string,
+    url: string,
+    heading: string | undefined,
+    chunks: DbPageChunk[],
+  ): Promise<string | undefined> {
+    const slug = sectionSlug(heading ?? "");
+    if (slug) {
+      const recorded = new Set(
+        chunks
+          .filter((chunk) => sectionSlug(chunk.metadata.path?.at(-1) ?? "") === slug)
+          .map((chunk) => chunk.metadata.sectionTarget)
+          .filter(Boolean),
+      );
+      if (recorded.size === 1) return [...recorded][0];
+    }
+
+    const base = sectionQueryBase(url);
+    const parsed = parseUrl(base ?? url);
+    if (!parsed || parsed.hash || parsed.search || !/^https?:$/.test(parsed.protocol)) {
+      return undefined;
+    }
+    if (slug) {
+      parsed.searchParams.set("id", slug);
+      const candidates = await this.documentStore.findPageUrls(library, version, [
+        parsed.href,
+      ]);
+      if (candidates.length > 0) return parsed.href;
+    }
+    if (!base) return undefined;
+    const [page] = await this.documentStore.findPageUrls(library, version, [base]);
+    return page;
   }
 
   /**

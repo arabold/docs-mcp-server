@@ -11,6 +11,7 @@ import superjson from "superjson";
 import { z } from "zod";
 import type { EventBusService } from "../events";
 import { createEventsRouter, type EventsTrpcContext } from "../events/trpc/router";
+import { describeMcpFailure } from "../mcp/utils";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import { createPipelineRouter, type PipelineTrpcContext } from "../pipeline/trpc/router";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
@@ -52,6 +53,12 @@ export interface AppRouterContextDeps {
 
 const t = initTRPC.context<AppRouterContext>().create({
   transformer: superjson,
+  errorFormatter({ shape, error }) {
+    return {
+      ...shape,
+      data: { ...shape.data, mcpFailureReason: describeMcpFailure(error.cause) },
+    };
+  },
 });
 
 /**

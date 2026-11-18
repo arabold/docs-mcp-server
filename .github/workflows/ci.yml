@@ -46,7 +46,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Install Playwright browsers
+      - name: Install Obscura for scraping
+        run: |
+          mkdir -p "$RUNNER_TEMP/obscura"
+          sh scripts/install-obscura-linux.sh amd64 "$RUNNER_TEMP/obscura"
+          echo "$RUNNER_TEMP/obscura" >> "$GITHUB_PATH"
+
+      - name: Install Chromium for web UI E2E
         run: npx playwright install --no-shell --with-deps chromium
 
       - name: Run tests

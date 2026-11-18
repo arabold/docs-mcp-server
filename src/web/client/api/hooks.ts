@@ -131,3 +131,31 @@ export function useEventsSubscription(
 ) {
   return trpc.events.subscribe.useSubscription(input, { onData });
 }
+
+/** Lists registered application tokens without their values. */
+export function useListMcpAppTokens() {
+  return trpc.listMcpAppTokens.useQuery();
+}
+
+/** Registers an application token and returns its value. */
+export function useCreateMcpAppToken() {
+  return trpc.createMcpAppToken.useMutation();
+}
+
+/** Revokes an application token. */
+export function useDeleteMcpAppToken() {
+  return trpc.deleteMcpAppToken.useMutation();
+}
+
+/** Fetches aggregated MCP usage statistics and breakdown by tool, user, and library. */
+export function useMcpStatsOverview(input?: RouterInputs["getMcpStatsOverview"]) {
+  return trpc.getMcpStatsOverview.useQuery(input, {
+    refetchInterval: 15000,
+    retry: false,
+  });
+}
+
+/** Fetches recent MCP tool execution log. */
+export function useMcpRecentCalls(input?: RouterInputs["getMcpRecentCalls"]) {
+  return trpc.getMcpRecentCalls.useQuery(input, { refetchInterval: 15000, retry: false });
+}

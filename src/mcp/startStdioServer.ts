@@ -1,4 +1,5 @@
 import { type StdioServerHandle, serveStdio } from "@modelcontextprotocol/server/stdio";
+import type { IDocumentManagement } from "../store/trpc/interfaces";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
 import { createMcpServerFactory } from "./mcpServer";
@@ -13,13 +14,15 @@ import type { McpServerTools } from "./tools";
  *
  * @param tools The shared tool instances.
  * @param config The application configuration.
+ * @param docService The backend that persists tool usage statistics.
  * @returns The handle that closes the stdio connection on shutdown.
  */
 export async function startStdioServer(
   tools: McpServerTools,
   config: AppConfig,
+  docService: IDocumentManagement,
 ): Promise<StdioServerHandle> {
-  const handle = serveStdio(createMcpServerFactory(tools, config), {
+  const handle = serveStdio(createMcpServerFactory(tools, config, docService), {
     legacy: "serve",
     onerror: (error) => logger.error(`❌ MCP stdio transport error: ${error.message}`),
   });

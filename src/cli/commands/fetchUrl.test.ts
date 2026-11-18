@@ -30,7 +30,6 @@ describe("fetch-url command", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // These pages are fetched without a browser, so none needs installing
-    vi.stubEnv("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1");
     stdoutWriteSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     configDir = mkdtempSync(path.join(tmpdir(), "fetch-url-command-"));
   });

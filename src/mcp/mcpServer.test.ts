@@ -10,9 +10,12 @@ import path from "node:path";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { createMcpHandler, type McpServer } from "@modelcontextprotocol/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EventBusService } from "../events";
+import { DocumentManagementService } from "../store/DocumentManagementService";
 import { VersionAlreadyExistsError } from "../store/errors";
 import { telemetry } from "../telemetry";
 import type { AppConfig } from "../utils/config";
+import { loadConfig } from "../utils/config";
 import { createMcpServerFactory, resolveServerInstructions } from "./mcpServer";
 import type { McpServerTools } from "./tools";
 
@@ -96,7 +99,94 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+describe("MCP usage metadata", () => {
+  let documents: DocumentManagementService;
+  let client: Client;
+
+  beforeEach(async () => {
+    const config = loadConfig();
+    config.app.storePath = ":memory:";
+    config.app.embeddingModel = "";
+    documents = new DocumentManagementService(new EventBusService(), config);
+    await documents.initialize();
+    client = await connectClient(
+      createMcpServerFactory(mockTools, mockConfig, documents)(),
+    );
+  });
+
+  afterEach(async () => {
+    await client.close();
+    await documents.shutdown();
+  });
+
+  it("records the read_page address without URL credentials or parameters", async () => {
+    // arrange
+    const target = "https://user:password@example.com/guide?token=SECRET#section";
+
+    // act
+    await client.callTool({
+      name: "read_page",
+      arguments: { library: "react", pathOrUrl: target },
+    });
+    const [call] = await documents.getMcpRecentCalls();
+
+    // assert
+    expect(call.target).toBe("https://example.com/guide");
+    expect(JSON.stringify(call)).not.toContain("SECRET");
+  });
+
+  it("counts a failed tool without retaining its error or search text", async () => {
+    // arrange
+    vi.mocked(mockTools.search.execute).mockRejectedValueOnce(
+      new Error("SECRET response body"),
+    );
+
+    // act
+    await client.callTool({
+      name: "search_docs",
+      arguments: { library: "react", query: "SECRET prompt" },
+    });
+    const [call] = await documents.getMcpRecentCalls();
+
+    // assert
+    expect(call.success).toBe(false);
+    expect(JSON.stringify(call)).not.toContain("SECRET");
+  });
+});
+
 describe("MCP tools", () => {
+  it("reports the documentation version and links to the matched section", async () => {
+    // arrange
+    vi.mocked(mockTools.search.execute).mockResolvedValueOnce({
+      library: "next",
+      documentationVersion: {
+        requestedVersion: "16.0.0",
+        indexedVersion: "15.3.0",
+        versionMatch: "different",
+      },
+      results: [
+        {
+          url: "https://example.com/api",
+          sectionUrl: "https://example.com/api#redirect",
+          content: "redirect(path)",
+          score: 1,
+        },
+      ],
+    });
+
+    // act
+    const text = await callTool("search_docs", {
+      library: "Next.js",
+      version: "16.0.0",
+      query: "redirect",
+    });
+
+    // assert
+    expect(text).toContain("Indexed library: next");
+    expect(text).toContain("15.3.0 · requested: 16.0.0 · different");
+    expect(text).toContain("https://example.com/api#redirect");
+  });
+
   it("forwards startChunk and tells the agent how to continue a long page", async () => {
     vi.mocked(mockTools.readPage.execute).mockResolvedValueOnce({
       url: "https://example.com/long",

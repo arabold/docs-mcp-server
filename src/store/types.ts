@@ -32,6 +32,7 @@ export interface DbPage {
 export interface DbChunkMetadata {
   level?: number; // Hierarchical level in document
   path?: string[]; // Hierarchical path in document
+  sectionTarget?: string;
   // TODO: Check if `types` is properly used
   types?: string[]; // Types of content in this chunk (e.g., "text", "code", "table")
   // TODO: Enable additional metadata fields again once we have a clear schema for what metadata we want to store with each chunk.
@@ -70,6 +71,7 @@ export interface DbPageChunk extends DbChunk {
  */
 export interface DbChunkRank {
   score: number;
+  documentationPriority?: number;
   vec_rank?: number;
   fts_rank?: number;
 }
@@ -84,6 +86,7 @@ export type DbQueryResult<T> = T | undefined;
  */
 export interface StoreSearchResult {
   url: string;
+  sectionUrl?: string;
   /**
    * Where the content was actually retrieved from, when that differs from
    * `url`.
@@ -610,6 +613,14 @@ export interface PageContentOptions {
   startChunk?: number;
   /** Maximum characters to return. Whole chunks only; a single longer chunk is returned on its own. */
   maxChars?: number;
+  useVersionFallback?: boolean;
+}
+
+/** Identifies which indexed documentation supplied a search or page read. */
+export interface DocumentationVersion {
+  requestedVersion?: string;
+  indexedVersion: string | null;
+  versionMatch: "matched" | "different" | "unversioned" | "not-requested";
 }
 
 /**
@@ -617,6 +628,7 @@ export interface PageContentOptions {
  */
 export interface PageContentResult {
   url: string;
+  documentationVersion?: DocumentationVersion;
   title: string | null;
   contentType: string | null;
   content: string;
@@ -657,4 +669,130 @@ export interface ListPagesResult {
   limit: number;
   offset: number;
   hasMore: boolean;
+}
+
+/** An application's token metadata shown in Settings. */
+export interface McpAppToken {
+  id: number;
+  name: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+/** The generated or supplied token value, returned only when it is registered. */
+export interface CreatedMcpAppToken extends McpAppToken {
+  token: string;
+}
+
+/**
+ * Input payload for recording an MCP tool call in the stats log.
+ */
+export interface McpToolCallInput {
+  tokenId?: number | null;
+  tokenComment?: string | null;
+  tool: string;
+  library?: string | null;
+  version?: string | null;
+  target?: string | null;
+  protocol?: "http" | "sse" | "stdio";
+  success: boolean;
+  failureReason?: string | null;
+  durationMs: number;
+}
+
+/**
+ * Persisted MCP tool execution record.
+ */
+export interface McpToolCallRecord {
+  id: number;
+  tokenId: number | null;
+  tokenComment: string | null;
+  tool: string;
+  library: string | null;
+  version: string | null;
+  target: string | null;
+  protocol: "http" | "sse" | "stdio";
+  success: boolean;
+  failureReason: string | null;
+  durationMs: number;
+  createdAt: string;
+}
+
+/**
+ * Filter options for querying MCP statistics.
+ */
+export interface McpStatsFilterOptions {
+  days?: number;
+  tokenId?: number;
+  caller?: string;
+  tool?: string;
+  library?: string;
+}
+
+/**
+ * Filter and pagination options for recent tool calls.
+ */
+export interface McpRecentCallsOptions extends McpStatsFilterOptions {
+  limit?: number;
+  offset?: number;
+}
+
+/**
+ * Tool breakdown statistics.
+ */
+export interface McpToolStatItem {
+  tool: string;
+  count: number;
+  percentage: number;
+  successCalls: number;
+  failedCalls: number;
+  successRate: number;
+  avgDurationMs: number;
+}
+
+/**
+ * Caller/token breakdown statistics.
+ */
+export interface McpTokenStatItem {
+  tokenId: number | null;
+  comment: string;
+  count: number;
+  percentage: number;
+  lastUsedAt: string | null;
+}
+
+/**
+ * Library/documentation breakdown statistics.
+ */
+export interface McpLibraryStatItem {
+  library: string;
+  count: number;
+  percentage: number;
+}
+
+/**
+ * Daily call volume for charts.
+ */
+export interface McpActivityPoint {
+  date: string;
+  calls: number;
+  errors: number;
+}
+
+/**
+ * Comprehensive summary overview of MCP usage statistics.
+ */
+export interface McpStatsOverview {
+  firstDay: string | null;
+  totalCalls: number;
+  successCalls: number;
+  failedCalls: number;
+  successRate: number;
+  avgDurationMs: number;
+  topTool: string | null;
+  topLibrary: string | null;
+  byTool: McpToolStatItem[];
+  byToken: McpTokenStatItem[];
+  byLibrary: McpLibraryStatItem[];
+  activityHistory: McpActivityPoint[];
 }

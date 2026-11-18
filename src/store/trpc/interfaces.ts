@@ -7,6 +7,7 @@ import type { EmbeddingModelConfig } from "../embeddings/EmbeddingConfig";
 import type {
   ActivityHistory,
   CompactResult,
+  CreatedMcpAppToken,
   DbVersionWithLibrary,
   EmbeddingConfigInfo,
   FindVersionResult,
@@ -15,6 +16,12 @@ import type {
   ListPagesResult,
   ListVersionChunksOptions,
   ListVersionChunksResult,
+  McpAppToken,
+  McpRecentCallsOptions,
+  McpStatsFilterOptions,
+  McpStatsOverview,
+  McpToolCallInput,
+  McpToolCallRecord,
   PageContentOptions,
   PageContentResult,
   StoredScraperOptions,
@@ -34,6 +41,10 @@ export interface IDocumentManagement {
   listLibraries(): Promise<LibrarySummary[]>;
   validateLibraryExists(library: string): Promise<void>;
   findBestVersion(library: string, targetVersion?: string): Promise<FindVersionResult>;
+  resolveDocumentation(
+    library: string,
+    version?: string,
+  ): Promise<{ library: string; versions: string[] }>;
   listPages(
     library: string,
     version: string | null | undefined,
@@ -95,4 +106,14 @@ export interface IDocumentManagement {
   getVersionStats(ref: VersionRef): Promise<VersionChunkStats>;
   getActivityHistory(days?: number): Promise<ActivityHistory>;
   getVersionComposition(ref: VersionRef): Promise<VersionComposition>;
+
+  listMcpAppTokens(): Promise<McpAppToken[]>;
+  createMcpAppToken(name: string, token?: string): Promise<CreatedMcpAppToken | null>;
+  deleteMcpAppToken(id: number): Promise<void>;
+  resolveMcpAppToken(hash: string): Promise<Pick<McpAppToken, "id" | "name"> | null>;
+
+  // MCP Usage Analytics & Statistics
+  recordMcpToolCall(call: McpToolCallInput): Promise<void>;
+  getMcpStatsOverview(options?: McpStatsFilterOptions): Promise<McpStatsOverview>;
+  getMcpRecentCalls(options?: McpRecentCallsOptions): Promise<McpToolCallRecord[]>;
 }

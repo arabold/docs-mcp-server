@@ -80,6 +80,174 @@ describe("DocumentRetrieverService", () => {
     expect(await service.search(LIBRARY, VERSION, "zebra")).toEqual([]);
   });
 
+  it("returns one hit with the matching section URL for duplicate indexed pages", async () => {
+    // arrange
+    const base = "https://example.com/api";
+    const chunks = [
+      {
+        content: "## Discriminated unions\n\nUse `z.discriminatedUnion()`.",
+        path: ["Defining schemas"],
+      },
+    ];
+    await addPage(`${base}?id=emails`, chunks);
+    await addPage(`${base}?id=discriminated-unions`, chunks);
+
+    // act
+    const results = await service.search(LIBRARY, VERSION, "z.discriminatedUnion()", 5);
+
+    // assert
+    expect(results.map((result) => result.sectionUrl)).toEqual([
+      `${base}?id=discriminated-unions`,
+    ]);
+  });
+
+  it("keeps the relevant Markdown heading, explanation and fenced example together", async () => {
+    // arrange
+    await addPage("https://example.com/reference", [
+      {
+        content: [
+          "## Emails",
+          "Validate an address.",
+          "## Discriminated unions",
+          "Use a shared discriminator with `z.discriminatedUnion()`.",
+          "```ts\nconst result = z.discriminatedUnion('kind', options);\n```",
+          "## Bigints",
+          "Represent an integer.",
+        ].join("\n\n"),
+        path: ["Defining schemas"],
+      },
+    ]);
+
+    // act
+    const [result] = await service.search(LIBRARY, VERSION, "z.discriminatedUnion");
+
+    // assert
+    expect(result.content).toBe(
+      "## Discriminated unions\n\nUse a shared discriminator with `z.discriminatedUnion()`." +
+        "\n\n```ts\nconst result = z.discriminatedUnion('kind', options);\n```",
+    );
+  });
+
+  it("finds the standalone reference for an exact function name", async () => {
+    // arrange
+    const base = "https://example.com/docs";
+    const reference = `${base}/app/api-reference/functions/redirect`;
+    await addPage(`${base}/llms-full.txt`, [
+      { content: "A server component can redirect requests.", path: [] },
+    ]);
+    await addPage(reference, [{ content: "Send the client to another address.", path: [] }]);
+
+    // act
+    const results = await service.search(LIBRARY, VERSION, "redirect server component", 1);
+
+    // assert
+    expect(results.map((result) => result.url)).toEqual([reference]);
+  });
+
+  it("returns a documented exception ahead of a page about status codes", async () => {
+    // arrange
+    const reference = "https://example.com/reference/exceptions";
+    const signature = "HTTPException(status_code, detail=None, headers=None)";
+    await addPage("https://example.com/reference/status", [
+      { content: "# Status codes\n\nStatus code and detail for HTTP responses.", path: ["Status codes"] },
+    ]);
+    await addPage(reference, [
+      {
+        content: `## HTTPException\n\n```python\n${signature}\n````,
+        path: ["Exceptions", "HTTPException"],
+      },
+      {
+        content: "### Example\n\n```python\nraise HTTPException(status_code=404, detail='Missing')\n```",
+        path: ["Exceptions", "HTTPException", "Example"],
+      },
+    ]);
+
+    // act
+    const [result] = await service.search(
+      LIBRARY, VERSION, "HTTPException status code detail raise", 1,
+    );
+
+    // assert
+    expect(result.url).toBe(reference);
+    expect(result.content).toContain(signature);
+    expect(result.content).toContain("raise HTTPException");
+  });
+
+  it("keeps the requested option row over an unrelated section on the API page", async () => {
+    // arrange
+    const row = "| staleTime? | Time in milliseconds before data becomes stale. |";
+    await addPage("https://example.com/reference/functions/useQuery", [
+      {
+        content: "# useQuery\n\n### queryClient\n\nPass a custom query client to useQuery.",
+        path: ["useQuery", "queryClient"],
+      },
+      {
+        content: ["### Options", "", "| Property | Description |", "| --- | --- |", row].join("\n"),
+        path: ["useQuery", "Parameters", "Options"],
+      },
+    ]);
+
+    // act
+    const [result] = await service.search(LIBRARY, VERSION, "useQuery staleTime", 1);
+
+    // assert
+    expect(result.content).toContain(row);
+    expect(result.content).not.toContain("Pass a custom query client");
+  });
+
+  it("keeps an API signature and the example that matches the requested context", async () => {
+    // arrange
+    const url = "https://example.com/api-reference/functions/redirect";
+    const signature = "```ts\nredirect(path, type)\n```";
+    const example =
+      "```ts\nimport { redirect } from 'next/navigation';\nredirect('/login');\n```";
+    await addPage(url, [
+      { content: "# redirect\n\nUse redirect in a Server Component.", path: ["redirect"] },
+      {
+        content: `## Reference\n\n### Parameters\n\n${signature}`,
+        path: ["redirect", "Reference", "Parameters"],
+      },
+      {
+        content: `## Examples\n\n### Server Component\n\n${example}`,
+        path: ["redirect", "Examples", "Server Component"],
+      },
+      {
+        content: "### Client Component\n\n```ts\nredirect('/admin');\n```",
+        path: ["redirect", "Examples", "Client Component"],
+      },
+    ]);
+
+    // act
+    const [result] = await service.search(LIBRARY, VERSION, "redirect server component", 1);
+
+    // assert
+    expect(result.content).toContain(signature);
+    expect(result.content).toContain(example);
+    expect(result.content).not.toContain("redirect('/admin')");
+  });
+
+  it("keeps command usage with an option from a separate section", async () => {
+    // arrange
+    const url = "https://example.com/reference/cli/docker/compose/up";
+    await addPage(url, [
+      {
+        content: "# docker compose up\n\n| Field | Value |\n| --- | --- |\n| Usage | docker compose up [OPTIONS] [SERVICE...] |",
+        path: ["docker compose up"],
+      },
+      {
+        content: "## Options\n\n| Option | Description |\n| --- | --- |\n| --wait-timeout | Maximum wait in seconds |",
+        path: ["docker compose up", "Options"],
+      },
+    ]);
+
+    // act
+    const [result] = await service.search(LIBRARY, VERSION, "docker compose up --wait-timeout", 1);
+
+    // assert
+    expect(result.content).toContain("docker compose up [OPTIONS] [SERVICE...]");
+    expect(result.content).toContain("| --wait-timeout | Maximum wait in seconds |");
+  });
+
   it("assembles hits with their parent and neighbouring chunks in page order, each chunk once", async () => {
     const install = ["Guide", "Install"];
     await addPage("https://example.com/guide", [

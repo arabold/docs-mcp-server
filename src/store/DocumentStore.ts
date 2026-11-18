@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import { statSync } from "node:fs";
 import type { Embeddings } from "@langchain/core/embeddings";
 import type Database from "better-sqlite3";
@@ -10,6 +11,11 @@ import { logger } from "../utils/logger";
 import { MimeTypeUtils } from "../utils/mimeTypeUtils";
 import { compareVersionsDescending } from "../utils/version";
 import { applyMigrations } from "./applyMigrations";
+import {
+  distinctDocumentationMatches,
+  documentationPriority,
+  requestedIdentifiers,
+} from "./documentationRanking";
 import { EmbeddingConfig, type EmbeddingModelConfig } from "./embeddings/EmbeddingConfig";
 import {
   areCredentialsAvailable,
@@ -29,15 +35,28 @@ import {
   StoreError,
   VersionAlreadyExistsError,
 } from "./errors";
+import {
+  pruneMcpCalls,
+  readMcpOverview,
+  readMcpRecent,
+  recordMcpCall,
+} from "./McpStatistics";
 import { openDatabase } from "./openDatabase";
 import type {
   ActivityHistory,
   CompactResult,
+  CreatedMcpAppToken,
   DbChunkMetadata,
   DbChunkRank,
   LibraryVersionSummary,
   ListVersionChunksOptions,
   ListVersionChunksResult,
+  McpAppToken,
+  McpRecentCallsOptions,
+  McpStatsFilterOptions,
+  McpStatsOverview,
+  McpToolCallInput,
+  McpToolCallRecord,
   PageListItem,
   ResolvedVersion,
   StoredScraperOptions,
@@ -1150,6 +1169,8 @@ export class DocumentStore {
       // 7. Initialize embeddings client (await to catch errors)
       //    On success, persists model identity to metadata table.
       await this.initializeEmbeddings();
+
+      await this.pruneOldMcpStats();
     } catch (error) {
       // Re-throw StoreError, ModelConfigurationError, and UnsupportedProviderError directly
       if (
@@ -1548,13 +1569,24 @@ export class DocumentStore {
   }
 
   /**
-   * Retrieves all unique versions for a specific library
+   * Returns stored version labels for a library.
+   * @param library The indexed name.
+   * @param searchable Restrict the list to versions with stored chunks.
+   * @returns Unique version labels, including the empty label for unversioned docs.
    */
-  async queryUniqueVersions(library: string): Promise<string[]> {
+  async queryUniqueVersions(library: string, searchable = false): Promise<string[]> {
     try {
-      const rows = this.statements.queryVersions.all(
-        normalizeLibraryName(library),
-      ) as Array<{
+      const statement = searchable
+        ? this.db.prepare<[string]>(
+            `SELECT v.name FROM versions v
+             JOIN libraries l ON l.id = v.library_id
+             WHERE l.name = ? AND EXISTS (
+               SELECT 1 FROM pages p JOIN documents d ON d.page_id = p.id
+               WHERE p.version_id = v.id
+             )`,
+          )
+        : this.statements.queryVersions;
+      const rows = statement.all(normalizeLibraryName(library)) as Array<{
         name: string | null;
       }>;
       return rows.map((row) => normalizeVersionName(row.name));
@@ -2330,6 +2362,7 @@ export class DocumentStore {
               types: chunk.types,
               level: chunk.section.level,
               path: chunk.section.path,
+              sectionTarget: chunk.section.target,
             } satisfies DbChunkMetadata),
             i, // sort_order within this page
           );
@@ -2682,6 +2715,16 @@ export class DocumentStore {
       }
 
       const { id: versionId, library_id: libraryId } = versionRow;
+      const candidateLimit = Math.max(30, limit * this.searchOverfetchFactor);
+      const referenceMatches = this.findReferenceMatches(
+        versionId,
+        query,
+        candidateLimit,
+      );
+      const supplementalMatches = [
+        ...referenceMatches,
+        ...this.findIdentifierMatches(versionId, query, candidateLimit),
+      ];
 
       if (this.isVectorSearchEnabled && this.embeddings !== null) {
         // Hybrid search: vector + full-text search with RRF ranking
@@ -2773,19 +2816,14 @@ export class DocumentStore {
           vectorSearchK,
           versionId,
           ftsQuery,
-          overfetchLimit * FTS_TIE_WINDOW_FACTOR,
-          overfetchLimit,
+          candidateLimit * FTS_TIE_WINDOW_FACTOR,
+          candidateLimit,
         ) as RawSearchResult[];
 
         // Apply RRF ranking with configurable weights
         const rankedResults = this.assignRanks(rawResults);
 
-        // Sort by RRF score and take top results (truncate to original limit)
-        const topResults = rankedResults
-          .sort((a, b) => b.rrf_score - a.rrf_score || compareTies(a, b))
-          .slice(0, limit);
-
-        return topResults.map((row) => {
+        const candidates = rankedResults.map((row) => {
           const result: DbPageChunk = {
             ...this.parseMetadata(row),
             url: row.url || "", // Ensure url is never undefined
@@ -2800,6 +2838,7 @@ export class DocumentStore {
             fts_rank: row.fts_rank,
           });
         });
+        return this.rankDocumentation(candidates, supplementalMatches, query, limit);
       } else {
         // Fallback: full-text search only
         const stmt = this.db.prepare(`
@@ -2827,12 +2866,12 @@ export class DocumentStore {
           LIMIT ?
         `);
 
-        const rawResults = stmt.all(versionId, ftsQuery, limit) as (RawSearchResult & {
+        const rawResults = stmt.all(versionId, ftsQuery, candidateLimit) as (RawSearchResult & {
           fts_score: number;
         })[];
 
         // Assign FTS ranks based on order (best score = rank 1)
-        return rawResults.map((row, index) => {
+        const candidates = rawResults.map((row, index) => {
           const result: DbPageChunk = {
             ...this.parseMetadata(row),
             url: row.url || "", // Ensure url is never undefined
@@ -2846,6 +2885,7 @@ export class DocumentStore {
             fts_rank: index + 1, // Assign rank based on order (1-based)
           });
         });
+        return this.rankDocumentation(candidates, supplementalMatches, query, limit);
       }
     } catch (error) {
       throw new ConnectionError(
@@ -2853,6 +2893,105 @@ export class DocumentStore {
         error,
       );
     }
+  }
+
+  private rankDocumentation(
+    candidates: (DbPageChunk & DbChunkRank)[],
+    supplementalMatches: DbPageChunk[],
+    query: string,
+    limit: number,
+  ): (DbPageChunk & DbChunkRank)[] {
+    const ids = new Set(candidates.map((chunk) => chunk.id));
+    const ranked = candidates.map((chunk) => ({
+      ...chunk,
+      documentationPriority: documentationPriority(query, chunk),
+    }));
+    for (const chunk of supplementalMatches) {
+      if (ids.has(chunk.id)) continue;
+      const priority = documentationPriority(query, chunk);
+      if (priority < 1) continue;
+      ids.add(chunk.id);
+      ranked.push({ ...chunk, score: 0, documentationPriority: priority });
+    }
+    ranked.sort(
+      (a, b) =>
+        b.documentationPriority - a.documentationPriority ||
+        b.score - a.score ||
+        compareTies(a, b),
+    );
+    return distinctDocumentationMatches(ranked, limit);
+  }
+
+  private findIdentifierMatches(
+    versionId: number,
+    query: string,
+    limit: number,
+  ): DbPageChunk[] {
+    const identifiers = requestedIdentifiers(query).filter((name) => !name.startsWith("--"));
+    if (identifiers.length === 0) return [];
+    const statement = this.db.prepare(
+      `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order,
+              d.created_at, p.url, p.title, p.source_content_type, p.content_type, p.content_url
+       FROM documents_fts f
+       JOIN documents d ON f.rowid = d.id
+       JOIN pages p ON d.page_id = p.id
+       WHERE ${VERSION_FTS_FILTER}
+         AND documents_fts MATCH ?
+         AND NOT EXISTS (
+           SELECT 1 FROM json_each(json_extract(d.metadata, '$.types'))
+           WHERE value = 'structural'
+         )
+       ORDER BY bm25(documents_fts, 10.0, 1.0, 5.0, 5.0), p.url, d.sort_order
+       LIMIT ?`,
+    );
+    const chunks = identifiers.flatMap((name) => {
+      const query = `{content path title} : "${name}"`;
+      return statement.all(versionId, query, limit) as DbPageChunk[];
+    });
+    return this.parseMetadataArray(chunks);
+  }
+
+  private findReferenceMatches(
+    versionId: number,
+    query: string,
+    limit: number,
+  ): DbPageChunk[] {
+    const words = query.toLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? [];
+    const terms = [...new Set(words)]
+      .filter((word) => !word.startsWith("--") && !isFtsStopWord(word))
+      .slice(0, 16);
+    if (terms.length === 0) return [];
+    const addresses = terms.flatMap((term) => {
+      const escaped = this.escapeLikePattern(term);
+      return [
+        `%/reference/%/${escaped}`,
+        `%/api-reference/%/${escaped}`,
+        `%/reference/${escaped}`,
+        `%/api-reference/${escaped}`,
+      ];
+    });
+    const rows = this.db
+      .prepare(
+        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order,
+                d.created_at, p.url, p.title, p.source_content_type, p.content_type, p.content_url
+         FROM pages p
+         JOIN documents d ON d.id = (
+           SELECT id FROM documents
+           WHERE page_id = p.id
+             AND NOT EXISTS (
+               SELECT 1 FROM json_each(json_extract(documents.metadata, '$.types'))
+               WHERE value = 'structural'
+             )
+           ORDER BY sort_order
+           LIMIT 1
+         )
+         WHERE p.version_id = ?
+           AND (${addresses.map(() => "p.url LIKE ? ESCAPE '\\'").join(" OR ")})
+        ORDER BY LENGTH(p.url), p.url
+         LIMIT ?`,
+      )
+      .all(versionId, ...addresses, limit) as DbPageChunk[];
+    return this.parseMetadataArray(rows);
   }
 
   /**
@@ -3047,11 +3186,17 @@ export class DocumentStore {
   /**
    * Fetches all document chunks for a specific URL within a library and version.
    * Returns DbPageChunk objects sorted by their sort_order for proper reassembly.
+   * @param library Indexed library name.
+   * @param version The stored version label.
+   * @param url The stored page URL.
+   * @param window Optional inclusive interval of chunk positions.
+   * @returns The matching chunks in document order.
    */
   async findChunksByUrl(
     library: string,
     version: string,
     url: string,
+    window?: { first: number; last: number },
   ): Promise<DbPageChunk[]> {
     try {
       const normalizedVersion = normalizeVersionLabel(version);
@@ -3063,12 +3208,14 @@ export class DocumentStore {
          WHERE l.name = ? 
            AND COALESCE(v.name, '') = COALESCE(?, '')
            AND p.url = ?
+           ${window ? "AND d.sort_order BETWEEN ? AND ?" : ""}
          ORDER BY d.sort_order`,
       );
       const rows = stmt.all(
         normalizeLibraryName(library),
         normalizedVersion,
         url,
+        ...(window ? [window.first, window.last] : []),
       ) as DbPageChunk[];
       return this.parseMetadataArray(rows);
     } catch (error) {
@@ -3333,6 +3480,131 @@ export class DocumentStore {
       };
     } catch (error) {
       throw new ConnectionError("Failed to get version composition", error);
+    }
+  }
+
+  /**
+   * Lists app tokens and their usage timestamps.
+   * @returns Token metadata ordered by application name.
+   */
+  async listMcpAppTokens(): Promise<McpAppToken[]> {
+    return this.db
+      .prepare(`SELECT id, name,
+        strftime('%Y-%m-%dT%H:%M:%SZ', created_at) AS createdAt,
+        strftime('%Y-%m-%dT%H:%M:%SZ', last_used_at) AS lastUsedAt
+        FROM mcp_app_tokens ORDER BY name COLLATE NOCASE, id`)
+      .all() as McpAppToken[];
+  }
+
+  /**
+   * Registers a token for an application.
+   * @param name - Application name used in statistics.
+   * @param token - Existing token value, or omit to generate one.
+   * @returns The token with its metadata, or null when the value is already registered.
+   */
+  async createMcpAppToken(
+    name: string,
+    token = `dmcp_${randomBytes(24).toString("hex")}`,
+  ): Promise<CreatedMcpAppToken | null> {
+    const hash = createHash("sha256").update(token).digest("hex");
+    const row = this.db
+      .prepare(`INSERT INTO mcp_app_tokens (name, token_hash) VALUES (?, ?)
+        ON CONFLICT(token_hash) DO NOTHING
+        RETURNING id, name, strftime('%Y-%m-%dT%H:%M:%SZ', created_at) AS createdAt,
+        last_used_at AS lastUsedAt`)
+      .get(name, hash) as McpAppToken | undefined;
+    return row ? { ...row, token } : null;
+  }
+
+  /**
+   * Revokes a token while preserving its recorded calls.
+   * @param id - The token to revoke.
+   * @returns A promise resolved after deletion.
+   */
+  async deleteMcpAppToken(id: number): Promise<void> {
+    this.db.prepare("DELETE FROM mcp_app_tokens WHERE id = ?").run(id);
+  }
+
+  /**
+   * Resolves a token hash to its caller and updates its last-use timestamp.
+   * @param hash - SHA-256 digest of the supplied token.
+   * @returns The application identity for a registered token, or null.
+   */
+  async resolveMcpAppToken(hash: string): Promise<Pick<McpAppToken, "id" | "name"> | null> {
+    const token = this.db
+      .prepare("SELECT id, name FROM mcp_app_tokens WHERE token_hash = ?")
+      .get(hash) as Pick<McpAppToken, "id" | "name"> | undefined;
+    if (!token) return null;
+    this.db
+      .prepare(`UPDATE mcp_app_tokens SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?
+        AND (last_used_at IS NULL OR last_used_at <= datetime('now', '-1 minute'))`)
+      .run(token.id);
+    return token;
+  }
+
+  private mcpStatsWriteCount = 0;
+
+  private maybePruneMcpStats(): void {
+    this.mcpStatsWriteCount++;
+    if (this.mcpStatsWriteCount >= 100) {
+      this.mcpStatsWriteCount = 0;
+      this.pruneOldMcpStats().catch((err) => {
+        logger.debug(`Auto-pruning MCP stats failed: ${err}`);
+      });
+    }
+  }
+
+  /**
+   * Prunes recent invocation metadata without deleting historical daily counters.
+   * @param retentionDays - Retention period for recent calls.
+   * @param maxRows - Maximum number of recent calls.
+   * @returns A promise resolved after pruning.
+   */
+  async pruneOldMcpStats(retentionDays = 30, maxRows = 20000): Promise<void> {
+    pruneMcpCalls(this.db, retentionDays, maxRows);
+  }
+
+  /**
+   * Records compact invocation metadata and updates durable daily counters atomically.
+   * @param call - Metadata for the completed tool call.
+   * @returns A promise resolved after the write attempt.
+   */
+  async recordMcpToolCall(call: McpToolCallInput): Promise<void> {
+    try {
+      recordMcpCall(this.db, call);
+      this.maybePruneMcpStats();
+    } catch (error) {
+      logger.debug(`Failed to record MCP tool call stats: ${error}`);
+    }
+  }
+
+  /**
+   * Retrieves historical aggregates with consistent filters across all breakdowns.
+   * @param options - UTC calendar period and usage filters.
+   * @returns The historical usage overview.
+   */
+  async getMcpStatsOverview(
+    options: McpStatsFilterOptions = {},
+  ): Promise<McpStatsOverview> {
+    try {
+      return readMcpOverview(this.db, options);
+    } catch (error) {
+      throw new ConnectionError("Failed to get MCP stats overview", error);
+    }
+  }
+
+  /**
+   * Retrieves recent compact invocation metadata.
+   * @param options - UTC calendar period, filters and pagination.
+   * @returns Recent invocations without request or response bodies.
+   */
+  async getMcpRecentCalls(
+    options: McpRecentCallsOptions = {},
+  ): Promise<McpToolCallRecord[]> {
+    try {
+      return readMcpRecent(this.db, options);
+    } catch (error) {
+      throw new ConnectionError("Failed to get recent MCP calls", error);
     }
   }
 }

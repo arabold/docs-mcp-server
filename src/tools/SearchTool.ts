@@ -1,6 +1,12 @@
 import { VersionNotFoundInStoreError } from "../store";
+import { includesRequestedIdentifiers } from "../store/documentationRanking";
+import { describeDocumentationVersion } from "../store/documentationVersions";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
-import { libraryNamesMatch, type StoreSearchResult } from "../store/types";
+import {
+  type DocumentationVersion,
+  libraryNamesMatch,
+  type StoreSearchResult,
+} from "../store/types";
 import { logger } from "../utils/logger";
 import { ValidationError } from "./errors";
 
@@ -10,6 +16,7 @@ export interface SearchToolOptions {
   query: string;
   limit?: number;
   exactMatch?: boolean;
+  useVersionFallback?: boolean;
 }
 
 export interface SearchToolResultError {
@@ -25,6 +32,8 @@ export interface SearchToolResultError {
 
 export interface SearchToolResult {
   results: StoreSearchResult[];
+  documentationVersion?: DocumentationVersion;
+  library?: string;
 }
 
 /**
@@ -82,6 +91,32 @@ export class SearchTool {
         version ?? "latest",
         availableVersions,
       );
+    }
+
+    if (options.useVersionFallback && !exactMatch) {
+      const resolved = await this.docService.resolveDocumentation(library, version);
+      let fallback: SearchToolResult | undefined;
+      for (const label of resolved.versions) {
+        const results = await this.docService.searchStore(
+          resolved.library,
+          label,
+          query,
+          limit,
+        );
+        if (results.length === 0) continue;
+        const match = {
+          results,
+          library: resolved.library,
+          documentationVersion: describeDocumentationVersion(version, label),
+        };
+        if (
+          includesRequestedIdentifiers(query, results.map((hit) => hit.content).join("\n"))
+        ) {
+          return match;
+        }
+        fallback ??= match;
+      }
+      return fallback ?? { results: [], library: resolved.library };
     }
 
     // Only for the log line and the exactMatch path; resolution takes `version`

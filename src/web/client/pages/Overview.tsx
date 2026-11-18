@@ -1,8 +1,8 @@
 /**
  * Overview (dashboard) page: KPI totals derived from the library index, an
  * indexing-activity chart (per-day pages/chunks over a trailing window, from
- * stored `created_at` timestamps), the system-health snapshot, and a compact
- * glance at currently active (running/queued) pipeline jobs.
+ * stored `created_at` timestamps), MCP request volume, the system-health
+ * snapshot and currently active pipeline jobs.
  */
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
@@ -13,6 +13,7 @@ import {
   useActivityHistory,
   useGetJobs,
   useListLibraries,
+  useMcpStatsOverview,
   useSystemHealth,
 } from "../api/hooks";
 import { AreaChart } from "../components/AreaChart";
@@ -20,6 +21,7 @@ import { Card } from "../components/Card";
 import { Chip } from "../components/Chip";
 import { EmptyState } from "../components/EmptyState";
 import { Icon, type IconName } from "../components/Icon";
+import { McpRequestVolumeChart } from "../components/McpRequestVolumeChart";
 import { Pill } from "../components/Pill";
 import { ProgressBar } from "../components/ProgressBar";
 import { Loading } from "../components/Spinner";
@@ -83,7 +85,9 @@ function EmbeddingsRow({ embeddings }: { embeddings: SystemHealth["embeddings"] 
     <div className="health__row">
       <Icon name="i-bolt" size="sm" style={{ color: "var(--text-faint)" }} />
       <span className="name">Embeddings</span>
-      <span className="meta">{meta}</span>
+      <span className="meta model-name" title={meta}>
+        {meta}
+      </span>
     </div>
   );
 }
@@ -99,16 +103,16 @@ function McpRow({ url }: { url: string }) {
   );
 }
 
-/** Renders the auth row: an enabled/disabled Pill plus the OIDC issuer when configured. */
+/** Renders the MCP authentication mode and the OIDC issuer when configured. */
 function AuthRow({ auth }: { auth: SystemHealth["auth"] }) {
   return (
     <div className="health__row">
       <Icon name="i-settings" size="sm" style={{ color: "var(--text-faint)" }} />
-      <span className="name">Auth</span>
+      <span className="name">MCP auth</span>
       <span className="meta" style={{ display: "flex", alignItems: "center", gap: 6 }}>
         {auth.issuer ? <span>{auth.issuer}</span> : null}
         <Pill variant={auth.enabled ? "ok" : "idle"} withDot={false}>
-          {auth.enabled ? "enabled" : "disabled"}
+          {auth.enabled ? "OAuth" : "Open access"}
         </Pill>
       </span>
     </div>
@@ -244,6 +248,27 @@ function ActivityCard() {
   );
 }
 
+const MCP_ACTIVITY_DAYS = 7;
+
+function McpActivityCard() {
+  const { data, isLoading, error } = useMcpStatsOverview({ days: MCP_ACTIVITY_DAYS });
+
+  return (
+    <McpRequestVolumeChart
+      history={data?.activityHistory}
+      isLoading={isLoading}
+      error={error?.message}
+      action={
+        <Link className="link" to="/statistics">
+          View details
+          <Icon name="i-ext" size="xs" />
+        </Link>
+      }
+      description={`Daily MCP tool calls over the last ${MCP_ACTIVITY_DAYS} days (UTC)`}
+    />
+  );
+}
+
 /** A single compact row in the active-jobs list. */
 function JobRow({
   library,
@@ -359,7 +384,7 @@ function ActiveJobsCard() {
   );
 }
 
-/** Overview (dashboard) page — KPI totals, indexing activity, system health, and active jobs. */
+/** Shows index totals, indexing and MCP activity, system health and active jobs. */
 export default function Overview() {
   const { data: libraries, isLoading, isError, error } = useListLibraries();
 
@@ -407,6 +432,10 @@ export default function Overview() {
       <div className="grid-2" style={{ marginTop: 14 }}>
         <ActivityCard />
         <SystemHealthCard />
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <McpActivityCard />
       </div>
 
       <div className="section-head">

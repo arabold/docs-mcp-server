@@ -35,6 +35,30 @@ describe("HtmlPipeline", () => {
     vi.restoreAllMocks();
   });
 
+  it("uses the canonical page for a documented section query and keeps the section link", async () => {
+    // arrange
+    const section = "https://example.com/page?id=install";
+    const page = html(`
+      <link rel="canonical" href="https://example.com/page">
+      <main>
+        <h2 id="install"><a href="?id=install">Install</a></h2>
+        <p>Install the package.</p>
+      </main>
+    `);
+
+    // act
+    const result = await new HtmlPipeline(appConfig).process(
+      { ...page, source: section },
+      options(),
+    );
+
+    // assert
+    expect(result.sectionPageUrl).toBe("https://example.com/page");
+    expect(result.chunks).toContainEqual(
+      expect.objectContaining({ section: expect.objectContaining({ target: section }) }),
+    );
+  });
+
   describe("decoding", () => {
     it("decodes the body with the header charset, a BOM or UTF-8", async () => {
       const cases: Array<

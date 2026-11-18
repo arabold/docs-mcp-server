@@ -1,13 +1,5 @@
 /**
- * Settings page. Read-only snapshot of the running server's configuration —
- * active embedding provider, worker wiring, MCP/auth exposure, telemetry,
- * read-only mode, and app version — sourced from `useSystemHealth`.
- *
- * There is currently no mutation API for any of these values: they reflect
- * how the process was started (env/YAML/CLI config), not a live toggle the
- * dashboard can flip. Rows that show a toggle in the mockup are rendered
- * here as a status `Pill` plus a small note pointing at configuration —
- * wiring up real mutation is tracked as a backlog item (see report).
+ * Settings page showing the running server's configuration.
  */
 import type { ReactNode } from "react";
 import { useSystemHealth } from "../api/hooks";
@@ -16,16 +8,13 @@ import { Chip } from "../components/Chip";
 import { Pill } from "../components/Pill";
 import { Loading } from "../components/Spinner";
 import type { StatusVariant } from "../components/StatusDot";
+import { McpAppTokensSection } from "./settings/McpAppTokensSection";
 
 /** A single label/value row rendered inside a `.set-grid` panel. */
 interface SettingRow {
-  /** Unique key for the row (used to key the k/v DOM pair). */
   key: string;
-  /** Bold row label, e.g. "Provider". */
   label: string;
-  /** Muted caption under the label, e.g. "Model used to embed indexed chunks". */
   caption: string;
-  /** The value cell's content — usually a `Pill`/`Chip` combination. */
   value: ReactNode;
 }
 
@@ -67,6 +56,7 @@ function SettingsGroup({ title, rows }: { title: string; rows: SettingRow[] }) {
   );
 }
 
+/** Displays the server configuration and MCP access mode. */
 export default function Settings() {
   const { data, isLoading, isError, error } = useSystemHealth();
 
@@ -92,7 +82,9 @@ export default function Settings() {
       value: health.embeddings ? (
         <>
           <Pill variant="ok">{health.embeddings.provider}</Pill>
-          <Chip>{health.embeddings.model}</Chip>
+          <Chip className="model-name" title={health.embeddings.model}>
+            {health.embeddings.model}
+          </Chip>
           <Chip>
             {health.embeddings.dimensions != null
               ? `${health.embeddings.dimensions} dims`
@@ -169,12 +161,12 @@ export default function Settings() {
 
   const authRows: SettingRow[] = [
     {
-      key: "oauth",
-      label: "OAuth2 / OIDC",
-      caption: "Protects the MCP endpoint; the web UI and API are not protected",
+      key: "mcp-access",
+      label: "MCP access",
+      caption: "Authentication for the MCP HTTP endpoint",
       value: (
         <Pill variant={health.auth.enabled ? "ok" : "idle"}>
-          {health.auth.enabled ? "enabled" : "disabled"}
+          {health.auth.enabled ? "OAuth" : "Open access"}
         </Pill>
       ),
     },
@@ -199,9 +191,12 @@ export default function Settings() {
         </div>
       </div>
 
-      <SettingsGroup title="Embeddings" rows={embeddingsRows} />
+      <div style={{ marginTop: 24 }}>
+        <SettingsGroup title="Embeddings" rows={embeddingsRows} />
+      </div>
       <SettingsGroup title="Server" rows={serverRows} />
       <SettingsGroup title="Authentication" rows={authRows} />
+      {health.auth.enabled ? null : <McpAppTokensSection />}
     </div>
   );
 }

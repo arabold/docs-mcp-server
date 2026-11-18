@@ -142,7 +142,7 @@ describe("Markdown variant identity E2E", () => {
       .page("/docs", leafPage("Docs", "Docs body."));
 
     // Hash routes only exist in a browser, so this crawl renders. Both checks
-    // share one crawl because each launches Chromium.
+    // share one crawl because each launches Obscura.
     const job = await h.scrape({
       preserveHashes: true,
       scrapeMode: ScrapeMode.Playwright,

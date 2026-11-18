@@ -17,6 +17,11 @@ import type {
   ListPagesResult,
   ListVersionChunksOptions,
   ListVersionChunksResult,
+  McpRecentCallsOptions,
+  McpStatsFilterOptions,
+  McpStatsOverview,
+  McpToolCallInput,
+  McpToolCallRecord,
   PageContentOptions,
   PageContentResult,
   StoredScraperOptions,
@@ -58,6 +63,19 @@ export class DocumentManagementClient implements IDocumentManagement {
     targetVersion?: string,
   ): Promise<FindVersionResult> {
     return this.client.findBestVersion.query({ library, targetVersion });
+  }
+
+  /**
+   * Resolves a documentation name and version order on the worker.
+   * @param library Indexed library name or alias.
+   * @param version Requested label or range.
+   * @returns The resolved library name and candidate version labels.
+   */
+  async resolveDocumentation(
+    library: string,
+    version?: string,
+  ): Promise<{ library: string; versions: string[] }> {
+    return this.client.resolveDocumentation.query({ library, version });
   }
 
   async searchStore(
@@ -202,5 +220,53 @@ export class DocumentManagementClient implements IDocumentManagement {
       library: ref.library,
       version: ref.version,
     });
+  }
+
+  /**
+   * Lists the worker's registered application tokens.
+   * @returns Token metadata.
+   */
+  async listMcpAppTokens() {
+    return this.client.listMcpAppTokens.query();
+  }
+
+  /**
+   * Registers an application token with the worker.
+   * @param name - Application name shown in statistics.
+   * @param token - Existing token value, or omit to generate one.
+   * @returns The newly registered token, or null if the value already exists.
+   */
+  async createMcpAppToken(name: string, token?: string) {
+    return this.client.createMcpAppToken.mutate({ name, token });
+  }
+
+  /**
+   * Revokes a worker's application token.
+   * @param id - Token ID.
+   * @returns A promise resolved after deletion.
+   */
+  async deleteMcpAppToken(id: number): Promise<void> {
+    await this.client.deleteMcpAppToken.mutate({ id });
+  }
+
+  /**
+   * Resolves a token hash against the worker's registry.
+   * @param hash - SHA-256 digest of a supplied token.
+   * @returns The matching application identity, if still registered.
+   */
+  async resolveMcpAppToken(hash: string) {
+    return this.client.resolveMcpAppToken.mutate({ hash });
+  }
+
+  async recordMcpToolCall(call: McpToolCallInput): Promise<void> {
+    await this.client.recordMcpToolCall.mutate(call);
+  }
+
+  async getMcpStatsOverview(options?: McpStatsFilterOptions): Promise<McpStatsOverview> {
+    return this.client.getMcpStatsOverview.query(options);
+  }
+
+  async getMcpRecentCalls(options?: McpRecentCallsOptions): Promise<McpToolCallRecord[]> {
+    return this.client.getMcpRecentCalls.query(options);
   }
 }

@@ -1,4 +1,7 @@
+import { describeDocumentationVersion } from "../store/documentationVersions";
+import { escapeControlCharacters } from "../store/errors";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
+import { libraryNamesMatch } from "../store/types";
 import { ValidationError } from "./errors";
 
 export interface FindVersionToolOptions {
@@ -27,7 +30,6 @@ export class FindVersionTool {
    * Executes the tool to find the best matching version and checks for unversioned docs.
    * @returns A structured object with the best match, unversioned status, and descriptive message.
    * @throws {ValidationError} If the library parameter is invalid.
-   * @throws {VersionNotFoundInStoreError} If no matching versions or unversioned docs are found.
    */
   async execute(options: FindVersionToolOptions): Promise<FindVersionToolResult> {
     const { library, targetVersion } = options;
@@ -40,32 +42,37 @@ export class FindVersionTool {
       );
     }
 
-    const libraryAndVersion = `${library}${targetVersion ? `@${targetVersion}` : ""}`;
-
-    // Let VersionNotFoundInStoreError bubble up instead of catching it
-    const { bestMatch, hasUnversioned } = await this.docService.findBestVersion(
-      library,
-      targetVersion,
-    );
-
-    let message = "";
+    const resolved = await this.docService.resolveDocumentation(library, targetVersion);
+    const bestMatch = resolved.versions.at(0) || null;
+    const hasUnversioned = resolved.versions.includes("");
+    const label = describeDocumentationVersion(targetVersion, bestMatch);
+    const name = escapeControlCharacters(resolved.library);
+    const prefix = libraryNamesMatch(library, resolved.library)
+      ? ""
+      : `Indexed library: ${name}. `;
+    const requested = label.requestedVersion
+      ? escapeControlCharacters(label.requestedVersion)
+      : undefined;
+    let message = `No searchable documentation found for ${name}.`;
     if (bestMatch) {
-      message = `Best match: ${bestMatch}.`;
+      message = `Best match: ${escapeControlCharacters(bestMatch)}.`;
+      if (requested && label.versionMatch === "different") {
+        message += ` Requested: ${requested}. Using a different indexed version.`;
+      } else if (requested) {
+        message += ` Matches requested version ${requested}.`;
+      }
       if (hasUnversioned) {
         message += " Unversioned docs also available.";
       }
     } else if (hasUnversioned) {
-      message = `No matching version found for ${libraryAndVersion}, but unversioned docs exist.`;
-    } else {
-      // This case should ideally be caught by VersionNotFoundInStoreError,
-      // but added for completeness.
-      message = `No matching version or unversioned documents found for ${libraryAndVersion}.`;
+      const unversioned = "Using unversioned documentation. The source version is unknown.";
+      message = requested ? `Requested: ${requested}. ${unversioned}` : unversioned;
     }
 
     return {
       bestMatch,
       hasUnversioned,
-      message,
+      message: prefix + message,
     };
   }
 }

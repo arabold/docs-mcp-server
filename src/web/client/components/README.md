@@ -32,6 +32,7 @@ in each file's types and TSDoc.
 | `EmptyState` | `EmptyState.tsx` | Placeholder for an empty list, with an optional action |
 | `Markdown` | `Markdown.tsx` | Renders stored Markdown (search results, chunks) without raw HTML |
 | `AreaChart` | `AreaChart.tsx` | SVG area chart for a series of values |
+| `McpRequestVolumeChart` | `McpRequestVolumeChart.tsx` | Daily MCP tool call chart used on Overview and Statistics |
 | `LibIcon` | `LibIcon.tsx` | Library avatar: the site's favicon, or a two-letter monogram |
 | `Icon` | `Icon.tsx` | One icon from the sprite; `IconName` lists them |
 

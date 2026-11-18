@@ -13,7 +13,8 @@ It is an open-source alternative to Context7, Nia and Ref.Tools.
 - Stores each library version separately, so a search targets the version your project uses.
 - Combines full-text search with optional vector search through OpenAI, Ollama, Gemini, Vertex AI, AWS Bedrock, Azure OpenAI or any OpenAI-compatible server.
 - Runs on your machine and keeps its index in a local SQLite database. Document text goes only to the embedding provider you configure; with a local one, such as Ollama, it stays on your machine. Usage telemetry is on by default; [Telemetry](docs/infrastructure/telemetry.md) lists what it sends and how to turn it off.
-- Works with any MCP client, over stdio or Streamable HTTP.
+- Works with any MCP client over stdio or Streamable HTTP.
+- Tracks local tool usage with compact recent metadata and durable daily counters. The Statistics page shows usage by caller, tool and library.
 
 ## Quick Start
 
@@ -86,6 +87,8 @@ npx @arabold/docs-mcp-server@latest fetch-url https://react.dev/reference/react/
 
 ## Web Scraping
 
+JavaScript rendering and browser fetches use Obscura. The Docker image includes it. For Node.js installs, see [Installation](docs/setup/installation.md).
+
 - Before it crawls a website, a scrape or refresh looks for an `llms.txt` file in the start URL's directory and at the site root. The links listed there become extra starting points, and for those pages the scraper first tries the Markdown version of the URL, such as `/guide/index.html.md` or `/page.html.md`.
 - Requests ask for HTML first, like a browser. Markdown that a server converts on request leaves out the site's navigation, so a crawl would miss most pages. The scraper uses Markdown where the site publishes it: pages listed in `llms.txt` and links to `.md` files. A custom `Accept` header replaces the default one.
 - For documentation sites that route with hash URLs, such as `https://docs.example.com/#/guide`, turn on hash routes for the scrape. See [Hash Route Behavior](docs/setup/configuration.md#hash-route-behavior).
@@ -109,7 +112,8 @@ Deployment:
 
 - [Deployment Modes](docs/infrastructure/deployment-modes.md): one process, or a worker with separate MCP and web services.
 - [Reverse Proxy Deployment](docs/infrastructure/reverse-proxy.md): serve the server under a path such as `https://example.com/docs`.
-- [Authentication](docs/infrastructure/authentication.md): protect the MCP endpoint with OAuth2/OIDC.
+- [Authentication](docs/infrastructure/authentication.md): optional OAuth2/OIDC for the HTTP MCP endpoint.
+- [MCP Statistics](docs/guides/mcp-statistics.md): usage history, filters and retention.
 - [Security](docs/infrastructure/security.md): trust boundaries and limits on what the scraper may reach.
 - [Telemetry](docs/infrastructure/telemetry.md): the usage events the server sends, and how to turn them off.
 
