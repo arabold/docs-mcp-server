@@ -83,7 +83,8 @@ export class LibraryBusyError extends StoreError {
     public readonly activeStatuses: string[],
   ) {
     super(
-      `Library ${escapeControlCharacters(library)} has an indexing job in flight (${activeStatuses.join(", ")}); retry the rename when it finishes.`,
+      `Library ${escapeControlCharacters(library)} has an indexing job in flight (${activeStatuses.join(", ")}); retry the rename when it finishes. ` +
+        "If no server is running, the job was interrupted: starting the server resumes or fails it.",
     );
   }
 }
