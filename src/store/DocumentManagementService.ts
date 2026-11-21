@@ -209,6 +209,18 @@ export class DocumentManagementService {
   }
 
   /**
+   * Puts a version's status back, but only while it is still `queued`, and tells
+   * views the library list changed.
+   */
+  async restoreVersionStatusIfQueued(
+    versionId: number,
+    status: VersionStatus,
+  ): Promise<void> {
+    await this.store.restoreVersionStatusIfQueued(versionId, status);
+    this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
+  }
+
+  /**
    * Updates the status of a version, and tells views the library list changed.
    */
   async updateVersionStatus(
@@ -265,8 +277,9 @@ export class DocumentManagementService {
     library: string,
     version: string,
     policy: ExistingTargetPolicy,
+    options?: { markQueued?: boolean },
   ): Promise<ResolvedVersion> {
-    return this.store.claimVersion(library, version, policy);
+    return this.store.claimVersion(library, version, policy, options);
   }
 
   /**
@@ -387,6 +400,30 @@ export class DocumentManagementService {
     }
 
     return new LibraryNotFoundInStoreError(library, suggestions);
+  }
+
+  /**
+   * Renames a library in place, keeping its versions and indexed content.
+   *
+   * @param library Current library name.
+   * @param newName New name as entered; its trimmed form becomes the display name.
+   * @returns The previous and new display names.
+   * @throws {LibraryNotFoundInStoreError} If the library does not exist.
+   */
+  async renameLibrary(
+    library: string,
+    newName: string,
+  ): Promise<{ oldName: string; newName: string }> {
+    logger.info(`✏️ Renaming library: ${library} -> ${newName}`);
+
+    const renamed = await this.store.renameLibrary(library, newName);
+    if (!renamed) {
+      throw await this.libraryNotFound(library);
+    }
+
+    this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
+    logger.info(`✅ Renamed '${renamed.oldName}' to '${renamed.newName}'.`);
+    return renamed;
   }
 
   /**

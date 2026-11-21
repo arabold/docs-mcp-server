@@ -55,6 +55,14 @@ export interface IDocumentManagement {
   ): Promise<PageContentResult>;
   removeVersion(library: string, version?: string | null): Promise<void>;
   /**
+   * Renames a library in place; its versions and indexed content are untouched.
+   * Refused while the library has an indexing job in flight.
+   */
+  renameLibrary(
+    library: string,
+    newName: string,
+  ): Promise<{ oldName: string; newName: string }>;
+  /**
    * Reclaims unused SQLite pages and truncates the WAL file.
    * VACUUM takes an exclusive lock and may block searches until it finishes.
    * @param options.force Always VACUUM even if no free pages are detected.
