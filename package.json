@@ -74,7 +74,7 @@
     "@xberg-io/xberg": "~1.0.14",
     "axios": "^1.20.0",
     "axios-retry": "^4.5.0",
-    "better-sqlite3": "^12.11.1",
+    "better-sqlite3": "^13.2.0",
     "cheerio": "^1.2.0",
     "defuddle": "^0.19.5",
     "dompurify": "^3.4.17",
@@ -163,7 +163,7 @@
     "node": ">=22"
   },
   "allowScripts": {
-    "better-sqlite3": true,
+    "better-sqlite3": false,
     "fsevents": false,
     "msw": false,
     "tree-sitter": true,

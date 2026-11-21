@@ -7,8 +7,8 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) for the system design. [AGENTS.md](AGENT
 ## Setup
 
 1. Fork the repository and create a branch named `<type>/<issue>-<description>`, for example `feat/123-add-cache`.
-2. Use Node.js 22 (`.nvmrc`; with nvm, run `nvm use`). CI runs on it. Other versions work too: when the installed `better-sqlite3` binary was built for another Node version, the server and the tests download one for the running version into the user cache folder on first use.
-3. Install dependencies with `npm ci`. Use `npm install` only when you change dependencies on purpose.
+2. Use Node.js 22.14 or later (`.nvmrc`; with nvm, run `nvm use`). CI runs on Node.js 22. Later versions work too, because `better-sqlite3` ships Node-API binaries that do not depend on the Node version.
+3. Install dependencies with `npm ci`. Use `npm install` only when you change dependencies on purpose. Use npm 11.19 or later: older npm runs node-gyp for `better-sqlite3` on `npm ci` despite its prebuilt binary ([npm/cli#9837](https://github.com/npm/cli/issues/9837)), which needs Python and a C++ toolchain. Newer npm skips it because `allowScripts` denies it.
 4. Install Chromium for the browser tests: `npx playwright install chromium`.
 
 ## Before You Push
