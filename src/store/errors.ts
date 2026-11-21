@@ -217,80 +217,61 @@ export class DimensionError extends StoreError {
 export class ConnectionError extends StoreError {}
 
 /**
- * Why better-sqlite3's compiled binary cannot load: it is missing, or it was
- * built for another Node.js version.
- */
-export type NativeModuleProblem = "missing" | "nodeVersion";
-
-/**
- * Error thrown when better-sqlite3's compiled binary cannot load and the
- * server did not download one for the running Node.js. npm 12 and later skip
- * dependency install scripts unless they are allowed, which leaves the
- * package without the binary its install script fetches. An npx or global
- * install keeps the binary of the Node.js version it was installed with. The
- * message names the commands that get a binary: allowing the script and
- * reinstalling after a failed download, or turning `ignore-scripts` off for one
- * start when that setting skipped the download, since it also overrides
- * `allow-scripts`.
+ * Error thrown when better-sqlite3's compiled binary cannot load. The package
+ * ships Node-API binaries for Windows, macOS and Linux (glibc and musl) on x64
+ * and arm64, which load under every supported Node.js version and under Bun.
+ * On another platform or architecture no binary exists, and on a damaged
+ * install the system cannot load it, so the package has to be reinstalled or
+ * built from source.
  */
 export class NativeModuleUnavailableError extends StoreError {
-  /**
-   * @param options.problem - Why the package's own binary did not load
-   * @param options.ignoreScripts - True when npm's `ignore-scripts` setting skipped the download
-   */
-  constructor({
-    problem = "missing",
-    ignoreScripts = false,
-  }: { problem?: NativeModuleProblem; ignoreScripts?: boolean } = {}) {
-    const cause =
-      problem === "missing"
-        ? "The SQLite native module (better-sqlite3) is missing"
-        : `The SQLite native module (better-sqlite3) was built for a different Node.js version than ${process.version}`;
-    const downloadFailed =
-      problem === "missing"
-        ? `${cause} and could not be downloaded`
-        : `${cause}, and one for that version could not be downloaded`;
+  constructor() {
     super(
-      ignoreScripts
-        ? `${cause}, so the database cannot open. ` +
-            "npm's ignore-scripts setting is on, so the server does not download one. " +
-            "Start the server once with the setting off:\n" +
-            "  npx --ignore-scripts=false @arabold/docs-mcp-server@latest\n" +
-            'In an MCP client\'s settings, add "--ignore-scripts=false" before the package name.'
-        : `${downloadFailed}, so the database cannot open. ` +
-            "Allow its install script, which npm 12 and later skip, and clear the npx cache so npx installs it again:\n" +
-            "  npm config set allow-scripts=better-sqlite3 --location=user\n" +
-            "  npm cache npx rm --force\n" +
-            "Then start the server again. For a global install, run " +
-            "npm install -g @arabold/docs-mcp-server after the first command instead.",
+      `The SQLite native module (better-sqlite3) could not load on ${process.platform}-${process.arch}, so the database cannot open. ` +
+        "better-sqlite3 ships prebuilt binaries for Windows, macOS and Linux on x64 and arm64. " +
+        "On one of those, reinstall the package. On another platform, build it from source with node-gyp: " +
+        "https://github.com/WiseLibs/better-sqlite3/blob/master/docs/compilation.md",
     );
   }
 }
 
 /**
- * Tells why better-sqlite3's compiled binary failed to load, if the error is
- * about the binary. The `bindings` package that better-sqlite3 loads it with
- * reports a missing file, and Node.js reports a binary built for another
- * Node.js version.
- *
- * @param error - The error thrown while loading the module
- * @returns The problem, or undefined when the error is about something else
+ * Error thrown when the runtime provides an older Node-API version than
+ * better-sqlite3's binaries need. Node.js 22.0 to 22.13 provide Node-API 9,
+ * and loading the binary there crashes the process instead of throwing.
  */
-export function nativeModuleProblem(error: unknown): NativeModuleProblem | undefined {
-  if (!(error instanceof Error)) {
-    return undefined;
-  }
-  if (error.message.startsWith("Could not locate the bindings file")) {
-    return "missing";
-  }
-  if (
-    "code" in error &&
-    error.code === "ERR_DLOPEN_FAILED" &&
-    error.message.includes("NODE_MODULE_VERSION")
+export class NodeApiUnsupportedError extends StoreError {
+  constructor(
+    /** The Node-API version the runtime provides. */
+    public readonly available: string,
+    /** The Node-API version better-sqlite3's binaries need. */
+    public readonly required: number,
   ) {
-    return "nodeVersion";
+    super(
+      `The SQLite native module (better-sqlite3) needs Node-API ${required}, but this runtime provides Node-API ${escapeControlCharacters(available)}, so the database cannot open. ` +
+        "Update Node.js to 22.14 or later.",
+    );
   }
-  return undefined;
+}
+
+/**
+ * Tells whether an error means better-sqlite3's compiled binary failed to
+ * load: no binary exists for the platform, or the system could not load it.
+ * Node.js and Bun both report the path of the binary, which is either a
+ * compiled `build/Release/better_sqlite3.node` or a prebuilt
+ * `prebuilds/<platform>-<arch>.node` inside the package.
+ *
+ * @param error - The error thrown while opening the database
+ * @returns True when the error is about the binary
+ */
+export function isNativeModuleError(error: unknown): boolean {
+  if (!(error instanceof Error) || !("code" in error)) {
+    return false;
+  }
+  return (
+    (error.code === "MODULE_NOT_FOUND" || error.code === "ERR_DLOPEN_FAILED") &&
+    /better-sqlite3[\\/](?:build|prebuilds)[\\/][^'"\s]*\.node/.test(error.message)
+  );
 }
 
 /**

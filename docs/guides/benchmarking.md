@@ -48,8 +48,7 @@ Observational metrics are reported but never fail a run:
 
 ### Node 22
 
-The store uses `better-sqlite3`, whose native binary matches the Node version
-that installed it. Run the benchmark on Node 22, like the rest of the project.
+Run the benchmark on Node 22, like the rest of the project.
 
 ### API Keys
 

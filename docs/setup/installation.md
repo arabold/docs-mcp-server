@@ -9,7 +9,7 @@ The server runs with Node.js or Docker. Either way it runs as one of two things:
 
 ### Option 1: Node.js (npx)
 
-Requires Node.js 22 or later.
+Requires Node.js 22.14 or later.
 
 ```bash
 npx @arabold/docs-mcp-server@latest
@@ -33,29 +33,11 @@ docs-mcp-server
 
 #### The SQLite binary
 
-The database runs on [better-sqlite3](https://github.com/WiseLibs/better-sqlite3). Its install script downloads a compiled SQLite binary, which works only with the Node.js version that installed the package. The package's binary does not load in two cases:
+The database runs on [better-sqlite3](https://github.com/WiseLibs/better-sqlite3), which ships prebuilt Node-API binaries for Windows, macOS and Linux (glibc and musl) on x64 and arm64. They load under every Node.js version from 22.14 up and under Bun, so the package runs no install script, downloads nothing, and keeps working after you switch Node.js versions.
 
-- npm 12 and later skip the install scripts of dependencies unless you allow them, so the binary is missing.
-- npx reuses the package it installed earlier after you switch Node.js versions, and a global install keeps its binary too, so the binary is built for another version.
+On another platform or architecture no binary loads, and the server stops with "The SQLite native module (better-sqlite3) could not load". Build the binary from source as described in better-sqlite3's [compilation guide](https://github.com/WiseLibs/better-sqlite3/blob/master/docs/compilation.md), which needs Python and a C++ toolchain. On a supported platform the same message means the installed package is damaged: clear the npx cache with `npm cache npx rm --force`, or run the `npm install -g` command above again.
 
-In both cases, the server downloads a binary for the running Node.js on its first start, with the same tool the install script uses. It keeps one binary for each Node.js version in its cache folder: `~/Library/Caches/docs-mcp-server` on macOS, `~/.cache/docs-mcp-server` on Linux and `%LOCALAPPDATA%\docs-mcp-server\Cache` on Windows.
-
-When npm's `ignore-scripts` setting is on, the server downloads nothing and stops. The setting also overrides `allow-scripts`, so turn it off for one start to let the server download the binary:
-
-```bash
-npx --ignore-scripts=false @arabold/docs-mcp-server@latest
-```
-
-In an MCP client's settings, add `"--ignore-scripts=false"` to `args` before the package name.
-
-If the download fails, for example without network access, the server stops with "The SQLite native module (better-sqlite3) is missing and could not be downloaded", or says it "was built for a different Node.js version". Older versions, which do not download it, stop with "Could not locate the bindings file" or "NODE_MODULE_VERSION" instead. Allow the script, clear the npx cache so npx installs the package again, and start the server again:
-
-```bash
-npm config set allow-scripts=better-sqlite3 --location=user
-npm cache npx rm --force
-```
-
-Clearing the cache removes every package npx has cached; npx downloads them again when it needs them. For a global install, run the `npm install -g` command above again after the first command. In a project that depends on the package, run `npm approve-scripts better-sqlite3`, then `npm rebuild better-sqlite3`.
+Older versions of the server, which used a binary built for one Node.js version, stop with "Could not locate the bindings file" or "NODE_MODULE_VERSION". Updating the server fixes both.
 
 ### Option 2: Docker
 

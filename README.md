@@ -17,7 +17,7 @@ It is an open-source alternative to Context7, Nia and Ref.Tools.
 
 ## Quick Start
 
-You need Node.js 22 or later, or Docker. [Installation](docs/setup/installation.md) covers both in detail, along with Docker Compose and running the server inside your AI client.
+You need Node.js 22.14 or later, or Docker. [Installation](docs/setup/installation.md) covers both in detail, along with Docker Compose and running the server inside your AI client.
 
 ### 1. Start the server
 
