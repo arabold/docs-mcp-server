@@ -84,7 +84,7 @@ export class LibraryBusyError extends StoreError {
   ) {
     super(
       `Library ${escapeControlCharacters(library)} has an indexing job in flight (${activeStatuses.join(", ")}); retry the rename when it finishes. ` +
-        "If no server is running, the job was interrupted: starting the server resumes or fails it.",
+        "If no server or scrape command is indexing it anymore, the job was interrupted: starting the server resumes or fails it.",
     );
   }
 }
