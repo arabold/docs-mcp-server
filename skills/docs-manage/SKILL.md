@@ -138,6 +138,29 @@ It prints `Successfully removed react@18.3.1.` and fails if the library is not
 indexed. Removal cannot be undone; run `scrape` again to re-index. Run `list`
 (docs-search skill) first to get the exact version labels.
 
+### rename
+
+Rename a library in place. Its versions and indexed content stay as they are,
+and search works under the new name right away.
+
+```bash
+npx @arabold/docs-mcp-server@latest rename <library> <new-name> [options]
+```
+
+| Flag | Alias | Description |
+|------|-------|-------------|
+| `--server-url <url>` | | Forward the rename to a separate worker process. |
+
+Example:
+
+```bash
+npx @arabold/docs-mcp-server@latest rename react react-docs
+```
+
+It prints `Successfully renamed react to react-docs.` and fails if the library
+is not indexed, if the new name is already taken, or if the library has an
+indexing job in flight.
+
 ### compact
 
 Shrink the store file by reclaiming unused space. Removing documentation does

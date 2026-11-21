@@ -1,4 +1,4 @@
-import { Minimatch, minimatch } from "minimatch";
+import { Minimatch } from "minimatch";
 import { getEffectiveExclusionPatterns } from "./defaultPatterns";
 
 /**
@@ -52,21 +52,27 @@ export function isRegexPattern(pattern: string): boolean {
 }
 
 /**
- * Converts a pattern string to a RegExp instance (auto-detects glob/regex).
- * For globs, uses minimatch's internal conversion.
+ * Converts a regex pattern string (wrapped in `/.../`) to a RegExp instance.
+ *
+ * Glob patterns cannot be converted: minimatch v11 removed `makeRe`, and no
+ * RegExp equivalent exists. Use {@link matchesAnyPattern} or
+ * {@link matchesAnyHostPattern} for glob matching instead; this function is
+ * only for the `/.../` regex form (its internal callers branch on
+ * {@link isRegexPattern} first, so they never hit the glob branch).
+ *
+ * @param pattern The pattern to convert; must be a `/.../` regex pattern.
+ * @returns A compiled RegExp for the pattern.
  */
 export function patternToRegExp(pattern: string): RegExp {
   const cached = regExpCache.get(pattern);
   if (cached) return cached;
 
-  let re: RegExp | false;
-  if (isRegexPattern(pattern)) {
-    re = new RegExp(pattern.slice(1, -1));
-  } else {
-    // For globs, minimatch.makeRe returns a RegExp
-    re = minimatch.makeRe(pattern, { dot: true });
+  if (!isRegexPattern(pattern)) {
+    throw new Error(
+      `Invalid regex pattern: ${pattern}. Glob patterns cannot be converted to RegExp (minimatch v11 removed makeRe); use matchesAnyPattern for glob matching.`,
+    );
   }
-  if (!re) throw new Error(`Invalid glob pattern: ${pattern}`);
+  const re = new RegExp(pattern.slice(1, -1));
 
   regExpCache.set(pattern, re);
   return re;

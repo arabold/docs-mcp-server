@@ -3,18 +3,19 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import Database, { type Database as DatabaseType } from "better-sqlite3";
+import type { Database as DatabaseType } from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { restorePre017Libraries } from "../../test/test-helpers";
 import { logger } from "../utils/logger";
 import { applyMigrations, parseMigrationSteps } from "./applyMigrations";
+import { openDatabase } from "./openDatabase";
 
 describe("Database Migrations", () => {
   let db: DatabaseType;
 
   beforeEach(() => {
-    db = new Database(":memory:");
+    db = openDatabase(":memory:");
     sqliteVec.load(db);
   });
 
@@ -443,7 +444,7 @@ describe("Database Migrations", () => {
   it("should preserve the old vector table if partition migration fails", async () => {
     const tempDir = mkdtempSync(path.join(tmpdir(), "docs-mcp-migration-"));
     const dbPath = path.join(tempDir, "migration.sqlite");
-    const migrationDb = new Database(dbPath);
+    const migrationDb = openDatabase(dbPath);
     sqliteVec.load(migrationDb);
 
     try {
@@ -715,6 +716,13 @@ describe("Database Migrations", () => {
     await expect(applyMigrations(db)).resolves.toBeUndefined();
 
     expect(db.pragma("journal_size_limit", { simple: true })).toBe(64 * 1024 * 1024);
+  });
+
+  it("leaves temp storage on disk, where VACUUM copies the store", async () => {
+    await expect(applyMigrations(db)).resolves.toBeUndefined();
+
+    // 2 is MEMORY; the connection keeps its default otherwise.
+    expect(db.pragma("temp_store", { simple: true })).not.toBe(2);
   });
 
   describe("017 library display names", () => {
