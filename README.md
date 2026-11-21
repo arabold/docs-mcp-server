@@ -107,6 +107,7 @@ Usage:
 
 Deployment:
 
+- [Helm deployment](deployment/helm/docs-mcp-server/README.md): deploy on Kubernetes or OpenShift.
 - [Deployment Modes](docs/infrastructure/deployment-modes.md): one process, or a worker with separate MCP and web services.
 - [Reverse Proxy Deployment](docs/infrastructure/reverse-proxy.md): serve the server under a path such as `https://example.com/docs`.
 - [Authentication](docs/infrastructure/authentication.md): protect the MCP endpoint with OAuth2/OIDC.

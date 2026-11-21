@@ -1,0 +1,23 @@
+serviceAccount:
+  enabled: false
+
+ingress:
+  enabled: false
+route:
+  enabled: false
+
+env:
+  - name: DOCS_MCP_TELEMETRY
+    value: "false"
+
+extraVolumes:
+  - name: storage
+    persistentVolumeClaim:
+      claimName: shared-storage
+extraVolumeMounts:
+  - name: storage
+    mountPath: /data
+    subPath: data
+  - name: storage
+    mountPath: /config
+    subPath: config
