@@ -9,10 +9,22 @@
 -- @migration-step add and backfill page chunk counts
 ALTER TABLE pages ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 0;
 
+-- The count is bookkeeping, not a change to the page, so neither the backfill
+-- nor the triggers below may move pages.updated_at. The timestamp trigger is
+-- dropped for the backfill and recreated to skip count-only updates.
+DROP TRIGGER IF EXISTS pages_updated_at_trigger;
+
 UPDATE pages
 SET chunk_count = (SELECT COUNT(*) FROM documents d WHERE d.page_id = pages.id);
 
 -- @migration-step keep page chunk counts current
+CREATE TRIGGER pages_updated_at_trigger
+AFTER UPDATE ON pages
+WHEN NEW.chunk_count IS OLD.chunk_count
+BEGIN
+  UPDATE pages SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
 CREATE TRIGGER pages_chunk_count_after_insert
 AFTER INSERT ON documents
 BEGIN

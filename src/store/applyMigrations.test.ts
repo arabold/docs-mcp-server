@@ -667,16 +667,68 @@ describe("Database Migrations", () => {
         .all() as Array<{ stored: number; actual: number }>;
     }
 
-    it("backfills existing pages and keeps counts through inserts, deletes and moves", async () => {
+    /** Applies every migration, then returns the store to its state before 020. */
+    async function migrateUpTo019() {
       await applyMigrations(db);
       db.exec(`
         DROP INDEX idx_pages_version_listing;
         DROP TRIGGER pages_chunk_count_after_insert;
         DROP TRIGGER pages_chunk_count_after_delete;
         DROP TRIGGER pages_chunk_count_after_update;
+        DROP TRIGGER pages_updated_at_trigger;
+        CREATE TRIGGER pages_updated_at_trigger AFTER UPDATE ON pages BEGIN
+          UPDATE pages SET updated_at = CURRENT_TIMESTAMP WHERE id = new.id;
+        END;
         ALTER TABLE pages DROP COLUMN chunk_count;
         DELETE FROM _schema_migrations WHERE id = '020-add-page-chunk-count.sql';
       `);
+    }
+
+    it("keeps page timestamps through the backfill and count updates", async () => {
+      await migrateUpTo019();
+      db.prepare(
+        "INSERT INTO libraries (name, display_name) VALUES ('lib', 'lib')",
+      ).run();
+      db.prepare(
+        "INSERT INTO versions (library_id, name) SELECT id, '1.0.0' FROM libraries",
+      ).run();
+      const pageId = Number(
+        db
+          .prepare(
+            "INSERT INTO pages (version_id, url, title) SELECT id, 'https://example.com/a', 'T' FROM versions",
+          )
+          .run().lastInsertRowid,
+      );
+      const addChunk = db.prepare(
+        "INSERT INTO documents (page_id, content, metadata, sort_order) VALUES (?, 'c', '{}', ?)",
+      );
+      addChunk.run(pageId, 0);
+      // The pre-020 trigger rewrites updated_at after every update, so the old
+      // timestamp is set with the trigger out of the way.
+      const past = "2020-01-01 00:00:00";
+      db.exec("DROP TRIGGER pages_updated_at_trigger");
+      db.prepare("UPDATE pages SET updated_at = ? WHERE id = ?").run(past, pageId);
+      db.exec(`CREATE TRIGGER pages_updated_at_trigger AFTER UPDATE ON pages BEGIN
+        UPDATE pages SET updated_at = CURRENT_TIMESTAMP WHERE id = new.id;
+      END;`);
+      const updatedAt = () =>
+        db.prepare("SELECT updated_at FROM pages WHERE id = ?").pluck().get(pageId);
+
+      await applyMigrations(db);
+      expect(updatedAt()).toBe(past);
+
+      addChunk.run(pageId, 1);
+      db.prepare("DELETE FROM documents WHERE page_id = ? AND sort_order = 0").run(
+        pageId,
+      );
+      expect(updatedAt()).toBe(past);
+
+      db.prepare("UPDATE pages SET title = 'New' WHERE id = ?").run(pageId);
+      expect(updatedAt()).not.toBe(past);
+    });
+
+    it("backfills existing pages and keeps counts through inserts, deletes and moves", async () => {
+      await migrateUpTo019();
       db.prepare(
         "INSERT INTO libraries (name, display_name) VALUES ('lib', 'lib')",
       ).run();
