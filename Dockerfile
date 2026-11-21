@@ -38,6 +38,15 @@ COPY . .
 # Build application
 RUN npm run build
 
+# Drop all dev dependencies (release tooling, test runners, linters and
+# everything only they pull in) so the production stage below copies a
+# production-only tree instead of the entire development install.
+RUN npm prune --omit=dev
+
+# `npm prune` reifies the tree and can restore the musl variants removed
+# above, so the musl prune runs once more, now on the pruned tree.
+RUN find node_modules -maxdepth 3 -type d -name '*-linux-*-musl' -prune -exec rm -rf {} +
+
 # Production stage
 FROM base AS production
 
