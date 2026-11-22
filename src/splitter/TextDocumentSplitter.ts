@@ -7,7 +7,6 @@
  * or Source Code document splitters.
  */
 
-import { MinimumChunkSizeError } from "./errors";
 import { TextContentSplitter } from "./splitters/TextContentSplitter";
 import type { Chunk, DocumentSplitter, SplitterConfig } from "./types";
 
@@ -48,18 +47,12 @@ export class TextDocumentSplitter implements DocumentSplitter {
         },
       }));
     } catch (error) {
-      // If splitting fails due to minimum chunk size error (e.g., a very long word/token),
-      // forcefully split the content by character count to ensure we never return chunks
-      // that exceed the maximum size. This is a last resort to handle unsplittable content
-      // like very long strings without spaces or newlines.
-
-      // For MinimumChunkSizeError or other text splitting errors, forcefully split by character count
-      if (!(error instanceof MinimumChunkSizeError) && error instanceof Error) {
-        // Log unexpected errors but still proceed with forceful splitting to avoid data loss
-        console.warn(
-          `Unexpected text splitting error: ${error.message}. Forcing character-based split.`,
-        );
-      }
+      // TextContentSplitter cuts even an unbroken token, so this only runs on
+      // an unexpected error. Splitting by character count still keeps every
+      // chunk within the maximum size rather than losing the document.
+      console.warn(
+        `Unexpected text splitting error: ${error instanceof Error ? error.message : String(error)}. Forcing character-based split.`,
+      );
 
       const chunks: Chunk[] = [];
       let offset = 0;

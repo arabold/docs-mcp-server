@@ -331,6 +331,17 @@ describe("TreesitterSourceCodeSplitter", () => {
       expect(chunks.map((chunk) => chunk.content).join("")).toBe(code);
     });
 
+    it("splits code holding one token longer than the max size instead of failing", async () => {
+      const code = `def f():\n    return 1\n\nBLOB = "${"a".repeat(1500)}"\n\ndef g():\n    return 2\n`;
+
+      const chunks = await splitter.splitText(code, "text/x-python");
+
+      for (const chunk of chunks) {
+        expect.soft(chunk.content.length).toBeLessThanOrEqual(mockConfig.maxChunkSize);
+      }
+      expect(chunks.map((chunk) => chunk.content).join("")).toBe(code);
+    });
+
     it("should enable perfect reconstruction of complex code", async () => {
       const complexCode = `import React from 'react';
 import { useState, useEffect } from 'react';

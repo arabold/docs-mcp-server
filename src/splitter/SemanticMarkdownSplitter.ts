@@ -174,11 +174,9 @@ export class SemanticMarkdownSplitter implements DocumentSplitter {
       // Size-bounded like every other chunk. It is prepended after splitting,
       // so nothing else would bound it, and a page carrying a long `summary:`
       // or a generated field list produced a single chunk many times the limit.
-      //
-      // A block that cannot be divided — one unbroken token longer than the
-      // limit, such as an embedded key or data URI — keeps its oversized chunk
-      // rather than failing the page. That is the behaviour this replaces, so
-      // the worst case is unchanged and the common case is now bounded.
+      // The text splitter cuts even one unbroken token, such as an embedded key
+      // or data URI, so the catch below only guards against an unexpected
+      // error, keeping the block rather than failing the page.
       let parts: string[];
       try {
         parts = await this.textSplitter.split(frontmatterBlock);

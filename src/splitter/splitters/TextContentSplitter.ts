@@ -1,5 +1,4 @@
 import { logger } from "../../utils/logger";
-import { MinimumChunkSizeError } from "../errors";
 import { type FenceOpener, FenceTracker, parseFenceOpener } from "./fenceState";
 import type { ContentSplitter, ContentSplitterOptions } from "./types";
 
@@ -37,15 +36,6 @@ export class TextContentSplitter implements ContentSplitter {
       return [content];
     }
 
-    // Check for unsplittable content (e.g., a single word longer than chunkSize)
-    const words = content.split(/\s+/);
-    const longestWord = words.reduce((max: string, word: string) =>
-      word.length > max.length ? word : max,
-    );
-    if (longestWord.length > this.options.chunkSize) {
-      throw new MinimumChunkSizeError(longestWord.length, this.options.chunkSize);
-    }
-
     // First try splitting by paragraphs (double newlines)
     const paragraphChunks = this.mergeForFenceBalance(this.splitByParagraphs(content));
     if (this.areChunksValid(paragraphChunks)) {
@@ -74,7 +64,7 @@ export class TextContentSplitter implements ContentSplitter {
     const opener =
       firstLineEnd === -1 ? null : parseFenceOpener(unit.slice(0, firstLineEnd));
     if (opener === null) {
-      return this.splitLongLine(unit, this.options.chunkSize);
+      return splitLongLine(unit, this.options.chunkSize, this.maxChunkSize);
     }
     if (unit.length <= this.maxChunkSize) {
       return [unit];
@@ -155,27 +145,9 @@ export class TextContentSplitter implements ContentSplitter {
    */
   private packLines(text: string, limit: number): string[] {
     const lines = this.splitByLines(text).flatMap((line) =>
-      line.length <= limit ? [line] : this.splitLongLine(line, limit),
+      line.length <= limit ? [line] : splitLongLine(line, limit),
     );
     return this.mergeChunks(lines, limit);
-  }
-
-  /**
-   * Cuts a line into pieces of at most `limit` characters, preferring the last
-   * whitespace before the limit. The pieces join back to the line.
-   */
-  private splitLongLine(line: string, limit: number): string[] {
-    const pieces: string[] = [];
-    let rest = line;
-    while (rest.length > limit) {
-      const window = rest.slice(0, limit);
-      const lastSpace = Math.max(window.lastIndexOf(" "), window.lastIndexOf("\t"));
-      const cut = lastSpace > 0 ? lastSpace + 1 : limit;
-      pieces.push(rest.slice(0, cut));
-      rest = rest.slice(cut);
-    }
-    if (rest) pieces.push(rest);
-    return pieces;
   }
 
   /**
@@ -287,4 +259,38 @@ export class TextContentSplitter implements ContentSplitter {
   protected wrap(content: string): string {
     return content;
   }
+}
+
+/**
+ * Cuts a line that is too long into pieces that join back to it.
+ *
+ * Each piece ends after the last space or tab within `limit`. When there is no
+ * space to cut at, the line starts with one long token: it stays whole up to
+ * `hardLimit`, and is cut inside only when it is longer still. A cut inside a
+ * token is the last resort, used only when nothing else stays within the limit.
+ *
+ * @param line The line to cut.
+ * @param limit The size each piece should stay within.
+ * @param hardLimit The size no piece may exceed; defaults to `limit`.
+ * @returns The pieces, in order.
+ */
+export function splitLongLine(line: string, limit: number, hardLimit = limit): string[] {
+  const pieces: string[] = [];
+  let rest = line;
+  while (rest.length > limit) {
+    const window = rest.slice(0, limit);
+    const lastSpace = Math.max(window.lastIndexOf(" "), window.lastIndexOf("\t"));
+    let cut: number;
+    if (lastSpace > 0) {
+      cut = lastSpace + 1;
+    } else {
+      const spaceAfter = rest.slice(limit).search(/[ \t]/);
+      const tokenEnd = spaceAfter === -1 ? rest.length : limit + spaceAfter + 1;
+      cut = Math.min(tokenEnd, Math.max(hardLimit, limit));
+    }
+    pieces.push(rest.slice(0, cut));
+    rest = rest.slice(cut);
+  }
+  if (rest) pieces.push(rest);
+  return pieces;
 }

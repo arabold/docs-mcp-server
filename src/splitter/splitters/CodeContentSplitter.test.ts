@@ -54,4 +54,22 @@ describe("CodeContentSplitter", () => {
       code.split("\n"),
     );
   });
+
+  it("cuts a code line longer than the limit and wraps each piece", async () => {
+    const splitter = new CodeContentSplitter({ chunkSize: 80 });
+    const line = `const data = "${"x".repeat(200)}";`;
+    const markdown = `\`\`\`ts\nshort();\n${line}\nafter();\n\`\`\``;
+
+    const chunks = await splitter.split(markdown);
+
+    for (const chunk of chunks) {
+      expect.soft(chunk.length).toBeLessThanOrEqual(80);
+      expect.soft(chunk.startsWith("```ts\n")).toBe(true);
+      expect.soft(chunk.endsWith("\n```")).toBe(true);
+    }
+    // Joining the bodies, with a newline only where the source had one, gives
+    // the code back.
+    const bodies = chunks.map((chunk) => chunk.slice("```ts\n".length, -"\n```".length));
+    expect(bodies.join("").replaceAll("\n", "")).toBe(`short();${line}after();`);
+  });
 });

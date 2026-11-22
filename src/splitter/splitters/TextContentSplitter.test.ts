@@ -119,6 +119,31 @@ Line 6 with multiple blank lines above`,
     }
   });
 
+  it("cuts an unbroken token longer than the limit instead of throwing", async () => {
+    const text = ["Intro.", "x".repeat(250), "Outro."].join("\n");
+
+    const chunks = await new TextContentSplitter({ chunkSize: 100 }).split(text);
+
+    for (const chunk of chunks) {
+      expect.soft(chunk.length).toBeLessThanOrEqual(100);
+    }
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("keeps an unbroken token whole up to maxChunkSize", async () => {
+    const token = "x".repeat(250);
+    const text = ["Intro.", `See ${token} for details.`, "Outro."].join("\n");
+
+    const splitter = new TextContentSplitter({ chunkSize: 100, maxChunkSize: 300 });
+    const chunks = await splitter.split(text);
+
+    expect(chunks.some((chunk) => chunk.includes(token))).toBe(true);
+    for (const chunk of chunks) {
+      expect.soft(chunk.length).toBeLessThanOrEqual(300);
+    }
+    expect(chunks.join("")).toBe(text);
+  });
+
   describe("fence balance", () => {
     it("keeps every fenced code block intact and the chunks lossless", async () => {
       const cases: Array<[label: string, chunkSize: number, text: string]> = [

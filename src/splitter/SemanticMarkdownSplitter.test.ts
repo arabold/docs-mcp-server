@@ -465,16 +465,17 @@ tags: [one, two]
     expect(Math.max(...result.map((c) => c.content.length))).toBeLessThanOrEqual(5000);
   });
 
-  it("should keep an indivisible frontmatter block rather than failing the page", async () => {
-    // One unbroken token longer than the limit cannot be divided. That is the
-    // behaviour bounding replaced, so it degrades to it instead of throwing.
+  it("cuts a frontmatter token longer than the limit rather than failing the page", async () => {
     const splitter = new SemanticMarkdownSplitter(1000, 5000);
     const markdown = `---\ntoken: ${"x".repeat(10000)}\n---\n\n# Head\n\nBody.`;
 
     const result = await splitter.splitText(markdown);
 
-    expect(result.some((c) => c.types.includes("frontmatter"))).toBe(true);
+    expect(result.filter((c) => c.types.includes("frontmatter")).length).toBeGreaterThan(
+      1,
+    );
     expect(result.some((c) => c.types.includes("heading"))).toBe(true);
+    expect(Math.max(...result.map((c) => c.content.length))).toBeLessThanOrEqual(5000);
   });
 
   it("should split long lists", async () => {
