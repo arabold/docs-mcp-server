@@ -72,6 +72,10 @@ COPY --from=builder /app/dist ./dist
 # Set data directory for the container
 ENV DOCS_MCP_STORE_PATH=/data
 ENV XDG_CONFIG_HOME=/config
+# SQLite writes its temporary files, such as the copy VACUUM makes of the whole
+# store, next to the store on the volume instead of the container's /tmp,
+# which may be too small. It unlinks them as soon as it opens them.
+ENV SQLITE_TMPDIR=/data
 
 # Create the writable runtime directories and hand ownership to the
 # unprivileged `node` user that ships with the base image (uid 1000).
