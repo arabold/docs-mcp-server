@@ -68,6 +68,18 @@ const sigintHandler = async (): Promise<void> => {
 };
 
 /**
+ * Waits until stdout and stderr have written everything queued so far. Writes
+ * to a pipe are asynchronous, so exiting right away can cut off the output.
+ */
+async function flushOutput(): Promise<void> {
+  await Promise.all(
+    [process.stdout, process.stderr].map(
+      (stream) => new Promise<void>((resolve) => stream.write("", () => resolve())),
+    ),
+  );
+}
+
+/**
  * Performs cleanup for CLI commands that don't start long-running services.
  * This ensures proper analytics shutdown and process exit to prevent hanging.
  */
@@ -81,8 +93,7 @@ export async function cleanupCliCommand(): Promise<void> {
     // Shutdown analytics for non-server CLI commands to ensure clean exit
     await telemetry.shutdown();
 
-    // A pipe writes asynchronously. Wait for queued output before exiting.
-    await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
+    await flushOutput();
 
     // Avoid hanging processes by explicitly exiting, with the exit code a
     // command sets for a failure it reports itself
@@ -166,6 +177,7 @@ export async function runCli(): Promise<void> {
         logger.error(`❌ Error closing backend: ${e}`),
       );
     }
+    await flushOutput();
     process.exit(1);
   }
 
