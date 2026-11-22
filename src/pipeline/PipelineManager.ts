@@ -99,6 +99,8 @@ export class PipelineManager implements IPipeline {
 
   /**
    * Converts internal job representation to public job interface.
+   * The processed page content (`progress.result`) stays on the internal job: it
+   * can weigh hundreds of kilobytes per job and no consumer of the public job reads it.
    */
   private toPublicJob(job: InternalPipelineJob): PipelineJob {
     return {
@@ -106,7 +108,7 @@ export class PipelineManager implements IPipeline {
       library: job.library,
       version: job.version || null, // Convert empty string to null for public API
       status: job.status,
-      progress: job.progress,
+      progress: job.progress ? { ...job.progress, result: null } : null,
       error: job.error ? { message: job.error.message } : null,
       createdAt: job.createdAt,
       startedAt: job.startedAt,
@@ -1046,7 +1048,12 @@ export class PipelineManager implements IPipeline {
     // Emit progress event to EventBusService
     const publicJob = this.toPublicJob(job);
 
-    this.eventBus.emit(EventType.JOB_PROGRESS, { job: publicJob, progress });
+    // The event reaches every web client over the event stream, so it leaves
+    // out the page content like the public job does.
+    this.eventBus.emit(EventType.JOB_PROGRESS, {
+      job: publicJob,
+      progress: { ...progress, result: null },
+    });
 
     // Logging
     logger.debug(

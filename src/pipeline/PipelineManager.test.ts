@@ -760,6 +760,26 @@ describe("PipelineManager", () => {
       expect(progressEvents).toEqual([progress(1, 4), progress(3, 4)]);
     });
 
+    it("leaves the processed page content out of the public job", async () => {
+      const publicProgress: Array<ScraperProgressEvent | null> = [];
+      eventBus.on(EventType.JOB_PROGRESS, ({ job, progress }) => {
+        publicProgress.push(job.progress, progress);
+      });
+      scrapeReporting(storedPage("/first"));
+      await manager.start();
+      const jobId = await manager.enqueueScrapeJob("libA", "1.0", scrapeOptions("libA"));
+      await manager.waitForJobCompletion(jobId);
+
+      const [listed] = await manager.getJobs();
+      expect((await manager.getJob(jobId))?.progress).toMatchObject({
+        currentUrl: `${SOURCE_URL}/first`,
+        outcome: PageOutcome.Stored,
+        result: null,
+      });
+      expect(listed.progress?.result).toBeNull();
+      expect(publicProgress.map((event) => event?.result)).toEqual([null, null]);
+    });
+
     it("keeps progress and completes the job when the store cannot record progress", async () => {
       vi.spyOn(store, "updateVersionProgress").mockRejectedValue(new Error("DB error"));
       scrapeReporting(progress(2, 5));
