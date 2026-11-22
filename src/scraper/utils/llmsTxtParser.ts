@@ -78,17 +78,41 @@ function unwrapPlainTextPre(content: string): string | null {
 }
 
 /**
+ * Returns the lower-cased last segment of a URL's path.
+ * @param url The URL to inspect.
+ * @returns The basename, or undefined for an unparsable URL or an empty path.
+ */
+function pathBasename(url: string): string | undefined {
+  try {
+    return new URL(url).pathname.split("/").filter(Boolean).at(-1)?.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Returns true when a URL points to an llms.txt meta-file.
  * @param url The URL to inspect.
  * @returns Whether the URL path basename is exactly llms.txt.
  */
 export function isLlmsTxtUrl(url: string): boolean {
-  try {
-    const basename = new URL(url).pathname.split("/").filter(Boolean).at(-1);
-    return basename?.toLowerCase() === "llms.txt";
-  } catch {
-    return false;
-  }
+  return pathBasename(url) === "llms.txt";
+}
+
+/**
+ * Returns true when a URL points to a companion of llms.txt, such as
+ * `llms-full.txt`, `llms-small.txt`, `llms-medium.txt` or `llms-ctx.txt`.
+ *
+ * The llms.txt proposal defines none of these. They are conventions that
+ * documentation generators follow: the site's docs, complete, abridged or
+ * expanded from the index, joined into one Markdown document whatever content
+ * type the server sends.
+ *
+ * @param url The URL to inspect.
+ * @returns Whether the URL path basename is `llms-<anything>.txt`.
+ */
+export function isLlmsTxtCompanionUrl(url: string): boolean {
+  return /^llms-.+\.txt$/.test(pathBasename(url) ?? "");
 }
 
 /**

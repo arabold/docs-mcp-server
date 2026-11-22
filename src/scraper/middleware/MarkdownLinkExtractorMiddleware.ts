@@ -19,8 +19,12 @@ export class MarkdownLinkExtractorMiddleware implements ContentProcessorMiddlewa
       context.links = [];
     }
 
+    // A Set keeps the check linear: an llms-full.txt can hold tens of
+    // thousands of links.
+    const seen = new Set(context.links);
     for (const link of extractMarkdownLinks(context.content)) {
-      if (!context.links.includes(link)) {
+      if (!seen.has(link)) {
+        seen.add(link);
         context.links.push(link);
       }
     }
@@ -29,8 +33,8 @@ export class MarkdownLinkExtractorMiddleware implements ContentProcessorMiddlewa
   }
 }
 
-function extractMarkdownLinks(content: string): string[] {
-  const links: string[] = [];
+function extractMarkdownLinks(content: string): Set<string> {
+  const links = new Set<string>();
   const referenceDefinitions = new Map<string, string>();
 
   for (const match of content.matchAll(referenceDefinitionPattern)) {
@@ -42,24 +46,19 @@ function extractMarkdownLinks(content: string): string[] {
   }
 
   for (const match of content.matchAll(inlineLinkPattern)) {
-    addUniqueLink(links, match[2]);
+    if (match[2]) {
+      links.add(match[2]);
+    }
   }
 
   for (const match of content.matchAll(referenceLinkPattern)) {
     const target = referenceDefinitions.get(normalizeReferenceLabel(match[2]));
     if (target) {
-      addUniqueLink(links, target);
+      links.add(target);
     }
   }
 
   return links;
-}
-
-function addUniqueLink(links: string[], target: string | undefined): void {
-  if (!target || links.includes(target)) {
-    return;
-  }
-  links.push(target);
 }
 
 function normalizeReferenceLabel(label: string | undefined): string {

@@ -116,7 +116,7 @@ The second phase, `GreedySplitter`, merges small neighboring chunks toward `spli
 
 JSON and source code skip the second phase on purpose. Their chunks are structural units that `HierarchicalAssemblyStrategy` puts back together at search time, for example the whole class around a matched method, and merging neighbors would blur those units. [Search Result Reassembly](search-result-reassembly.md) describes how.
 
-The splitters cut anything larger than `maxChunkSize`, with two exceptions. `TextContentSplitter` never cuts inside a fenced code block and accepts an oversize chunk instead, as the fence-balance note in [ARCHITECTURE.md](../../ARCHITECTURE.md#content-processing) describes. JSON that does not parse stays one chunk.
+The splitters cut anything larger than `maxChunkSize`, with one exception: JSON that does not parse stays one chunk. `TextContentSplitter` keeps a fenced code block whole up to `maxChunkSize`, even inside Markdown where it splits prose at `preferredChunkSize`, and re-wraps each piece of a larger one in the block's own fences, as the fence-balance note in [ARCHITECTURE.md](../../ARCHITECTURE.md#content-processing) describes.
 
 ## Storage
 

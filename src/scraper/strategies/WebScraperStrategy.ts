@@ -25,7 +25,12 @@ import { PipelineFactory } from "../pipelines/PipelineFactory";
 import type { ContentPipeline, PipelineResult } from "../pipelines/types";
 import type { QueueItem, ScraperOptions, ScraperProgressEvent } from "../types";
 import { convertToString } from "../utils/buffer";
-import { isLlmsTxtUrl, type LlmsTxtResult, parseLlmsTxt } from "../utils/llmsTxtParser";
+import {
+  isLlmsTxtCompanionUrl,
+  isLlmsTxtUrl,
+  type LlmsTxtResult,
+  parseLlmsTxt,
+} from "../utils/llmsTxtParser";
 import { isFileLikePath, isPathDescendant } from "../utils/scope";
 import { BaseScraperStrategy, type ProcessItemResult } from "./BaseScraperStrategy";
 import { LocalFileStrategy } from "./LocalFileStrategy";
@@ -171,9 +176,16 @@ export class WebScraperStrategy extends BaseScraperStrategy {
    * of them, while react.dev — the `text/plain` host — returns a real 404.
    * It cost the published Markdown of every such site and bought nothing.
    * Soft-error detection needs to read the body, and belongs elsewhere.
+   *
+   * The llms.txt companions (`llms-full.txt`, `llms-small.txt`, ...) are
+   * Markdown by convention despite their extension, and servers send them as
+   * `text/plain`. They are restated the same way but keep their own identity:
+   * each is a document of its own, not a variant of another page. Other `.txt`
+   * files stay plain text.
    */
   private asMarkdownRepresentation(url: string, rawContent: RawContent): RawContent {
-    if (!this.isMarkdownUrl(url) || !this.isAcceptableMarkdownVariant(rawContent)) {
+    const isMarkdownDocument = this.isMarkdownUrl(url) || isLlmsTxtCompanionUrl(url);
+    if (!isMarkdownDocument || !this.isAcceptableMarkdownVariant(rawContent)) {
       return rawContent;
     }
     return MimeTypeUtils.isMarkdown(rawContent.mimeType)

@@ -603,6 +603,34 @@ Text paragraph.
       }
     }
   });
+
+  it("keeps a code block in a list item whole up to the max size, not the preferred size", async () => {
+    const splitter = new SemanticMarkdownSplitter(400, 1200);
+    const listWithCode = (lines: number) => {
+      const code = Array.from(
+        { length: lines },
+        (_, i) => `  const v${i} = "lorem ipsum";`,
+      );
+      code[0] = "  const first = 1;";
+      code[lines - 1] = "  const last = 2;";
+      return ["- Step one:", "", "  ```ts", ...code, "  ```", "", "- Step two."].join(
+        "\n",
+      );
+    };
+
+    // About 800 characters: over the preferred size, within the max.
+    const fits = await splitter.splitText(listWithCode(30));
+    expect(
+      fits.some((c) => c.content.includes("first = 1") && c.content.includes("last = 2")),
+    ).toBe(true);
+
+    // About 2,700 characters: cut into pieces within the max.
+    const tooLarge = await splitter.splitText(listWithCode(100));
+    for (const chunk of tooLarge) {
+      expect.soft(chunk.content.length).toBeLessThanOrEqual(1200);
+    }
+    expect(tooLarge.filter((c) => c.content.includes("```ts")).length).toBeGreaterThan(1);
+  });
 });
 
 describe("heading anchor annotations", () => {

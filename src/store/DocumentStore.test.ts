@@ -729,7 +729,7 @@ describe("DocumentStore - With Embeddings", () => {
       expect(chunks.map((chunk) => chunk.hasEmbedding)).toEqual([true, true, true, true]);
     });
 
-    it("should truncate an oversized single text after splitting a batch", async () => {
+    it("halves an oversized single text from a split batch until the provider accepts it", async () => {
       const maxTextLength = 800;
       const singleTexts: string[] = [];
       mockEmbedDocuments.mockImplementation(async (texts: string[]) => {
@@ -753,8 +753,9 @@ describe("DocumentStore - With Embeddings", () => {
       result.chunks = [
         { types: ["text"], content: "regular chunk", section: { level: 0, path: ["a"] } },
         {
+          // Several times over the limit, so one halving is not enough.
           types: ["text"],
-          content: `oversized ${"x".repeat(1000)}`,
+          content: `oversized ${"x".repeat(10000)}`,
           section: { level: 0, path: ["b"] },
         },
       ];
@@ -762,11 +763,17 @@ describe("DocumentStore - With Embeddings", () => {
       await store.addDocuments("splittruncatetest", "1.0.0", 1, result);
 
       const oversizedAttempts = singleTexts.filter((text) => text.includes("oversized"));
-      expect(oversizedAttempts).toHaveLength(2);
-      const [original, retried] = oversizedAttempts;
-      expect(original.length).toBeGreaterThan(maxTextLength);
-      expect(retried.length).toBeLessThan(original.length);
-      expect(original.startsWith(retried)).toBe(true);
+      expect(oversizedAttempts.map((text) => text.length > maxTextLength)).toEqual([
+        true,
+        true,
+        true,
+        true,
+        false,
+      ]);
+      // Each attempt is the beginning of the one before it.
+      for (let i = 1; i < oversizedAttempts.length; i++) {
+        expect.soft(oversizedAttempts[i - 1].startsWith(oversizedAttempts[i])).toBe(true);
+      }
       expect(await store.checkDocumentExists("splittruncatetest", "1.0.0")).toBe(true);
     });
 

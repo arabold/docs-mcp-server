@@ -658,6 +658,43 @@ describe("WebScraperStrategy", () => {
       expect(pages()).toEqual(["/docs/", "/docs/page"]);
     });
 
+    it("never follows a link to an llms-*.txt companion, from a page or from llms.txt", async () => {
+      site
+        .page(
+          "/docs/",
+          html("Docs", ["/docs/llms-full.txt", "/docs/kit/llms-small.txt", "/docs/page"]),
+        )
+        .page(
+          "/docs/llms.txt",
+          llmsTxt(`${ROOT}docs/llms-full.txt`, `${ROOT}docs/llms-medium.txt`),
+          MARKDOWN,
+        )
+        .page("/docs/page", html("Page"));
+
+      await crawl({ url: `${ROOT}docs/` });
+
+      // Only the start page and the real page; no companion is requested.
+      expect(pages()).toEqual(["/docs/", "/docs/page"]);
+    });
+
+    it("indexes an llms-*.txt start URL as Markdown, and other text files as text", async () => {
+      const cases = [
+        { path: "/docs/llms-full.txt", contentType: "text/markdown" },
+        { path: "/docs/notes.txt", contentType: "text/plain" },
+      ];
+
+      for (const { path, contentType } of cases) {
+        site.page(path, "# Guide\n\nBody.", PLAIN_TEXT);
+
+        const events = await crawl({ url: `${ROOT}${path.slice(1)}`, maxDepth: 0 });
+
+        expect
+          .soft(events[0]?.result, path)
+          .toMatchObject({ url: `${ROOT}${path.slice(1)}`, contentType });
+        site.reset();
+      }
+    });
+
     it("falls back to the page when its Markdown variant is not Markdown", async () => {
       const cases = [
         { label: "HTML", body: "<html>wrong</html>", type: "text/html" },

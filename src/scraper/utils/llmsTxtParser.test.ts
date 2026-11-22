@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isLlmsTxtUrl, parseLlmsTxt } from "./llmsTxtParser";
+import { isLlmsTxtCompanionUrl, isLlmsTxtUrl, parseLlmsTxt } from "./llmsTxtParser";
 
 describe("parseLlmsTxt", () => {
   it("parses complete llms.txt content with sections and summary", () => {
@@ -186,6 +186,28 @@ describe("isLlmsTxtUrl", () => {
 
     for (const [url, expected] of cases) {
       expect.soft(isLlmsTxtUrl(url), url).toBe(expected);
+    }
+  });
+});
+
+describe("isLlmsTxtCompanionUrl", () => {
+  it("matches URLs whose path basename is llms-<anything>.txt", () => {
+    const cases: Array<[url: string, expected: boolean]> = [
+      ["https://example.com/llms-full.txt", true],
+      ["https://example.com/llms-small.txt", true],
+      ["https://example.com/docs/kit/llms-medium.txt", true],
+      ["https://example.com/docs/llms-ctx-full.txt", true],
+      ["https://example.com/docs/LLMS-FULL.TXT?cache=1#top", true],
+      ["https://example.com/docs/llms-full.txt/child", false],
+      ["https://example.com/docs/llms-full.md", false],
+      ["https://example.com/docs/llms-.txt", false],
+      ["https://example.com/docs/llms.txt", false],
+      ["https://example.com/docs/my-llms-full.txt", false],
+      ["not a url", false],
+    ];
+
+    for (const [url, expected] of cases) {
+      expect.soft(isLlmsTxtCompanionUrl(url), url).toBe(expected);
     }
   });
 });
