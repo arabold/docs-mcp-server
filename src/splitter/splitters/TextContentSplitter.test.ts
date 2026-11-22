@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { hasOpenFenceAtEnd } from "./fenceState";
-import { TextContentSplitter } from "./TextContentSplitter";
+import { splitLongLine, TextContentSplitter } from "./TextContentSplitter";
 import type { ContentSplitterOptions } from "./types";
 
 const fenceCount = (s: string) => (s.match(/```/g) || []).length;
@@ -116,6 +116,23 @@ Line 6 with multiple blank lines above`,
     expect(chunks.length).toBeGreaterThan(1);
     for (const chunk of chunks) {
       expect(chunk.length).toBeLessThanOrEqual(20);
+    }
+  });
+
+  it("splitLongLine cuts at spaces, keeps a token whole up to the hard limit, and cuts inside it last", () => {
+    const x = (n: number) => "x".repeat(n);
+    const cases: Array<
+      [label: string, line: string, limit: number, hard: number, pieces: string[]]
+    > = [
+      ["at the last space", "aaa bbb ccc", 5, 5, ["aaa ", "bbb ", "ccc"]],
+      ["a token that fits the hard limit", `${x(8)} end`, 5, 10, [`${x(8)} `, "end"]],
+      ["the rest fits the hard limit", x(7), 5, 10, [x(7)]],
+      ["a token longer than the hard limit", x(12), 5, 8, [x(8), x(4)]],
+      ["no hard limit", x(12), 5, 5, [x(5), x(5), x(2)]],
+    ];
+
+    for (const [label, line, limit, hard, pieces] of cases) {
+      expect.soft(splitLongLine(line, limit, hard), label).toEqual(pieces);
     }
   });
 

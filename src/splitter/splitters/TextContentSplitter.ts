@@ -275,22 +275,26 @@ export class TextContentSplitter implements ContentSplitter {
  * @returns The pieces, in order.
  */
 export function splitLongLine(line: string, limit: number, hardLimit = limit): string[] {
+  const hard = Math.max(hardLimit, limit);
   const pieces: string[] = [];
-  let rest = line;
-  while (rest.length > limit) {
-    const window = rest.slice(0, limit);
+  let start = 0;
+  while (line.length - start > limit) {
+    const window = line.slice(start, start + limit);
     const lastSpace = Math.max(window.lastIndexOf(" "), window.lastIndexOf("\t"));
     let cut: number;
     if (lastSpace > 0) {
       cut = lastSpace + 1;
     } else {
-      const spaceAfter = rest.slice(limit).search(/[ \t]/);
-      const tokenEnd = spaceAfter === -1 ? rest.length : limit + spaceAfter + 1;
-      cut = Math.min(tokenEnd, Math.max(hardLimit, limit));
+      // Only the stretch up to the hard limit can hold the token's end: a
+      // space past it cannot change the cut, so the search stops there and
+      // a long token stays linear to split.
+      const spaceAfter = line.slice(start + limit, start + hard).search(/[ \t]/);
+      cut =
+        spaceAfter === -1 ? Math.min(hard, line.length - start) : limit + spaceAfter + 1;
     }
-    pieces.push(rest.slice(0, cut));
-    rest = rest.slice(cut);
+    pieces.push(line.slice(start, start + cut));
+    start += cut;
   }
-  if (rest) pieces.push(rest);
+  if (start < line.length) pieces.push(line.slice(start));
   return pieces;
 }
