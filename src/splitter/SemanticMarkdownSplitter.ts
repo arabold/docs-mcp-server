@@ -116,10 +116,13 @@ export class SemanticMarkdownSplitter implements DocumentSplitter {
     });
 
     // Text splitter uses preferred chunk size (keeps paragraphs together if
-    // possible), and the hard size for a nested code block it keeps whole
+    // possible), and the hard size for a nested code block it keeps whole. A
+    // larger nested block is re-wrapped, as the code splitter does, so every
+    // Markdown chunk keeps balanced fences.
     this.textSplitter = new TextContentSplitter({
       chunkSize: this.preferredChunkSize,
       maxChunkSize: this.maxChunkSize,
+      rewrapFences: true,
     });
     // Code/table splitters use the hard chunk size (avoid splitting unless necessary)
     this.codeSplitter = new CodeContentSplitter({

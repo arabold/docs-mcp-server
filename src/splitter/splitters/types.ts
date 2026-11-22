@@ -10,6 +10,13 @@ export interface ContentSplitterOptions {
    * larger than `chunkSize`. Defaults to `chunkSize`, and is never below it.
    */
   maxChunkSize?: number;
+  /**
+   * When a fenced code block larger than `maxChunkSize` has to be cut, close
+   * and reopen the fence in each piece so every chunk stays balanced, as the
+   * Markdown code splitter does. Off by default: the pieces are then cut at
+   * line boundaries with nothing added, so the chunks join back to the input.
+   */
+  rewrapFences?: boolean;
 }
 
 /**

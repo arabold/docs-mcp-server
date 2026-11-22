@@ -5,7 +5,9 @@ export class ListContentSplitter implements ContentSplitter {
   private textSplitter: TextContentSplitter;
 
   constructor(private options: ContentSplitterOptions) {
-    this.textSplitter = new TextContentSplitter(options);
+    // A list is Markdown, so an oversized code block in an item is re-wrapped
+    // unless the caller says otherwise.
+    this.textSplitter = new TextContentSplitter({ rewrapFences: true, ...options });
   }
 
   async split(content: string): Promise<string[]> {

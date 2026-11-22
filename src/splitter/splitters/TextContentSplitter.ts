@@ -14,10 +14,11 @@ import type { ContentSplitter, ContentSplitterOptions } from "./types";
  * also preserves fenced code block balance: a chunk never ends inside an open
  * ``` or ~~~ fence. A fenced block stays whole up to `maxChunkSize`, even when
  * that is larger than `chunkSize`. A block larger than `maxChunkSize` is cut at
- * line boundaries, and each piece is closed and reopened with the block's own
- * opener line, the same way the Markdown code splitter re-wraps a long code
- * block. No chunk exceeds `maxChunkSize`, because an oversized chunk cannot be
- * embedded.
+ * line boundaries. With `rewrapFences`, each piece is closed and reopened with
+ * the block's own opener line, the same way the Markdown code splitter re-wraps
+ * a long code block; without it, nothing is added and the chunks join back to
+ * the input. No chunk exceeds `maxChunkSize`, because an oversized chunk cannot
+ * be embedded.
  */
 export class TextContentSplitter implements ContentSplitter {
   private readonly maxChunkSize: number;
@@ -111,8 +112,9 @@ export class TextContentSplitter implements ContentSplitter {
   }
 
   /**
-   * Cuts a fenced block larger than `maxChunkSize` into pieces within it, each
-   * wrapped in the block's own fences.
+   * Cuts a fenced block larger than `maxChunkSize` into pieces within it. With
+   * `rewrapFences` each piece is wrapped in the block's own fences; otherwise
+   * the pieces are plain cuts that join back to the block.
    */
   private splitFencedBlock(
     unit: string,
@@ -120,20 +122,18 @@ export class TextContentSplitter implements ContentSplitter {
     opener: FenceOpener,
   ): string[] {
     const closerLine = `${opener.prefix}${opener.delimiter.repeat(opener.length)}\n`;
-    const room = this.maxChunkSize - openerLine.length - closerLine.length;
-    if (room <= 0) {
-      // The opener line alone leaves no room for code. Cutting without
-      // re-wrapping is the only way to stay within the limit.
-      return this.splitLongLine(unit, this.maxChunkSize);
+    // Leaves room for the opener, the closer, and the newline a piece cut
+    // in the middle of a line needs before its closer.
+    const room = this.maxChunkSize - openerLine.length - closerLine.length - 1;
+    if (!this.options.rewrapFences || room <= 0) {
+      // Without re-wrapping, or when the opener line alone leaves no room for
+      // code, plain cuts are the only way to stay within the limit.
+      return this.packLines(unit, this.maxChunkSize);
     }
 
-    // The body's lines, each with its newline, packed into pieces that leave
-    // room for the fences. The block's own closer is the last line when the
-    // fence is closed, and stays where it is.
-    const bodyLines = this.splitByLines(unit.slice(openerLine.length)).flatMap((line) =>
-      line.length <= room ? [line] : this.splitLongLine(line, room),
-    );
-    const pieces = this.mergeChunks(bodyLines, room);
+    // The body packed into pieces that leave room for the fences. The block's
+    // own closer is the last line when the fence is closed, and stays where it is.
+    const pieces = this.packLines(unit.slice(openerLine.length), room);
 
     logger.debug(
       `Split a ${unit.length}-char fenced block into ${pieces.length} chunks of at most ${this.maxChunkSize} chars`,
@@ -147,6 +147,17 @@ export class TextContentSplitter implements ContentSplitter {
       const close = piece.endsWith("\n") ? closerLine : `\n${closerLine}`;
       return `${openerLine}${piece}${close}`;
     });
+  }
+
+  /**
+   * Cuts text at line boundaries into pieces of at most `limit` characters,
+   * cutting a longer line with `splitLongLine`. The pieces join back to the text.
+   */
+  private packLines(text: string, limit: number): string[] {
+    const lines = this.splitByLines(text).flatMap((line) =>
+      line.length <= limit ? [line] : this.splitLongLine(line, limit),
+    );
+    return this.mergeChunks(lines, limit);
   }
 
   /**

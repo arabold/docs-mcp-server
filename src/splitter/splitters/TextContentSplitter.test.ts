@@ -188,7 +188,7 @@ Line 6 with multiple blank lines above`,
       }
     });
 
-    it("cuts a fenced block larger than chunkSize into re-wrapped chunks within the limit", async () => {
+    it("with rewrapFences, cuts a fenced block larger than the limit into re-wrapped chunks within it", async () => {
       const lines = Array.from(
         { length: 20 },
         (_, i) => `  const value_${i} = "some moderately long content";`,
@@ -217,10 +217,17 @@ Line 6 with multiple blank lines above`,
           ["```txt", `${"word ".repeat(60)}end`, "```"].join("\n"),
           /\n```\n```txt\n/g,
         ],
+        [
+          // A piece cut mid-line needs a newline before its closer.
+          "code line cut with no space before the limit",
+          ["```txt", `${"x".repeat(109)} ${"y".repeat(109)}`, "```"].join("\n"),
+          /\n```\n```txt\n/g,
+        ],
       ];
 
       for (const [label, text, rewrap] of cases) {
-        const chunks = await new TextContentSplitter({ chunkSize: 120 }).split(text);
+        const splitter = new TextContentSplitter({ chunkSize: 120, rewrapFences: true });
+        const chunks = await splitter.split(text);
 
         expect.soft(chunks.length, `${label}: split`).toBeGreaterThan(1);
         for (const c of chunks) {
@@ -231,6 +238,26 @@ Line 6 with multiple blank lines above`,
         // Taking the added closer and opener out gives back the input.
         expect.soft(chunks.join("").replace(rewrap, ""), `${label}: lossless`).toBe(text);
       }
+    });
+
+    it("without rewrapFences, cuts a fenced block larger than the limit so the chunks join back to the input", async () => {
+      const code = Array.from({ length: 20 }, (_, i) => `    value_${i} = "content"`);
+      const text = [
+        "def f():",
+        '    """',
+        "    ```py",
+        ...code,
+        "    ```",
+        '    """',
+      ].join("\n");
+
+      const chunks = await new TextContentSplitter({ chunkSize: 120 }).split(text);
+
+      expect(chunks.length).toBeGreaterThan(1);
+      for (const c of chunks) {
+        expect.soft(c.length).toBeLessThanOrEqual(120);
+      }
+      expect(chunks.join("")).toBe(text);
     });
 
     it("keeps a fenced block whole up to maxChunkSize while holding prose to chunkSize", async () => {
@@ -253,7 +280,8 @@ Line 6 with multiple blank lines above`,
       const body = Array.from({ length: 30 }, (_, i) => `line ${i} of an unclosed block`);
       const text = ["Intro.", "", "```", ...body].join("\n");
 
-      const chunks = await new TextContentSplitter({ chunkSize: 100 }).split(text);
+      const splitter = new TextContentSplitter({ chunkSize: 100, rewrapFences: true });
+      const chunks = await splitter.split(text);
 
       for (const c of chunks) {
         expect.soft(c.length).toBeLessThanOrEqual(100);
