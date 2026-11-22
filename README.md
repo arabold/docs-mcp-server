@@ -88,6 +88,7 @@ npx @arabold/docs-mcp-server@latest fetch-url https://react.dev/reference/react/
 
 - Before it crawls a website, a scrape or refresh looks for an `llms.txt` file in the start URL's directory and at the site root. The links listed there become extra starting points, and for those pages the scraper first tries the Markdown version of the URL, such as `/guide/index.html.md` or `/page.html.md`.
 - Requests ask for HTML first, like a browser. Markdown that a server converts on request leaves out the site's navigation, so a crawl would miss most pages. The scraper uses Markdown where the site publishes it: pages listed in `llms.txt` and links to `.md` files. A custom `Accept` header replaces the default one.
+- A crawl does not follow links to `llms.txt` or to its companions such as `llms-full.txt`, `llms-small.txt` and `llms-medium.txt` (any `llms-*.txt`). A companion holds the site's docs joined into one file, complete or abridged, and the crawl already indexes those pages under their own URLs. To index a companion on its own, use its URL as the start URL; it is read as Markdown.
 - For documentation sites that route with hash URLs, such as `https://docs.example.com/#/guide`, turn on hash routes for the scrape. See [Hash Route Behavior](docs/setup/configuration.md#hash-route-behavior).
 
 ## Documentation

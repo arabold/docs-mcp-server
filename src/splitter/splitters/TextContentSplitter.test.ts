@@ -1,7 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
-import { logger } from "../../utils/logger";
+import { describe, expect, it } from "vitest";
 import { hasOpenFenceAtEnd } from "./fenceState";
-import { TextContentSplitter } from "./TextContentSplitter";
+import { splitLongLine, TextContentSplitter } from "./TextContentSplitter";
 import type { ContentSplitterOptions } from "./types";
 
 const fenceCount = (s: string) => (s.match(/```/g) || []).length;
@@ -120,17 +119,49 @@ Line 6 with multiple blank lines above`,
     }
   });
 
+  it("splitLongLine cuts at spaces, keeps a token whole up to the hard limit, and cuts inside it last", () => {
+    const x = (n: number) => "x".repeat(n);
+    const cases: Array<
+      [label: string, line: string, limit: number, hard: number, pieces: string[]]
+    > = [
+      ["at the last space", "aaa bbb ccc", 5, 5, ["aaa ", "bbb ", "ccc"]],
+      ["a token that fits the hard limit", `${x(8)} end`, 5, 10, [`${x(8)} `, "end"]],
+      ["the rest fits the hard limit", x(7), 5, 10, [x(7)]],
+      ["a token longer than the hard limit", x(12), 5, 8, [x(8), x(4)]],
+      ["no hard limit", x(12), 5, 5, [x(5), x(5), x(2)]],
+    ];
+
+    for (const [label, line, limit, hard, pieces] of cases) {
+      expect.soft(splitLongLine(line, limit, hard), label).toEqual(pieces);
+    }
+  });
+
+  it("cuts an unbroken token longer than the limit instead of throwing", async () => {
+    const text = ["Intro.", "x".repeat(250), "Outro."].join("\n");
+
+    const chunks = await new TextContentSplitter({ chunkSize: 100 }).split(text);
+
+    for (const chunk of chunks) {
+      expect.soft(chunk.length).toBeLessThanOrEqual(100);
+    }
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("keeps an unbroken token whole up to maxChunkSize", async () => {
+    const token = "x".repeat(250);
+    const text = ["Intro.", `See ${token} for details.`, "Outro."].join("\n");
+
+    const splitter = new TextContentSplitter({ chunkSize: 100, maxChunkSize: 300 });
+    const chunks = await splitter.split(text);
+
+    expect(chunks.some((chunk) => chunk.includes(token))).toBe(true);
+    for (const chunk of chunks) {
+      expect.soft(chunk.length).toBeLessThanOrEqual(300);
+    }
+    expect(chunks.join("")).toBe(text);
+  });
+
   describe("fence balance", () => {
-    let warnSpy: Mock<typeof logger.warn>;
-
-    beforeEach(() => {
-      warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
-    });
-
-    afterEach(() => {
-      warnSpy.mockRestore();
-    });
-
     it("keeps every fenced code block intact and the chunks lossless", async () => {
       const cases: Array<[label: string, chunkSize: number, text: string]> = [
         [
@@ -199,28 +230,126 @@ Line 6 with multiple blank lines above`,
       }
     });
 
-    it("emits a single oversize chunk plus a warning when a fenced block alone exceeds chunkSize", async () => {
-      const splitter = new TextContentSplitter({ chunkSize: 120 });
+    it("with rewrapFences, cuts a fenced block larger than the limit into re-wrapped chunks within it", async () => {
       const lines = Array.from(
         { length: 20 },
         (_, i) => `  const value_${i} = "some moderately long content";`,
-      ).join("\n");
-      const text = ["Intro line.", "", "```ts", lines, "```", "", "Trailing line."].join(
-        "\n",
       );
+      const cases: Array<[label: string, text: string, rewrap: RegExp]> = [
+        [
+          "backtick fence between paragraphs",
+          ["Intro line.", "", "```ts title=a.ts", ...lines, "```", "", "Trailing."].join(
+            "\n",
+          ),
+          /```\n```ts title=a\.ts\n/g,
+        ],
+        [
+          // Two large blocks back to back must not be chained into one chunk.
+          "two adjacent fences",
+          ["```ts", ...lines, "```", "Between.", "~~~", ...lines, "~~~"].join("\n"),
+          /```\n```ts\n|~~~\n~~~\n/g,
+        ],
+        [
+          "fence inside a blockquote",
+          ["> ```sh", ...lines.map((line) => `> ${line}`), "> ```"].join("\n"),
+          /> ```\n> ```sh\n/g,
+        ],
+        [
+          "code line longer than chunkSize",
+          ["```txt", `${"word ".repeat(60)}end`, "```"].join("\n"),
+          /\n```\n```txt\n/g,
+        ],
+        [
+          // A piece cut mid-line needs a newline before its closer.
+          "code line cut with no space before the limit",
+          ["```txt", `${"x".repeat(109)} ${"y".repeat(109)}`, "```"].join("\n"),
+          /\n```\n```txt\n/g,
+        ],
+      ];
+
+      for (const [label, text, rewrap] of cases) {
+        const splitter = new TextContentSplitter({ chunkSize: 120, rewrapFences: true });
+        const chunks = await splitter.split(text);
+
+        expect.soft(chunks.length, `${label}: split`).toBeGreaterThan(1);
+        for (const c of chunks) {
+          expect.soft(c.length, `${label}: within the limit`).toBeLessThanOrEqual(120);
+          expect.soft(fenceCount(c) % 2, `${label}: balanced`).toBe(0);
+          expect.soft(hasOpenFenceAtEnd(c), `${label}: no open fence`).toBe(false);
+        }
+        // Taking the added closer and opener out gives back the input.
+        expect.soft(chunks.join("").replace(rewrap, ""), `${label}: lossless`).toBe(text);
+      }
+    });
+
+    it("without rewrapFences, cuts a fenced block larger than the limit so the chunks join back to the input", async () => {
+      const code = Array.from({ length: 20 }, (_, i) => `    value_${i} = "content"`);
+      const text = [
+        "def f():",
+        '    """',
+        "    ```py",
+        ...code,
+        "    ```",
+        '    """',
+      ].join("\n");
+
+      const chunks = await new TextContentSplitter({ chunkSize: 120 }).split(text);
+
+      expect(chunks.length).toBeGreaterThan(1);
+      for (const c of chunks) {
+        expect.soft(c.length).toBeLessThanOrEqual(120);
+      }
+      expect(chunks.join("")).toBe(text);
+    });
+
+    it("keeps a fenced block whole up to maxChunkSize while holding prose to chunkSize", async () => {
+      const splitter = new TextContentSplitter({ chunkSize: 100, maxChunkSize: 300 });
+      const code = Array.from({ length: 8 }, (_, i) => `x${i} = "value number ${i}";`);
+      const block = ["```py", ...code, "```"].join("\n");
+      const text = [`${"word ".repeat(40)}end`, "", block, "", "Trailing."].join("\n");
 
       const chunks = await splitter.split(text);
-      // All chunks must have balanced fences.
-      for (const c of chunks) {
-        expect(fenceCount(c) % 2).toBe(0);
-        expect(hasOpenFenceAtEnd(c)).toBe(false);
+
+      expect(block.length).toBeGreaterThan(100);
+      expect(chunks.some((c) => c.includes(block))).toBe(true);
+      for (const c of chunks.filter((c) => !c.includes("```"))) {
+        expect.soft(c.length).toBeLessThanOrEqual(100);
       }
-      // At least one chunk should be over the limit and a warning emitted.
-      const oversize = chunks.filter((c) => c.length > 120);
-      expect(oversize.length).toBeGreaterThanOrEqual(1);
-      expect(warnSpy).toHaveBeenCalled();
-      const warnText = warnSpy.mock.calls.map((c) => String(c[0])).join("\n");
-      expect(warnText).toContain("TextContentSplitter");
+      expect(chunks.join("")).toBe(text);
+    });
+
+    it("keeps a document with an unclosed fence within chunkSize", async () => {
+      const body = Array.from({ length: 30 }, (_, i) => `line ${i} of an unclosed block`);
+      const text = ["Intro.", "", "```", ...body].join("\n");
+
+      const splitter = new TextContentSplitter({ chunkSize: 100, rewrapFences: true });
+      const chunks = await splitter.split(text);
+
+      for (const c of chunks) {
+        expect.soft(c.length).toBeLessThanOrEqual(100);
+      }
+      // Only the last chunk is left open, as the input is.
+      expect(chunks.map((c) => hasOpenFenceAtEnd(c))).toEqual(
+        chunks.map((_, i) => i === chunks.length - 1),
+      );
+    });
+
+    it("splits only the line that is too long and keeps the other lines whole", async () => {
+      const text = [
+        "Short line one.",
+        "Short line two.",
+        `${"word ".repeat(40)}end`,
+        "Short line three.",
+      ].join("\n");
+
+      const chunks = await new TextContentSplitter({ chunkSize: 60 }).split(text);
+
+      expect(chunks.join("")).toBe(text);
+      expect(chunks[0]).toBe("Short line one.\nShort line two.\n");
+      expect(chunks.at(-1)).toMatch(/Short line three\.$/);
+      for (const c of chunks) {
+        expect.soft(c.length).toBeLessThanOrEqual(60);
+      }
     });
   });
 });

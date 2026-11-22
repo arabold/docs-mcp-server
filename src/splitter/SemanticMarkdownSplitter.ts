@@ -115,9 +115,14 @@ export class SemanticMarkdownSplitter implements DocumentSplitter {
       },
     });
 
-    // Text splitter uses preferred chunk size (keeps paragraphs together if possible)
+    // Text splitter uses preferred chunk size (keeps paragraphs together if
+    // possible), and the hard size for a nested code block it keeps whole. A
+    // larger nested block is re-wrapped, as the code splitter does, so every
+    // Markdown chunk keeps balanced fences.
     this.textSplitter = new TextContentSplitter({
       chunkSize: this.preferredChunkSize,
+      maxChunkSize: this.maxChunkSize,
+      rewrapFences: true,
     });
     // Code/table splitters use the hard chunk size (avoid splitting unless necessary)
     this.codeSplitter = new CodeContentSplitter({
@@ -128,6 +133,7 @@ export class SemanticMarkdownSplitter implements DocumentSplitter {
     });
     this.listSplitter = new ListContentSplitter({
       chunkSize: this.preferredChunkSize, // Lists prefer to stay together, so use preferred size
+      maxChunkSize: this.maxChunkSize,
     });
   }
 
@@ -168,11 +174,9 @@ export class SemanticMarkdownSplitter implements DocumentSplitter {
       // Size-bounded like every other chunk. It is prepended after splitting,
       // so nothing else would bound it, and a page carrying a long `summary:`
       // or a generated field list produced a single chunk many times the limit.
-      //
-      // A block that cannot be divided — one unbroken token longer than the
-      // limit, such as an embedded key or data URI — keeps its oversized chunk
-      // rather than failing the page. That is the behaviour this replaces, so
-      // the worst case is unchanged and the common case is now bounded.
+      // The text splitter cuts even one unbroken token, such as an embedded key
+      // or data URI, so the catch below only guards against an unexpected
+      // error, keeping the block rather than failing the page.
       let parts: string[];
       try {
         parts = await this.textSplitter.split(frontmatterBlock);
@@ -283,8 +287,15 @@ export class SemanticMarkdownSplitter implements DocumentSplitter {
     const sections: DocumentSection[] = [];
     const stack: DocumentSection[] = [currentSection];
 
-    // Process each child of the body
-    for (const element of Array.from(body.children)) {
+    // Process each child of the body. Walked through siblings rather than
+    // `body.children`: jsdom resolves every `length` read on an HTMLCollection
+    // as a named-property lookup over all its elements, so iterating the
+    // collection is quadratic, and a large document took minutes.
+    for (
+      let element = body.firstElementChild;
+      element !== null;
+      element = element.nextElementSibling
+    ) {
       const headingMatch = element.tagName.match(/H([1-6])/);
 
       if (headingMatch) {

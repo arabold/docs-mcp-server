@@ -1,23 +1,30 @@
-import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 import { logger } from "../../utils/logger";
-import { MinimumChunkSizeError } from "../errors";
-import { hasOpenFenceAtEnd } from "./fenceState";
+import { type FenceOpener, FenceTracker, parseFenceOpener } from "./fenceState";
 import type { ContentSplitter, ContentSplitterOptions } from "./types";
 
 /**
  * Splits text content using a hierarchical approach:
  * 1. Try splitting by paragraphs (double newlines)
- * 2. If chunks still too large, split by single newlines
- * 3. Finally, use word boundaries via LangChain's splitter
+ * 2. If chunks still too large, split by single newlines and merge them back
+ *    up to the chunk size
+ * 3. Split only the lines that are still too large, at word boundaries
  *
- * Across all strategies the splitter preserves fenced code block balance: if
- * splitting would leave a chunk ending inside an open ``` or ~~~ fence, that
- * chunk is merged with the following chunk until the fence closes. When this
- * merging forces a chunk past `chunkSize`, the splitter accepts the oversize
- * chunk and emits a warning rather than break the fence.
+ * Text is split to stay within `chunkSize`. Across all strategies the splitter
+ * also preserves fenced code block balance: a chunk never ends inside an open
+ * ``` or ~~~ fence. A fenced block stays whole up to `maxChunkSize`, even when
+ * that is larger than `chunkSize`. A block larger than `maxChunkSize` is cut at
+ * line boundaries. With `rewrapFences`, each piece is closed and reopened with
+ * the block's own opener line, the same way the Markdown code splitter re-wraps
+ * a long code block; without it, nothing is added and the chunks join back to
+ * the input. No chunk exceeds `maxChunkSize`, because an oversized chunk cannot
+ * be embedded.
  */
 export class TextContentSplitter implements ContentSplitter {
-  constructor(private options: ContentSplitterOptions) {}
+  private readonly maxChunkSize: number;
+
+  constructor(private options: ContentSplitterOptions) {
+    this.maxChunkSize = Math.max(options.maxChunkSize ?? 0, options.chunkSize);
+  }
 
   /**
    * Splits text content into chunks while trying to preserve semantic boundaries.
@@ -29,53 +36,57 @@ export class TextContentSplitter implements ContentSplitter {
       return [content];
     }
 
-    // Check for unsplittable content (e.g., a single word longer than chunkSize)
-    const words = content.split(/\s+/);
-    const longestWord = words.reduce((max: string, word: string) =>
-      word.length > max.length ? word : max,
-    );
-    if (longestWord.length > this.options.chunkSize) {
-      throw new MinimumChunkSizeError(longestWord.length, this.options.chunkSize);
-    }
-
     // First try splitting by paragraphs (double newlines)
-    const paragraphChunks = this.mergeForFenceBalance(
-      this.splitByParagraphs(content),
-      "",
-    );
+    const paragraphChunks = this.mergeForFenceBalance(this.splitByParagraphs(content));
     if (this.areChunksValid(paragraphChunks)) {
       // No merging for paragraph chunks; they are already semantically separated
       return paragraphChunks;
     }
 
-    // If that doesn't work, try splitting by single newlines
-    const lineChunks = this.mergeForFenceBalance(this.splitByLines(content), "");
-    if (this.areChunksValid(lineChunks)) {
-      return this.mergeChunks(lineChunks, ""); // No separator needed - newlines are preserved in chunks
-    }
+    // Then by lines. A fenced block comes back as one unit, and only the units
+    // still too large are split further, so one oversized block or line
+    // leaves the rest of the document at line granularity.
+    const lineUnits = this.mergeForFenceBalance(this.splitByLines(content));
+    const units = lineUnits.flatMap((unit) => this.fitUnit(unit));
+    return this.mergeChunks(units);
+  }
 
-    // Finally, fall back to word-based splitting using LangChain. Re-merge for
-    // fence balance after word splitting, then collapse small chunks. Any chunk
-    // still over `chunkSize` after this step is an oversize-for-fence-balance
-    // case — emit it and warn rather than break the fence.
-    const wordChunks = this.mergeForFenceBalance(await this.splitByWords(content), " ");
-    const merged = this.mergeChunks(wordChunks, " ");
-    this.warnOversize(merged);
-    return merged;
+  /**
+   * Returns a line unit whole when it fits, or the pieces it is cut into. A
+   * unit is either one fenced block, which may use up to `maxChunkSize`, or
+   * one line with no fence in it, which is held to `chunkSize`.
+   */
+  private fitUnit(unit: string): string[] {
+    if (unit.length <= this.options.chunkSize) {
+      return [unit];
+    }
+    const firstLineEnd = unit.indexOf("\n");
+    const opener =
+      firstLineEnd === -1 ? null : parseFenceOpener(unit.slice(0, firstLineEnd));
+    if (opener === null) {
+      return splitLongLine(unit, this.options.chunkSize, this.maxChunkSize);
+    }
+    if (unit.length <= this.maxChunkSize) {
+      return [unit];
+    }
+    return this.splitFencedBlock(unit, unit.slice(0, firstLineEnd + 1), opener);
   }
 
   /**
    * Walks `chunks` left to right and merges adjacent chunks whenever the running
    * buffer ends inside an open fenced code block. Guarantees that every emitted
-   * chunk has balanced fences (i.e. `hasOpenFenceAtEnd` returns false).
+   * chunk has balanced fences, except a trailing fence the input never closes.
+   * The chunks must be consecutive pieces of one text, joined without a separator.
    */
-  private mergeForFenceBalance(chunks: string[], separator: string): string[] {
+  private mergeForFenceBalance(chunks: string[]): string[] {
     const result: string[] = [];
+    const fences = new FenceTracker();
     let buffer = "";
 
     for (const chunk of chunks) {
-      buffer = buffer ? `${buffer}${separator}${chunk}` : chunk;
-      if (!hasOpenFenceAtEnd(buffer)) {
+      buffer += chunk;
+      fences.feed(chunk);
+      if (!fences.isOpen()) {
         result.push(buffer);
         buffer = "";
       }
@@ -83,22 +94,60 @@ export class TextContentSplitter implements ContentSplitter {
 
     if (buffer) {
       // No closing fence in the rest of the input — emit the dangling buffer as
-      // a single chunk. The fence balance check downstream will catch this and
-      // it will surface in logs as an oversize-chunk warning if applicable.
+      // one unit. `fitUnit` cuts it down when it is too large.
       result.push(buffer);
     }
 
     return result;
   }
 
-  private warnOversize(chunks: string[]): void {
-    for (const chunk of chunks) {
-      if (chunk.length > this.options.chunkSize) {
-        logger.warn(
-          `⚠ TextContentSplitter emitted oversize chunk to preserve fence balance: ${chunk.length} > ${this.options.chunkSize}`,
-        );
-      }
+  /**
+   * Cuts a fenced block larger than `maxChunkSize` into pieces within it. With
+   * `rewrapFences` each piece is wrapped in the block's own fences; otherwise
+   * the pieces are plain cuts that join back to the block.
+   */
+  private splitFencedBlock(
+    unit: string,
+    openerLine: string,
+    opener: FenceOpener,
+  ): string[] {
+    const closerLine = `${opener.prefix}${opener.delimiter.repeat(opener.length)}\n`;
+    // Leaves room for the opener, the closer, and the newline a piece cut
+    // in the middle of a line needs before its closer.
+    const room = this.maxChunkSize - openerLine.length - closerLine.length - 1;
+    if (!this.options.rewrapFences || room <= 0) {
+      // Without re-wrapping, or when the opener line alone leaves no room for
+      // code, plain cuts are the only way to stay within the limit.
+      return this.packLines(unit, this.maxChunkSize);
     }
+
+    // The body packed into pieces that leave room for the fences. The block's
+    // own closer is the last line when the fence is closed, and stays where it is.
+    const pieces = this.packLines(unit.slice(openerLine.length), room);
+
+    logger.debug(
+      `Split a ${unit.length}-char fenced block into ${pieces.length} chunks of at most ${this.maxChunkSize} chars`,
+    );
+
+    // Every piece opens with the block's opener line, and every piece but the
+    // last closes the fence. A piece cut from the middle of a line ends without
+    // a newline, so the closer goes on a line of its own.
+    return pieces.map((piece, index) => {
+      if (index === pieces.length - 1) return `${openerLine}${piece}`;
+      const close = piece.endsWith("\n") ? closerLine : `\n${closerLine}`;
+      return `${openerLine}${piece}${close}`;
+    });
+  }
+
+  /**
+   * Cuts text at line boundaries into pieces of at most `limit` characters,
+   * cutting a longer line with `splitLongLine`. The pieces join back to the text.
+   */
+  private packLines(text: string, limit: number): string[] {
+    const lines = this.splitByLines(text).flatMap((line) =>
+      line.length <= limit ? [line] : splitLongLine(line, limit),
+    );
+    return this.mergeChunks(lines, limit);
   }
 
   /**
@@ -169,23 +218,11 @@ export class TextContentSplitter implements ContentSplitter {
   }
 
   /**
-   * Uses LangChain's recursive splitter for word-based splitting as a last resort
-   */
-  private async splitByWords(text: string): Promise<string[]> {
-    const splitter = new RecursiveCharacterTextSplitter({
-      chunkSize: this.options.chunkSize,
-      chunkOverlap: 0,
-    });
-
-    const chunks = await splitter.splitText(text);
-    return chunks;
-  }
-
-  /**
    * Attempts to merge small chunks with previous chunks to minimize fragmentation.
-   * Only merges if combined size is within maxChunkSize.
+   * Only merges if the combined size is within `limit`, which defaults to `chunkSize`.
+   * The chunks are joined as they are, since each keeps its own newlines.
    */
-  protected mergeChunks(chunks: string[], separator: string): string[] {
+  protected mergeChunks(chunks: string[], limit = this.options.chunkSize): string[] {
     const mergedChunks: string[] = [];
     let currentChunk: string | null = null;
 
@@ -198,9 +235,9 @@ export class TextContentSplitter implements ContentSplitter {
       const currentChunkSize = this.getChunkSize(currentChunk);
       const nextChunkSize = this.getChunkSize(chunk);
 
-      if (currentChunkSize + nextChunkSize + separator.length <= this.options.chunkSize) {
+      if (currentChunkSize + nextChunkSize <= limit) {
         // Merge chunks
-        currentChunk = `${currentChunk}${separator}${chunk}`;
+        currentChunk = `${currentChunk}${chunk}`;
       } else {
         // Add the current chunk to the result and start a new one
         mergedChunks.push(currentChunk);
@@ -222,4 +259,42 @@ export class TextContentSplitter implements ContentSplitter {
   protected wrap(content: string): string {
     return content;
   }
+}
+
+/**
+ * Cuts a line that is too long into pieces that join back to it.
+ *
+ * Each piece ends after the last space or tab within `limit`. When there is no
+ * space to cut at, the line starts with one long token: it stays whole up to
+ * `hardLimit`, and is cut inside only when it is longer still. A cut inside a
+ * token is the last resort, used only when nothing else stays within the limit.
+ *
+ * @param line The line to cut.
+ * @param limit The size each piece should stay within.
+ * @param hardLimit The size no piece may exceed; defaults to `limit`.
+ * @returns The pieces, in order.
+ */
+export function splitLongLine(line: string, limit: number, hardLimit = limit): string[] {
+  const hard = Math.max(hardLimit, limit);
+  const pieces: string[] = [];
+  let start = 0;
+  while (line.length - start > limit) {
+    const window = line.slice(start, start + limit);
+    const lastSpace = Math.max(window.lastIndexOf(" "), window.lastIndexOf("\t"));
+    let cut: number;
+    if (lastSpace > 0) {
+      cut = lastSpace + 1;
+    } else {
+      // Only the stretch up to the hard limit can hold the token's end: a
+      // space past it cannot change the cut, so the search stops there and
+      // a long token stays linear to split.
+      const spaceAfter = line.slice(start + limit, start + hard).search(/[ \t]/);
+      cut =
+        spaceAfter === -1 ? Math.min(hard, line.length - start) : limit + spaceAfter + 1;
+    }
+    pieces.push(line.slice(start, start + cut));
+    start += cut;
+  }
+  if (start < line.length) pieces.push(line.slice(start));
+  return pieces;
 }

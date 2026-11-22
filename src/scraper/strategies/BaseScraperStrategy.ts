@@ -17,7 +17,7 @@ import {
   type ScraperProgressEvent,
   type ScraperStrategy,
 } from "../types";
-import { isLlmsTxtUrl } from "../utils/llmsTxtParser";
+import { isLlmsTxtCompanionUrl, isLlmsTxtUrl } from "../utils/llmsTxtParser";
 import { shouldIncludeUrl } from "../utils/patternMatcher";
 import { isInScope } from "../utils/scope";
 
@@ -233,7 +233,12 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     options: ScraperOptions,
     context: { internalAllowedFileRoots?: string[] } = {},
   ): boolean {
-    if (isLlmsTxtUrl(url)) {
+    // llms.txt is an index, read by the probe for its links. Its companions
+    // (llms-full.txt, llms-small.txt, ...) are the site's docs joined into one
+    // document, so the crawl already reaches that content under each page's
+    // own URL. The start URL is not checked here, so a companion the user asks
+    // for is still indexed.
+    if (isLlmsTxtUrl(url) || isLlmsTxtCompanionUrl(url)) {
       return false;
     }
 

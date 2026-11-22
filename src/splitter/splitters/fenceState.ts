@@ -1,31 +1,15 @@
 /**
- * Tracks whether a given offset in a markdown string falls inside an open
- * fenced code block. Used by content splitters to avoid cutting chunks in the
- * middle of a fence, which would leave one chunk with an unmatched opener and
- * the next chunk with an unmatched closer.
+ * Tracks whether a markdown string ends inside an open fenced code block. Used
+ * by content splitters to avoid cutting chunks in the middle of a fence, which
+ * would leave one chunk with an unmatched opener and the next chunk with an
+ * unmatched closer.
  *
  * Follows CommonMark fence semantics for the cases that matter to us: a fence
  * is a line whose only leading non-whitespace content is three or more
- * identical backticks or three or more identical tildes, with up to three
- * leading spaces of indentation. The closing fence must use the same character
- * and at least as many of them as the opener. Backticks and tildes do not
- * pair across types.
+ * identical backticks or three or more identical tildes. The closing fence
+ * must use the same character and at least as many of them as the opener.
+ * Backticks and tildes do not pair across types.
  */
-
-interface FenceRegion {
-  /** Start offset of the line containing the opener. */
-  startOffset: number;
-  /** End offset (exclusive) of the line after the matching closer, or text.length if unclosed. */
-  endOffset: number;
-}
-
-interface LineInfo {
-  content: string;
-  /** Offset of the first character of this line in the source string. */
-  offset: number;
-  /** Length of the trailing newline (0 for the last line if no trailing newline). */
-  newlineLength: number;
-}
 
 // Recognise a fence opener with any leading horizontal whitespace and any
 // number of blockquote (`>`) prefix markers. CommonMark itself restricts
@@ -35,124 +19,94 @@ interface LineInfo {
 // treat the literal ``` / ~~~ as a fence. For our balance invariant we
 // recognise any leading indentation/blockquote-prefix combination.
 const FENCE_PREFIX = "[ \\t]*(?:>[ \\t]*)*";
-const FENCE_OPENER = new RegExp(`^${FENCE_PREFIX}(\`{3,}|~{3,})`);
+const FENCE_OPENER = new RegExp(`^(${FENCE_PREFIX})(\`{3,}|~{3,})`);
 
-function splitLinesWithOffsets(text: string): LineInfo[] {
-  const lines: LineInfo[] = [];
-  let offset = 0;
-  while (offset <= text.length) {
-    const nlIndex = text.indexOf("\n", offset);
-    if (nlIndex === -1) {
-      if (offset < text.length) {
-        lines.push({ content: text.slice(offset), offset, newlineLength: 0 });
-      }
-      return lines;
-    }
-    lines.push({
-      content: text.slice(offset, nlIndex),
-      offset,
-      newlineLength: 1,
-    });
-    offset = nlIndex + 1;
-  }
-  return lines;
-}
-
-function isClosingFence(line: string, delimiter: string, openerCount: number): boolean {
-  // Match the opener's permissiveness (see FENCE_OPENER): allow any leading
-  // horizontal whitespace plus blockquote markers.
-  const closerRegex = new RegExp(
-    `^${FENCE_PREFIX}\\${delimiter}{${openerCount},}[ \\t]*$`,
-  );
-  return closerRegex.test(line);
+/** A fence opener read from a single line. */
+export interface FenceOpener {
+  /** Indentation and blockquote markers before the fence characters. */
+  prefix: string;
+  /** The fence character, a backtick or a tilde. */
+  delimiter: string;
+  /** How many fence characters the opener uses. */
+  length: number;
 }
 
 /**
- * Scan the input and return non-overlapping fence regions. Each region covers
- * the line containing the opener through the line containing the matching
- * closer (inclusive of trailing newlines). Unclosed openers produce a region
- * extending to the end of input.
+ * Reads a fence opener from one line.
+ *
+ * @param line A single line, without its newline.
+ * @returns The opener's parts, or null when the line does not open a fence.
  */
-function findFenceRegions(text: string): FenceRegion[] {
-  const regions: FenceRegion[] = [];
-  const lines = splitLinesWithOffsets(text);
-
-  let i = 0;
-  while (i < lines.length) {
-    const opener = FENCE_OPENER.exec(lines[i].content);
-    if (!opener) {
-      i += 1;
-      continue;
-    }
-
-    const delimiter = opener[1][0]; // '`' or '~'
-    const count = opener[1].length;
-    const startOffset = lines[i].offset;
-
-    let closerLineIndex = -1;
-    for (let j = i + 1; j < lines.length; j++) {
-      if (isClosingFence(lines[j].content, delimiter, count)) {
-        closerLineIndex = j;
-        break;
-      }
-    }
-
-    if (closerLineIndex === -1) {
-      regions.push({ startOffset, endOffset: text.length });
-      break;
-    }
-
-    const closerLine = lines[closerLineIndex];
-    const endOffset =
-      closerLine.offset + closerLine.content.length + closerLine.newlineLength;
-    regions.push({ startOffset, endOffset });
-    i = closerLineIndex + 1;
-  }
-
-  return regions;
+export function parseFenceOpener(line: string): FenceOpener | null {
+  const match = FENCE_OPENER.exec(line);
+  if (!match) return null;
+  return { prefix: match[1], delimiter: match[2][0], length: match[2].length };
 }
 
 /**
- * Returns true when `offset` falls strictly inside a fence — after the start
- * of an opener line and before the end of its closer line. An offset exactly
- * on a fence opener's start or exactly past a closer's end is outside.
+ * Builds the pattern for the line that closes a fence: the same character, at
+ * least as many of them, and as permissive about the prefix as the opener.
  */
-export function isOpenAt(text: string, offset: number): boolean {
-  for (const region of findFenceRegions(text)) {
-    if (offset > region.startOffset && offset < region.endOffset) {
-      return true;
-    }
-  }
-  return false;
+function closingFencePattern(opener: FenceOpener): RegExp {
+  return new RegExp(`^${FENCE_PREFIX}\\${opener.delimiter}{${opener.length},}[ \\t]*$`);
 }
 
 /**
- * If `candidateOffset` falls inside a fence, returns the offset immediately
- * after the corresponding closer (or `text.length` if the fence is unclosed).
- * Otherwise returns `candidateOffset` unchanged.
+ * Follows fence state across consecutive pieces of one text.
+ *
+ * Callers that join pieces in order can ask whether the text so far ends
+ * inside a fence without rescanning it, which keeps a document with a long or
+ * unclosed fence linear instead of quadratic.
  */
-export function nextSafeOffset(text: string, candidateOffset: number): number {
-  for (const region of findFenceRegions(text)) {
-    if (candidateOffset > region.startOffset && candidateOffset < region.endOffset) {
-      return region.endOffset;
+export class FenceTracker {
+  /** Matches the line that closes the open fence, or null while none is open. */
+  private closer: RegExp | null = null;
+  private partialLine = "";
+
+  /**
+   * Adds the next piece of the text.
+   *
+   * @param text The piece, joined directly after the previous one.
+   */
+  feed(text: string): void {
+    const lines = `${this.partialLine}${text}`.split("\n");
+    this.partialLine = lines.pop() ?? "";
+    for (const line of lines) {
+      this.closer = this.next(this.closer, line);
     }
   }
-  return candidateOffset;
+
+  /**
+   * Reports whether the text fed so far ends inside an open fence. A trailing
+   * line without its newline counts as a whole line.
+   *
+   * @returns True when a fence is open at the end of the text.
+   */
+  isOpen(): boolean {
+    const closer = this.partialLine
+      ? this.next(this.closer, this.partialLine)
+      : this.closer;
+    return closer !== null;
+  }
+
+  private next(closer: RegExp | null, line: string): RegExp | null {
+    if (closer === null) {
+      const opener = parseFenceOpener(line);
+      return opener ? closingFencePattern(opener) : null;
+    }
+    return closer.test(line) ? null : closer;
+  }
 }
 
 /**
- * Returns true if `chunk` ends while inside an open fence — i.e. its triple-
- * backtick/tilde count is odd in a way that leaves a dangling opener.
+ * Returns true if `chunk` ends while inside an open fence, leaving a dangling
+ * opener.
+ *
+ * @param chunk The text to check.
+ * @returns True when a fence is open at the end of `chunk`.
  */
 export function hasOpenFenceAtEnd(chunk: string): boolean {
-  const regions = findFenceRegions(chunk);
-  if (regions.length === 0) return false;
-  const last = regions[regions.length - 1];
-  if (last.endOffset !== chunk.length) return false;
-  // Region reached end of input — confirm it's because there was no closer.
-  const lines = splitLinesWithOffsets(chunk.slice(last.startOffset));
-  if (lines.length < 2) return true;
-  const opener = FENCE_OPENER.exec(lines[0].content);
-  if (!opener) return false;
-  return !isClosingFence(lines[lines.length - 1].content, opener[1][0], opener[1].length);
+  const tracker = new FenceTracker();
+  tracker.feed(chunk);
+  return tracker.isOpen();
 }

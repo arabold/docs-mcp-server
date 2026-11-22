@@ -56,11 +56,11 @@ When adding a chunk to the current batch would exceed either limit, the system S
 The system SHALL detect embedding API errors caused by input exceeding the model's context window and apply automatic recovery:
 
 1. **Multi-text batch too large**: The system SHALL split the batch at the midpoint and retry each half recursively in parallel.
-2. **Single text too large**: The system SHALL truncate the text to its first half (`text.substring(0, midpoint)`) and retry recursively. If the truncated half still exceeds the limit, it will be truncated again (to a quarter, eighth, etc.) until the embedding succeeds or the operation fails entirely. This preserves the beginning of the content, which typically contains the most important context (metadata header, title, introductory text).
+2. **Single text too large**: The system SHALL truncate the text to its first half (`text.substring(0, midpoint)`) and retry recursively. If the truncated half still exceeds the limit, it will be truncated again (to a quarter, eighth, etc.) until the embedding succeeds or the operation fails entirely. After the first halving, the system SHALL stop and report the size error once the next half would be shorter than 256 characters, since a provider that rejects that little is misconfigured. This preserves the beginning of the content, which typically contains the most important context (metadata header, title, introductory text). The stored chunk keeps its full text; only its vector is computed from the beginning.
 
 Size errors SHALL be detected by matching error messages against keywords including `"maximum context length"`, `"too long"`, `"token limit"`, `"input is too large"`, `"exceeds"`, and combined `"max"` + `"token"` patterns.
 
-**Code reference:** `src/store/DocumentStore.ts:1059-1147`
+**Code reference:** `DocumentStore.embedDocumentsWithRetry` in `src/store/DocumentStore.ts`
 
 #### Scenario: Batch exceeds model context window
 - **WHEN** a batch of 10 texts causes an input size error from the embedding API

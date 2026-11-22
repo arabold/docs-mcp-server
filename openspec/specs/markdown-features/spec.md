@@ -96,7 +96,7 @@ The system SHALL extract crawl links from Markdown documents processed by the Ma
 
 The splitter MUST NOT cut a chunk inside an open triple-backtick (` ``` `) or triple-tilde (`~~~`) fenced code block. For every chunk emitted by the splitter pipeline, the count of fence markers MUST be even, regardless of which content type (`text`, `list`, `blockquote`, `code`, or other) the chunk carries.
 
-When honoring this invariant would force a chunk to exceed `maxChunkSize`, the splitter MUST accept the oversize chunk rather than break the fence, and MUST emit a warning via the structured logger naming the splitter that produced the oversize chunk. The fence-balance invariant takes precedence over the chunk-size invariant in this case.
+A fenced block that fits in `maxChunkSize` MUST stay whole. When a fenced block alone exceeds `maxChunkSize`, the splitter MUST cut it at line boundaries into pieces within `maxChunkSize`, and MUST close each piece but the last with a closing fence and open each piece with the block's original opener line, carrying its indentation, blockquote prefix and info string verbatim. This is the same re-wrapping the code splitter applies to an oversized code section. A line inside the block that is itself too long MUST be cut at whitespace, or at the limit when it has none. The same holds for a code section the code splitter handles and for a prose line: the splitters MUST cut an unbroken token longer than the limit rather than fail, and a prose token keeps whole up to `maxChunkSize` before it is cut. No chunk may exceed `maxChunkSize`, because an oversized chunk cannot be embedded. Splitting one oversized block or line MUST NOT change how the rest of the document is split. The re-wrapping applies to Markdown only: the plain-text and source-code splitters promise that their chunks join back to the input, so they MUST cut such a block at line boundaries without adding fence lines.
 
 The invariant applies to both backtick (` ``` `) and tilde (`~~~`) fences, and to fences with up to three leading spaces of indentation (the standard list-item indentation pattern).
 
@@ -105,8 +105,7 @@ The invariant applies to both backtick (` ``` `) and tilde (`~~~`) fences, and t
 - **GIVEN** a markdown list whose item contains a fenced code block large enough to force the item to be split internally
 - **WHEN** the splitter produces chunks
 - **THEN** every chunk has an even count of triple-backtick fences
-- **AND** no chunk boundary falls between an opener and its matching closer
-- **AND** if a single chunk exceeds `maxChunkSize`, an oversize-chunk warning is emitted
+- **AND** no chunk boundary falls between an opener and its matching closer, unless the block alone exceeds `maxChunkSize` and is re-wrapped
 
 #### Scenario: Code block embedded in a blockquote stays balanced
 
@@ -127,13 +126,20 @@ The invariant applies to both backtick (` ``` `) and tilde (`~~~`) fences, and t
 - **THEN** the splitter does not cut inside the tilde fence
 - **AND** the fence-balance invariant holds for tilde fences in every emitted chunk
 
-#### Scenario: Oversize takes precedence over a broken fence
+#### Scenario: A fenced block larger than maxChunkSize is re-wrapped
 
 - **GIVEN** a single fenced code block whose total length exceeds `maxChunkSize`
 - **WHEN** the splitter handles it via the text-splitting path
-- **THEN** the splitter emits a single chunk containing the entire fenced block
-- **AND** the chunk exceeds `maxChunkSize`
-- **AND** a warning is logged identifying the originating splitter and the chunk size
+- **THEN** every chunk is within `maxChunkSize`
+- **AND** every chunk starts with the block's opener line and has an even count of fences
+- **AND** removing the added closer and opener lines between consecutive chunks gives back the original block
+
+#### Scenario: Large fenced blocks are not joined into one chunk
+
+- **GIVEN** two fenced code blocks, each larger than `maxChunkSize`, with a short paragraph between them
+- **WHEN** the splitter produces chunks
+- **THEN** every chunk is within `maxChunkSize`
+- **AND** every chunk has an even count of fences
 
 ### Requirement: Preserve fenced code-block info strings verbatim
 

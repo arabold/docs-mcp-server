@@ -1,4 +1,5 @@
 import { MinimumChunkSizeError } from "../errors";
+import { splitLongLine } from "./TextContentSplitter";
 import type { ContentSplitter, ContentSplitterOptions } from "./types";
 
 /**
@@ -23,17 +24,24 @@ export class CodeContentSplitter implements ContentSplitter {
     const infoString = (infoMatch?.[1] ?? "").trimEnd();
     const strippedContent = content.replace(/^```[^\n]*\n/, "").replace(/```\s*$/, "");
 
-    const lines = strippedContent.split("\n");
+    // Room for code in a chunk once the fences are added. A line longer than
+    // that is cut into pieces that each get their own chunk: every piece but
+    // the last was cut where the next one no longer fit, so two pieces of one
+    // line never end up joined by a newline.
+    const room = this.options.chunkSize - this.wrap("", infoString).length;
+    if (room <= 0) {
+      throw new MinimumChunkSizeError(
+        this.wrap("", infoString).length,
+        this.options.chunkSize,
+      );
+    }
+    const lines = strippedContent
+      .split("\n")
+      .flatMap((line) => (line.length <= room ? [line] : splitLongLine(line, room)));
     const chunks: string[] = [];
     let currentChunkLines: string[] = [];
 
     for (const line of lines) {
-      // Check if a single line with code block markers exceeds chunkSize
-      const singleLineSize = this.wrap(line, infoString).length;
-      if (singleLineSize > this.options.chunkSize) {
-        throw new MinimumChunkSizeError(singleLineSize, this.options.chunkSize);
-      }
-
       currentChunkLines.push(line);
       const newChunkContent = this.wrap(currentChunkLines.join("\n"), infoString);
       const newChunkSize = newChunkContent.length;

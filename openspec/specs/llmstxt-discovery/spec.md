@@ -206,3 +206,20 @@ The llms.txt file itself SHALL NOT be indexed as a document in the store. The ex
 - **WHEN** the user provides custom `excludePatterns` (overriding default patterns)
 - **AND** the BFS crawl encounters the llms.txt file URL
 - **THEN** the system SHALL still exclude llms.txt from indexing
+
+### Requirement: llms.txt companion file handling
+
+Sites publish companions next to llms.txt: `llms-full.txt` (the complete docs), `llms-medium.txt` and `llms-small.txt` (abridged docs), and `llms-ctx.txt` or `llms-ctx-full.txt` (the index with each linked page's content expanded, which can include other sites' docs). None of them is part of the llms.txt proposal. They are conventions documentation generators follow: the site's docs joined into one Markdown document. A crawl already reaches that content under each page's own URL, so the system SHALL NOT follow a link to a companion, whether a page links it or an llms.txt index lists it. The exclusion SHALL be hardcoded in the URL filtering logic alongside the llms.txt exclusion, and SHALL match URLs whose pathname basename is `llms-` followed by at least one character and `.txt`, case-insensitive, ignoring query strings and hash fragments.
+
+The exclusion SHALL NOT apply to the start URL: a companion the user asks for SHALL be fetched and indexed. Its body SHALL be treated as Markdown when the server answers `text/plain` or a Markdown MIME type, and it SHALL keep its own URL as its page identity. Other `.txt` responses served as `text/plain` SHALL remain plain text.
+
+#### Scenario: A companion linked from a page or an index is not followed
+- **WHEN** a crawled page links `/docs/llms-full.txt` or `/docs/kit/llms-small.txt`, or the detected llms.txt lists `/docs/llms-medium.txt`
+- **THEN** the system SHALL NOT request any of them
+- **AND** they SHALL NOT count toward the `maxPages` limit
+
+#### Scenario: A companion as the start URL is indexed as Markdown
+- **WHEN** the user scrapes `https://example.com/docs/llms-full.txt`
+- **AND** the server responds with HTTP 200 and `Content-Type: text/plain`
+- **THEN** the system SHALL process the body through the Markdown pipeline
+- **AND** the page SHALL be recorded under `https://example.com/docs/llms-full.txt`

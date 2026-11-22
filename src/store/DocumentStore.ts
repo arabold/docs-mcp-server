@@ -75,6 +75,14 @@ import {
 const FTS_TIE_WINDOW_FACTOR = 2;
 
 /**
+ * The shortest beginning of a text worth halving again when the provider keeps
+ * rejecting it as too large. A provider that still refuses this little has a
+ * limit far below any chunk size, which is a configuration fault to report
+ * rather than retry.
+ */
+const MIN_TRUNCATED_EMBEDDING_CHARS = 256;
+
+/**
  * Orders search results that score the same: by page URL, then by position on
  * the page. Without it, ties fall to storage order, which depends on when and
  * how fast each page was indexed.
@@ -2030,28 +2038,29 @@ export class DocumentStore {
    * Creates embeddings for an array of texts with automatic retry logic for size-related errors.
    * If a batch fails due to size limits:
    * - Batches with multiple texts are split in half and retried recursively
-   * - Single texts that are too large are truncated and retried once
+   * - A single text that is too large is cut to its first half, again and
+   *   again, until the provider accepts it. The stored chunk keeps its full
+   *   text; only its vector is computed from the beginning.
    *
    * @param texts Array of texts to embed
    * @param isRetry Internal flag to prevent duplicate warning logs
-   * @param hasTruncatedSingleText Whether a single text has already been truncated once
    * @returns Array of embedding vectors
    */
   private async embedDocumentsWithRetry(
     texts: string[],
     isRetry = false,
-    hasTruncatedSingleText = false,
   ): Promise<number[][]> {
     if (texts.length === 0) {
       return [];
     }
 
+    const embeddings = this.embeddings;
+    if (embeddings === null) {
+      throw new StoreError("Embeddings are not initialized");
+    }
+
     try {
       // Try to embed the batch normally
-      const embeddings = this.embeddings;
-      if (embeddings === null) {
-        throw new StoreError("Embeddings are not initialized");
-      }
       return await embeddings.embedDocuments(texts);
     } catch (error) {
       // Check if this is a size-related error
@@ -2070,46 +2079,57 @@ export class DocumentStore {
           }
 
           const [firstEmbeddings, secondEmbeddings] = await Promise.all([
-            this.embedDocumentsWithRetry(firstHalf, true, false),
-            this.embedDocumentsWithRetry(secondHalf, true, false),
+            this.embedDocumentsWithRetry(firstHalf, true),
+            this.embedDocumentsWithRetry(secondHalf, true),
           ]);
 
           return [...firstEmbeddings, ...secondEmbeddings];
-        } else {
-          // Single text that's too large - split in half and retry
-          if (hasTruncatedSingleText) {
-            throw error;
-          }
-
-          const text = texts[0];
-          const midpoint = Math.floor(text.length / 2);
-          const firstHalf = text.substring(0, midpoint);
-
-          // Only log once for the original text
-          if (!isRetry) {
-            logger.warn(
-              `⚠️  Single text exceeded embedding size limit (${text.length} chars).`,
-            );
-          }
-
-          try {
-            // Recursively retry with first half only (mark as retry to prevent duplicate logs)
-            // This preserves the beginning of the text which typically contains the most important context
-            const embedding = await this.embedDocumentsWithRetry([firstHalf], true, true);
-            return embedding;
-          } catch (retryError) {
-            // If even split text fails, log error and throw
-            logger.error(
-              `❌ Failed to embed even after splitting. Original length: ${text.length}`,
-            );
-            throw retryError;
-          }
         }
+        return await this.embedBeginningOf(embeddings, texts[0]);
       }
 
       // Not a size error, re-throw
       throw error;
     }
+  }
+
+  /**
+   * Embeds the beginning of a single text the provider rejected as too large.
+   *
+   * The text is halved until the provider accepts it, since one halving is not
+   * enough when a text is several times over the limit. The first halving
+   * always runs; later ones stop below `MIN_TRUNCATED_EMBEDDING_CHARS`. The
+   * beginning holds the title, URL and path header and typically the most
+   * important context.
+   *
+   * @param embeddings The embedding model that rejected the text.
+   * @param text The rejected text.
+   * @returns The embedding of the longest beginning the provider accepted.
+   */
+  private async embedBeginningOf(
+    embeddings: Embeddings,
+    text: string,
+  ): Promise<number[][]> {
+    logger.warn(
+      `⚠️  Single text exceeded embedding size limit (${text.length} chars), embedding its beginning only.`,
+    );
+
+    let beginning = text.substring(0, Math.floor(text.length / 2));
+    let lastError: unknown;
+    do {
+      try {
+        return await embeddings.embedDocuments([beginning]);
+      } catch (error) {
+        lastError = error;
+        if (!this.isInputSizeError(error)) break;
+      }
+      beginning = beginning.substring(0, Math.floor(beginning.length / 2));
+    } while (beginning.length >= MIN_TRUNCATED_EMBEDDING_CHARS);
+
+    logger.error(
+      `❌ Failed to embed even after truncating. Original length: ${text.length}`,
+    );
+    throw lastError;
   }
 
   /**

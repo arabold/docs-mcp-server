@@ -59,16 +59,15 @@ describe("TextDocumentSplitter", () => {
     }
   });
 
-  it("should handle MinimumChunkSizeError gracefully by forcefully splitting", async () => {
+  it("cuts a word longer than the limit into chunks within it", async () => {
     // Create a splitter with very small chunk size
     const splitter = new TextDocumentSplitter({ ...mockConfig, maxChunkSize: 5 });
     const content = "ThisIsAVeryLongWordThatCannotBeSplit";
 
     const result = await splitter.splitText(content);
 
-    // Should split the content into multiple chunks when normal splitting fails
-    // Content is 36 chars, chunk size is 5, so we expect 8 chunks (7*5 + 1)
-    expect(result.length).toBeGreaterThan(1);
+    // Content is 36 chars and has no space, so it is cut every 5 chars
+    expect(result.length).toBe(8);
 
     // Verify each chunk respects the max size
     for (const chunk of result) {

@@ -465,16 +465,17 @@ tags: [one, two]
     expect(Math.max(...result.map((c) => c.content.length))).toBeLessThanOrEqual(5000);
   });
 
-  it("should keep an indivisible frontmatter block rather than failing the page", async () => {
-    // One unbroken token longer than the limit cannot be divided. That is the
-    // behaviour bounding replaced, so it degrades to it instead of throwing.
+  it("cuts a frontmatter token longer than the limit rather than failing the page", async () => {
     const splitter = new SemanticMarkdownSplitter(1000, 5000);
     const markdown = `---\ntoken: ${"x".repeat(10000)}\n---\n\n# Head\n\nBody.`;
 
     const result = await splitter.splitText(markdown);
 
-    expect(result.some((c) => c.types.includes("frontmatter"))).toBe(true);
+    expect(result.filter((c) => c.types.includes("frontmatter")).length).toBeGreaterThan(
+      1,
+    );
     expect(result.some((c) => c.types.includes("heading"))).toBe(true);
+    expect(Math.max(...result.map((c) => c.content.length))).toBeLessThanOrEqual(5000);
   });
 
   it("should split long lists", async () => {
@@ -602,6 +603,34 @@ Text paragraph.
         expect.soft(fenceCount(chunk.content) % 2, `${label}: balanced`).toBe(0);
       }
     }
+  });
+
+  it("keeps a code block in a list item whole up to the max size, not the preferred size", async () => {
+    const splitter = new SemanticMarkdownSplitter(400, 1200);
+    const listWithCode = (lines: number) => {
+      const code = Array.from(
+        { length: lines },
+        (_, i) => `  const v${i} = "lorem ipsum";`,
+      );
+      code[0] = "  const first = 1;";
+      code[lines - 1] = "  const last = 2;";
+      return ["- Step one:", "", "  ```ts", ...code, "  ```", "", "- Step two."].join(
+        "\n",
+      );
+    };
+
+    // About 800 characters: over the preferred size, within the max.
+    const fits = await splitter.splitText(listWithCode(30));
+    expect(
+      fits.some((c) => c.content.includes("first = 1") && c.content.includes("last = 2")),
+    ).toBe(true);
+
+    // About 2,700 characters: cut into pieces within the max.
+    const tooLarge = await splitter.splitText(listWithCode(100));
+    for (const chunk of tooLarge) {
+      expect.soft(chunk.content.length).toBeLessThanOrEqual(1200);
+    }
+    expect(tooLarge.filter((c) => c.content.includes("```ts")).length).toBeGreaterThan(1);
   });
 });
 
