@@ -1048,7 +1048,12 @@ export class PipelineManager implements IPipeline {
     // Emit progress event to EventBusService
     const publicJob = this.toPublicJob(job);
 
-    this.eventBus.emit(EventType.JOB_PROGRESS, { job: publicJob, progress });
+    // The event reaches every web client over the event stream, so it leaves
+    // out the page content like the public job does.
+    this.eventBus.emit(EventType.JOB_PROGRESS, {
+      job: publicJob,
+      progress: { ...progress, result: null },
+    });
 
     // Logging
     logger.debug(
