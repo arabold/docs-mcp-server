@@ -56,6 +56,15 @@ export function useRemoveVersion() {
   return trpc.removeDocs.useMutation();
 }
 
+/**
+ * Renames a library in place, keeping its versions and indexed content, the
+ * same way the CLI `rename` command does. The store refuses the rename while
+ * a job writes into the library or when the new name is taken.
+ */
+export function useRenameLibrary() {
+  return trpc.renameLibrary.useMutation();
+}
+
 /** Fetches the stored scraper options for a given indexed version. */
 export function useGetScraperOptions(
   input: RouterInputs["getScraperOptions"],
