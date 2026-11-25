@@ -22,6 +22,7 @@ import { useToast } from "../components/Toast";
 import { ChunkExplorer } from "./library-detail/ChunkExplorer";
 import { ContentTypesPanel } from "./library-detail/ContentTypesPanel";
 import { displayUrl, formatCount } from "./library-detail/format";
+import { RenameLibraryDialog } from "./library-detail/RenameLibraryDialog";
 import { ScrapeConfigPanel } from "./library-detail/ScrapeConfigPanel";
 import { VersionTabs } from "./library-detail/VersionTabs";
 
@@ -29,7 +30,7 @@ export default function LibraryDetail() {
   const { library: libraryParam } = useParams<{ library: string }>();
   const library = libraryParam ?? "";
   const navigate = useNavigate();
-  const { data, isLoading, isError, error } = useListLibraries();
+  const { data, isLoading, isFetching, isError, error } = useListLibraries();
   const enqueueRefreshJob = useEnqueueRefreshJob();
   const drawer = useDocumentationDrawer();
   const toast = useToast();
@@ -41,6 +42,7 @@ export default function LibraryDetail() {
   );
 
   const [activeVersion, setActiveVersion] = useState<string | null>(null);
+  const [renameOpen, setRenameOpen] = useState(false);
 
   // Pick an active version once the library resolves, and fall back to the
   // first remaining version if the current selection disappears (e.g. after
@@ -53,7 +55,8 @@ export default function LibraryDetail() {
     });
   }, [lib]);
 
-  if (isLoading) {
+  // A refetch in flight may bring the library in, e.g. right after a rename
+  if (isLoading || (!lib && isFetching)) {
     return <Loading label="Loading library…" />;
   }
 
@@ -154,8 +157,23 @@ export default function LibraryDetail() {
             <Icon name="i-refresh" size="sm" />
             Refresh all
           </Button>
+          <Button variant="ghost" size="sm" onClick={() => setRenameOpen(true)}>
+            <Icon name="i-edit" size="sm" />
+            Rename
+          </Button>
         </div>
       </Card>
+
+      <RenameLibraryDialog
+        open={renameOpen}
+        library={libraryName}
+        onClose={() => setRenameOpen(false)}
+        onRenamed={(newName) => {
+          setRenameOpen(false);
+          toast.success(`Renamed ${libraryName} to ${newName}`);
+          navigate(`/libraries/${encodeURIComponent(newName)}`, { replace: true });
+        }}
+      />
 
       <VersionTabs
         versions={libraryVersions}
