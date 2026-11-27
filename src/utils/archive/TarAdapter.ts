@@ -3,6 +3,17 @@ import { Readable } from "node:stream";
 import * as tar from "tar";
 import type { ArchiveAdapter, ArchiveEntry } from "./types";
 
+/** An archive's entries read in one pass, and the error that ended the pass early, if any. */
+interface ReadEntries {
+  entries: Map<string, { index: number; content: Buffer }>;
+  error?: Error;
+}
+
+/** The entries of the archive last read whole, by file, modification time and size. */
+let lastRead:
+  | { filePath: string; mtimeMs: number; size: number; read: Promise<ReadEntries> }
+  | undefined;
+
 export class TarAdapter implements ArchiveAdapter {
   private filePath: string;
 
@@ -46,13 +57,65 @@ export class TarAdapter implements ArchiveAdapter {
     }
   }
 
+  /**
+   * Reads an entry from the archive's entries read in one pass. A crawl lists an
+   * archive's members together and then reads them one after another, so each
+   * member is a lookup rather than a pass over the archive from its start, as
+   * `getStream` makes. Of the entries an archive repeats, the first is kept, as
+   * `getStream` returns the first match.
+   */
   async getContent(path: string): Promise<Buffer> {
-    const stream = await this.getStream(path);
-    const chunks: Buffer[] = [];
-    for await (const chunk of stream) {
-      chunks.push(Buffer.from(chunk));
+    const { mtimeMs, size } = await fs.promises.stat(this.filePath);
+    if (
+      lastRead?.filePath !== this.filePath ||
+      lastRead.mtimeMs !== mtimeMs ||
+      lastRead.size !== size
+    ) {
+      lastRead = { filePath: this.filePath, mtimeMs, size, read: this.readEntries() };
     }
-    return Buffer.concat(chunks);
+    const { entries, error } = await lastRead.read;
+    let first: { index: number; content: Buffer } | undefined;
+    for (const candidate of [path, `./${path}`, path.replace(/^\//, "")]) {
+      const entry = entries.get(candidate);
+      if (entry && (first === undefined || entry.index < first.index)) {
+        first = entry;
+      }
+    }
+    if (first !== undefined) {
+      return first.content;
+    }
+    throw error ?? new Error(`File not found in tar: ${path}`);
+  }
+
+  /** Reads every entry whole, keeping those read before an error ends the pass. */
+  private readEntries(): Promise<ReadEntries> {
+    return new Promise((resolve) => {
+      const entries: ReadEntries["entries"] = new Map();
+      const fileStream = fs.createReadStream(this.filePath);
+      const parseStream = new tar.Parser();
+      let index = 0;
+      parseStream.on("entry", (entry: tar.ReadEntry) => {
+        const position = index++;
+        const chunks: Buffer[] = [];
+        entry.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+        entry.on("end", () => {
+          if (!entries.has(entry.path)) {
+            entries.set(entry.path, { index: position, content: Buffer.concat(chunks) });
+          }
+        });
+      });
+      parseStream.on("end", () => resolve({ entries }));
+      parseStream.on("error", (error: Error) => {
+        fileStream.destroy();
+        resolve({ entries, error });
+      });
+      fileStream.on("error", (error: Error) => {
+        // @ts-expect-error
+        if (typeof parseStream.destroy === "function") parseStream.destroy();
+        resolve({ entries, error });
+      });
+      fileStream.pipe(parseStream);
+    });
   }
 
   async getStream(path: string): Promise<Readable> {
